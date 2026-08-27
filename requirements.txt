@@ -4,3 +4,4 @@ numpy
 requests
 joblib
 scikit-learn
+yfinance
