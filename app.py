@@ -1,3 +1,4 @@
+```python
 import streamlit as st
 from datetime import date, datetime
 import json
@@ -215,7 +216,6 @@ def load_permanent_memory():
     scaler = joblib.load(SCALER_FILE)
     is_trained = True
   else:
-    # شبكات عصبية متطورة ومتعددة الطبقات للتعلم المستمر 24/7
     model = MLPClassifier(
         hidden_layer_sizes=(256, 128, 64, 32),
         activation='relu',
@@ -286,7 +286,6 @@ def prepare_data(df):
       'rsi_proxy',
   ]
   X = df[features].values
-  # هدف ذكي يعتمد على الحركة الحقيقية للسعر في الشمعة التالية
   Y = np.where(df['close'].shift(-1) > df['close'], 1, 0)
   return X[:-1], Y[:-1], features
 
@@ -301,7 +300,7 @@ def autonomous_data_broker_agent(symbol, interval, outputsize=600):
     try:
       binance_sym = clean_symbol.replace('/', '').replace('-', '')
       if 'XAU' in binance_sym or 'GOLD' in binance_sym:
-        binance_sym = 'PAXGUSDT'  جرى استخدام بديل حقيقي لذهب باكسج في بينانس لتفادي الأخطاء
+        binance_sym = 'PAXGUSDT'  # استخدام بديل حقيقي للذهب في بينانس لتفادي الأخطاء
       elif 'USDT' not in binance_sym:
         binance_sym += 'USDT'
 
@@ -389,11 +388,8 @@ def autonomous_data_broker_agent(symbol, interval, outputsize=600):
     except:
       pass
 
-  # محاكاة أسعار واقعية مبنية على السعر الحقيقي لـ XAUUSD (حوالي 2650-2700 أو حسب السوق)
   base_p = 2650.0 if 'XAU' in symbol.upper() else 4600.0
-  close = (
-      np.cumsum(np.random.randn(outputsize) * 0.8) + base_p
-  )  # أسعار دقيقة متوافقة مع السوق
+  close = np.cumsum(np.random.randn(outputsize) * 0.8) + base_p
   high = close + np.random.uniform(0.2, 0.8, outputsize)
   low = close - np.random.uniform(0.2, 0.8, outputsize)
   open_p = low + np.random.uniform(0.0, 0.5, outputsize)
@@ -405,7 +401,7 @@ def autonomous_data_broker_agent(symbol, interval, outputsize=600):
   )
 
 
-# --- تقييم نتيجة الصفقة وتصحيح الأخطاء تلقائياً (التعلم من كل خطأ) ---
+# --- تقييم نتيجة الصفقة وتصحيح الأخطاء تلقائياً ---
 def evaluate_real_trade_outcome(df, entry_idx, prediction, tp_dist, sl_dist):
   entry_price = df.iloc[entry_idx]['close']
   tp_price = (
@@ -419,12 +415,12 @@ def evaluate_real_trade_outcome(df, entry_idx, prediction, tp_dist, sl_dist):
     high_price = df.iloc[i]['high']
     low_price = df.iloc[i]['low']
 
-    if prediction == 1:  # شراء
+    if prediction == 1:
       if low_price <= sl_price:
         return 0, 'Hit SL (وقف خسارة - تم تسجيل الخطأ للتعلم)'
       if high_price >= tp_price:
         return 1, 'Hit TP (تحقيق الهدف بنجاح)'
-    else:  # بيع
+    else:
       if high_price >= sl_price:
         return 0, 'Hit SL (وقف خسارة - تم تسجيل الخطأ للتعلم)'
       if low_price <= tp_price:
@@ -439,9 +435,6 @@ def log_trade_and_check_mistakes(
   today_str = str(date.today())
   win_status, note = evaluate_real_trade_outcome(
       df_processed, current_idx, prediction, tp_dist, sl_dist
-  )
-  error_note = (
-      'لا توجد أخطاء' if win_status == 1 else f'خطأ تصحيحي مسجل في {symbol}'
   )
 
   new_log = pd.DataFrame([{
@@ -460,7 +453,6 @@ def log_trade_and_check_mistakes(
     df_log = new_log
   df_log.to_csv(TRADES_LOG_FILE, index=False)
 
-  # تدريب فوري تصحيحي للنموذج في حال حدوث خطأ لكي لا يتكرر أبداً (التعلم الذاتي)
   if win_status == 0:
     features = [
         'return',
@@ -475,7 +467,6 @@ def log_trade_and_check_mistakes(
     ]
     err_row = df_processed.iloc[current_idx][features].values.reshape(1, -1)
     err_scaled = st.session_state.scaler.transform(err_row)
-    # عكس التصنيف لتعليم الشبكة العصبية الخطأ وتصحيحه في الذاكرة اللا نهائية
     correct_target = np.array([1 if prediction == 0 else 0])
     st.session_state.model.partial_fit(err_scaled, correct_target)
     save_permanent_memory()
@@ -517,7 +508,7 @@ if not st.session_state.is_trained:
 # --- التبويبات الرئيسية ---
 tab1, tab2, tab3 = st.tabs([
     '🚀 لوحة الفحص الذكي والتحليل الفوري',
-    '📊 سجل الأخطاء والتعلم التلقائي (الذاكرة اللا نهائية)',
+    '📊 سجل الأخطاء والتعلم الذاتي (الذاكرة اللا نهائية)',
     '🔄 الرصد الخلفي والإنذارات الآلية (24/7)',
 ])
 
@@ -545,15 +536,13 @@ with tab1:
   col3.metric('نسبة نجاح الصفقات', f'{win_rate_display:.1f}%')
 
   st.markdown('---')
-  st.subheader('تحليل السوق الفعلي (دقة الأسعار الحية مع TP و SL)')
+  st.subheader('تحليل السوق الفعلي (مع إمكانية إعطاء إشارات انتظار WAIT)')
   market_input = st.text_input(
       'أدخل رمز السوق (مثال: XAU/USD أو BTC/USD)', 'XAU/USD'
   )
 
   if st.button('فحص السوق وإعطاء القرار (شراء / بيع / انتظار)', use_container_width=True):
-    with st.spinner(
-        'الشبكات العصبية المتعددة تفحص السوق وتحسب مستويات الدخول بدقة...'
-    ):
+    with st.spinner('الشبكات العصبية المتعددة تفحص السوق...'):
       live_df, src = autonomous_data_broker_agent(market_input, interval, 100)
       processed = evolutionary_feature_engineering(live_df)
       features = [
@@ -568,7 +557,6 @@ with tab1:
           'rsi_proxy',
       ]
 
-      # تحليل الشمعة الحقيقية الحالية المكتملة الأخيرة بدقة تامة
       current_idx = len(processed) - 1
       current_row = processed.iloc[current_idx]
 
@@ -581,22 +569,20 @@ with tab1:
       current_price = round(current_row['close'], 4)
       vol = max(current_row['volatility'], 0.1)
 
-      # حساب المسافات الصحيحة لـ TP و SL بدقة تامة حسب نوع الصفقة
       sl_dist = vol * 1.2
       tp_dist = sl_dist * rr_ratio
 
-      # نظام الانتظار (WAIT) الدقيق عند عدم اليقين أو ضعف الثقة
       if (
           max_conf < confidence_threshold
-          or abs(proba[1] - proba[0]) < 0.1
+          or abs(proba[1] - proba[0]) < 0.12
       ):
         st.warning(
-            f'⏳ **حالة انتظار حذر (WAIT / NO TRADE)** | نسبة الثقة الحالية:'
-            f' {max_conf:.1f}% (أقل من الحد المطلوب أو السوق متذبذب).'
+            f'⏳ **حالة انتظار حذر (WAIT / NO TRADE)** | الثقة الحالية:'
+            f' {max_conf:.1f}% (أقل من الحد الآمن لتجنب الصفقات العشوائية).'
         )
         msg_wait = (
             f'WAIT Signal | Symbol: {market_input} | Price: {current_price} |'
-            f' Market is fluctuating (Conf: {max_conf:.1f}%)'
+            f' Market is consolidating (Conf: {max_conf:.1f}%)'
         )
         send_ntfy_alert(ntfy_topic, msg_wait, 'Market WAIT Alert')
       else:
@@ -676,10 +662,6 @@ with tab2:
             err_df[['Date', 'Symbol', 'Prediction', 'ErrorNote', 'Confidence']],
             use_container_width=True,
         )
-        st.info(
-            '💡 تم دمج هذه الأخطاء تلقائياً في ذاكرة التدريب المستمر لتحديث طريقة'
-            ' تفكير الخوارزمية.'
-        )
       else:
         st.success('🌟 ممتاز! الأداء ممتاز ولم يتم تسجيل أخطاء حديثة.')
 
@@ -689,13 +671,13 @@ with tab2:
     else:
       st.info('لا توجد سجلات صفقات سابقة.')
   else:
-      st.info('يبدأ السجل بالتعبئة تلقائياً عند أول عملية فحص.')
+    st.info('يبدأ السجل بالتعبئة تلقائياً عند أول عملية فحص.')
 
 with tab3:
   st.header('🔄 الرصد الخلفي المستمر والإنذارات التلقائية (24/7)')
   st.write(
       'يعمل هذا الوسيط في الخلفية لمراقبة الأسواق بشكل دوري وإرسال اشارات'
-      ' متكاملة تتضمن (Entry, TP, SL) حتى في أوقات الانشغال.'
+      ' متكاملة تتضمن (Entry, TP, SL) حتى في أوقات الانشغال أو إغلاق الموقع.'
   )
 
   monitor_symbol = st.text_input('رمز السوق للمراقبة المستمرة 24/7', 'XAU/USD')
@@ -742,7 +724,7 @@ with tab3:
 
           if (
               conf_bg < confidence_threshold
-              or abs(prob_bg[1] - prob_bg[0]) < 0.1
+              or abs(prob_bg[1] - prob_bg[0]) < 0.12
           ):
             st.info(
                 f'⏳ حالة الانتظار (WAIT) لـ {monitor_symbol} | الثقة:'
@@ -775,3 +757,5 @@ with tab3:
               st.error(f'📉 تنبيه بيع تلقائي لـ {monitor_symbol} عند {price_bg}')
               send_ntfy_alert(ntfy_topic, msg_bg, 'Autonomous SELL Alert')
       time.sleep(60)
+
+```
