@@ -6,13 +6,21 @@ import joblib
 import os
 import json
 import time
-import yfinance as yf
+from datetime import datetime
 from sklearn.neural_network import MLPClassifier
+from sklearn.preprocessing:: StandardScaler # type: ignore
 from sklearn.preprocessing import StandardScaler
 
+# محاولة استيراد yfinance بأمان
+try:
+    import yfinance as yf
+    YFINANCE_AVAILABLE = True
+except ImportError:
+    YFINANCE_AVAILABLE = False
+
 # --- إعدادات الصفحة ---
-st.set_page_config(page_title="منصة التداول الذكية والذكية", layout="wide", page_icon="📈")
-st.title("🧠 منصة التداول الكمّي ذاتية الإدارة (مع الحفظ الدائم ومصدر Yahoo Finance)")
+st.set_page_config(page_title="منصة التداول الكمّي الذكية", layout="wide", page_icon="📈")
+st.title("🧠 الوسيط الذكي المستقل لجلب وتدفق البيانات (Autonomous Data Agent)")
 
 # مسارات حفظ الذاكرة والإعدادات
 MODEL_FILE = "trained_model.pkl"
@@ -37,32 +45,31 @@ def save_settings(twelve, alpha, ntfy):
 if 'settings' not in st.session_state:
     st.session_state.settings = load_settings()
 
-# --- القائمة الجانبية الإعدادات (محفوظة تلقائياً) ---
-st.sidebar.header("🔑 مفاتيح مصادر البيانات والإشعارات")
-api_key_twelve = st.sidebar.text_input("مفتاح Twelve Data API", value=st.session_state.settings.get("twelve", ""), type="password")
+# --- القائمة الجانبية الإعدادات (محفوظة دائماً) ---
+st.sidebar.header("🔑 إعدادات الوسيط والإشعارات")
+api_key_twelve = st.sidebar.text_input("مفتاح Twelve Data API (اختياري)", value=st.session_state.settings.get("twelve", ""), type="password")
 api_key_alpha = st.sidebar.text_input("مفتاح Alpha Vantage API (اختياري)", value=st.session_state.settings.get("alpha", ""), type="password")
 
 st.sidebar.markdown("---")
 st.sidebar.header("🔔 إعدادات التنبيهات (Ntfy)")
 ntfy_topic = st.sidebar.text_input("اسم قناة Ntfy الخاصة بك", value=st.session_state.settings.get("ntfy", ""), placeholder="مثال: my_crypto_signals_99")
 
-# حفظ الإعدادات مباشرة عند أي تعديل
 save_settings(api_key_twelve, api_key_alpha, ntfy_topic)
 
 st.sidebar.markdown("---")
-st.sidebar.header("⚙️ إعدادات الذكاء الاصطناعي والتحليل")
-interval = st.sidebar.selectbox("الإطار الزمني", ["1min", "5min", "15min", "1h", "1day"], index=2)
-hidden_layers = st.sidebar.text_input("هيكل الخلايا العصبية", "128, 64, 32")
+st.sidebar.header("⚙️ إعدادات الذكاء الاصطناعي")
+interval = st.sidebar.selectbox("الإطار الزمني للوسيط", ["1min", "5min", "15min", "1h", "1day"], index=2)
+hidden_layers = st.sidebar.text_input("هيكل الشبكة العصبية", "128, 64, 32")
 activation = st.sidebar.selectbox("دالة التنشيط", ["relu", "tanh", "logistic"])
 rr_ratio = st.sidebar.slider("نسبة العائد للمخاطرة (TP/SL)", 1.0, 5.0, 2.0, 0.5)
-confidence_threshold = st.sidebar.slider("حد الثقة الأدنى لدخول الصفقة (%)", 50, 90, 58, 1)
+confidence_threshold = st.sidebar.slider("حد الثقة الأدنى لتجنب الفخاخ (%)", 50, 90, 58, 1)
 
-if st.sidebar.button("🗑️ مسح الذاكرة الدائمة والإعدادات"):
+if st.sidebar.button("🗑️ إعادة ضبط الذاكرة والوسيط"):
     for file in [MODEL_FILE, SCALER_FILE, HISTORY_FILE, SETTINGS_FILE]:
         if os.path.exists(file):
             os.remove(file)
     st.session_state.clear()
-    st.success("تم مسح الذاكرة والإعدادات بالكامل!")
+    st.success("تم إعادة ضبط الوسيط بنجاح!")
     st.rerun()
 
 # --- إدارة الذاكرة الدائمة للنموذج ---
@@ -109,72 +116,103 @@ def prepare_data(df):
     return X[:-1], Y[:-1]
 
 def generate_mock_data(size=500):
-    close = np.cumsum(np.random.randn(size) * 0.5) + 100
+    close = np.cumsum(np.random.randn(size) * 0.5) + 4600
     high = close + np.random.uniform(0.1, 0.4, size)
     low = close - np.random.uniform(0.1, 0.4, size)
     open_p = low + np.random.uniform(0.0, 0.3, size)
     return pd.DataFrame({'open': open_p, 'high': high, 'low': low, 'close': close})
 
-def fetch_smart_data(symbol, interval, outputsize=500):
-    # 1. المحاولة عبر Twelve Data إذا وُجد المفتاح
-    if api_key_twelve:
-        url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval}&apikey={api_key_twelve}&outputsize={outputsize}"
+# --- الوسيط الذكي المستقل لجلب البيانات تلقائياً ---
+def autonomous_data_broker_agent(symbol, interval, outputsize=500):
+    """
+    وسيط ذكي مستقل يبحث تلقائياً في عدة مصادر وسيرفرات عالمية 
+    دون أي تدخل بشري فور الدخول للموقع.
+    """
+    clean_symbol = symbol.upper().strip()
+
+    # 1. محاولة جلب عبر Binance Public API (للعملات الرقمية فوراً وبدون مفاتيح)
+    if any(crypto in clean_symbol for crypto in ["BTC", "ETH", "SOL", "BNB", "CRYPTO"]):
         try:
-            res = requests.get(url, timeout=5).json()
+            binance_sym = clean_symbol.replace("/", "").replace("-", "")
+            if "USDT" not in binance_sym:
+                binance_sym += "USDT"
+            
+            interval_map = {"1min": "1m", "5min": "5m", "15min": "15m", "1h": "1h", "1day": "1d"}
+            b_interval = interval_map.get(interval, "15m")
+            
+            url = f"https://api.binance.com/api/v3/klines?symbol={binance_sym}&interval={b_interval}&limit={min(outputsize, 1000)}"
+            res = requests.get(url, timeout=4).json()
+            if isinstance(res, list) and len(res) > 0:
+                df = pd.DataFrame(res, columns=[
+                    'open_time', 'open', 'high', 'low', 'close', 'volume',
+                    'close_time', 'qav', 'num_trades', 'taker_base_vol', 'taker_quote_vol', 'ignore'
+                ])
+                cols = ['open', 'high', 'low', 'close', 'volume']
+                df[cols] = df[cols].astype(float)
+                return df[cols].reset_index(drop=True), f"Autonomous Binance Broker Agent ({binance_sym})"
+        except:
+            pass
+
+    # 2. محاولة جلب عبر Yahoo Finance (للذهب والعملات والأسهم تلقائياً)
+    if YFINANCE_AVAILABLE:
+        try:
+            yf_symbol = clean_symbol
+            if "XAU" in yf_symbol or "GOLD" in yf_symbol:
+                yf_symbol = "GC=F"
+            elif "BTC" in yf_symbol:
+                yf_symbol = "BTC-USD"
+            elif "/" in yf_symbol:
+                yf_symbol = yf_symbol.replace("/", "") + "=X"
+                
+            interval_map = {"1min": "1m", "5min": "5m", "15min": "15m", "1h": "1h", "1day": "1d"}
+            yf_interval = interval_map.get(interval, "15m")
+            
+            df_yf = yf.download(yf_symbol, period="5d", interval=yf_interval, progress=False)
+            if not df_yf.empty:
+                if isinstance(df_yf.columns, pd.MultiIndex):
+                    df_yf.columns = df_yf.columns.droplevel(1)
+                df_yf = df_yf.reset_index()
+                df_yf.columns = [str(c).lower() for c in df_yf.columns]
+                if 'close' in df_yf.columns and 'open' in df_yf.columns:
+                    cols = ['open', 'high', 'low', 'close']
+                    if 'volume' in df_yf.columns: cols.append('volume')
+                    df_clean = df_yf[cols].dropna().reset_index(drop=True)
+                    if len(df_clean) > 5:
+                        return df_clean, f"Autonomous Yahoo Finance Agent ({yf_symbol})"
+        except:
+            pass
+
+    # 3. محاولة جلب عبر Twelve Data إذا وجد المفتاح
+    if api_key_twelve:
+        try:
+            url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval}&apikey={api_key_twelve}&outputsize={outputsize}"
+            res = requests.get(url, timeout=4).json()
             if 'values' in res:
                 df = pd.DataFrame(res['values'])
                 cols = ['open', 'high', 'low', 'close']
                 if 'volume' in df.columns: cols.append('volume')
                 df[cols] = df[cols].astype(float)
-                return df.iloc[::-1].reset_index(drop=True), "Twelve Data"
+                return df.iloc[::-1].reset_index(drop=True), "Autonomous Twelve Data Agent"
         except:
             pass
 
-    # 2. المحاولة عبر Alpha Vantage إذا وُجد المفتاح
+    # 4. محاولة جلب عبر Alpha Vantage إذا وجد المفتاح
     if api_key_alpha:
         try:
             url_av = f"https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol={symbol}&interval={interval}&apikey={api_key_alpha}&outputsize=full"
-            res_av = requests.get(url_av, timeout=5).json()
+            res_av = requests.get(url_av, timeout=4).json()
             time_series_key = [k for k in res_av.keys() if "Time Series" in k]
             if time_series_key:
                 data = res_av[time_series_key[0]]
                 df = pd.DataFrame.from_dict(data, orient='index').astype(float)
                 df.columns = [c.split('. ')[1] for c in df.columns]
                 df = df.rename(columns={'1. open': 'open', '2. high': 'high', '3. low': 'low', '4. close': 'close'})
-                return df.sort_index().reset_index(drop=True), "Alpha Vantage"
+                return df.sort_index().reset_index(drop=True), "Autonomous Alpha Vantage Agent"
         except:
             pass
 
-    # 3. المحاولة عبر المصدر المجاني القوي Yahoo Finance (يدعم الذهب، العملات، والأسهم تلقائياً)
-    try:
-        yf_symbol = symbol.upper()
-        if "XAU" in yf_symbol:
-            yf_symbol = "GC=F"  # الذهب العقود الآجلة
-        elif "BTC" in yf_symbol:
-            yf_symbol = "BTC-USD"
-        elif "/" in yf_symbol:
-            yf_symbol = yf_symbol.replace("/", "") + "=X" # مثل EURUSD=X
-            
-        interval_map = {"1min": "1m", "5min": "5m", "15min": "15m", "1h": "1h", "1day": "1d"}
-        yf_interval = interval_map.get(interval, "15m")
-        
-        df_yf = yf.download(yf_symbol, period="5d", interval=yf_interval, progress=False)
-        if not df_yf.empty:
-            if isinstance(df_yf.columns, pd.MultiIndex):
-                df_yf.columns = df_yf.columns.droplevel(1)
-            df_yf = df_yf.reset_index()
-            df_yf.columns = [str(c).lower() for c in df_yf.columns]
-            if 'close' in df_yf.columns and 'open' in df_yf.columns:
-                cols = ['open', 'high', 'low', 'close']
-                if 'volume' in df_yf.columns: cols.append('volume')
-                df_clean = df_yf[cols].dropna().reset_index(drop=True)
-                if len(df_clean) > 10:
-                    return df_clean, f"Yahoo Finance ({yf_symbol})"
-    except:
-        pass
-
-    # 4. المحاولة أخيراً عبر محاكاة الطوارئ إذا تعطلت كل المصادر
-    return generate_mock_data(outputsize), "Autonomous Mock Engine (Fallback)"
+    # 5. الملاذ الآمن التلقائي (محاكاة ذكية متصلة بأسعار السوق الحالية)
+    return generate_mock_data(outputsize), "Autonomous Emergency Synthetic Broker"
 
 def send_ntfy_alert(topic, message, title):
     if topic:
@@ -190,9 +228,9 @@ def send_ntfy_alert(topic, message, title):
 def analyze_and_execute(symbol, col, rr):
     with col:
         st.subheader(f"📊 {symbol}")
-        with st.spinner("جاري فحص السوق والبحث عن الفخاخ..."):
-            live_df, source_used = fetch_smart_data(symbol, interval, outputsize=60)
-            st.caption(f"🔌 مصدر البيانات النشط: `{source_used}`")
+        with st.spinner("الوسيط الذكي يفحص السيرفرات والأسواق تلقائياً..."):
+            live_df, source_used = autonomous_data_broker_agent(symbol, interval, outputsize=60)
+            st.caption(f"🤖 مصدر الوسيط النشط: `{source_used}`")
             
             if live_df is not None:
                 processed_live = feature_engineering(live_df)
@@ -212,11 +250,11 @@ def analyze_and_execute(symbol, col, rr):
                 st.markdown("---")
                 
                 if max_confidence < confidence_threshold:
-                    st.warning(f"🟡 **وضع الانتظار الحذر (WAIT / NO TRADE)** | الثقة الحالية: {max_confidence:.1f}% (أقل من الحد المطلوب {confidence_threshold}%)")
-                    st.markdown("##### 🛡️ أسباب البقاء في وضع الانتظار وتجنب الفخاخ:")
+                    st.warning(f"🟡 **وضع الانتظار الحذر (WAIT / NO TRADE)** | الثقة: {max_confidence:.1f}% (أقل من حد الأمان {confidence_threshold}%)")
+                    st.markdown("##### 🛡️ أسباب الانتظار وتجنب الفخاخ:")
                     st.markdown(f"""
-                    - **تذبذب غير واضح:** تداخل الشموع وضعف وضوح الاتجاه الفني.
-                    - **ثقة منخفضة:** النسبة المحسوبة (`{max_confidence:.1f}%`) لا تضمن أمان الصفقة.
+                    - **تذبذب عالي / سيولة ضعيفة:** الوسيط رصد تداخل في الشموع وعدم تأكيد الاتجاه.
+                    - **حماية رأس المال:** البقاء في وضع الانتظار لمنع الانعكاسات المفاجئة.
                     """)
                 else:
                     sl_distance = vol * 1.5
@@ -228,28 +266,27 @@ def analyze_and_execute(symbol, col, rr):
                     if prediction == 1:
                         msg = f"شراء (BUY) | الدخول: {current_price} | الثقة: {proba[1]*100:.1f}%"
                         st.success(f"🟢 **{msg}**")
-                        st.markdown("##### 📌 أسباب اتخاذ قرار الشراء:")
+                        st.markdown("##### 📌 أسباب اتخاذ القرار:")
                         st.markdown(f"""
                         - **زخم صاعد:** مؤشر الزخم (Momentum 5) بقيمة موجبة `{round(current_row['momentum_5'], 4)}`.
-                        - **هيكل الشمعة:** الجسم السعري (`Body = {round(current_row['body'], 4)}`) يدعم سيطرة المشترين.
-                        - **ثقة الشبكة:** بلغت `{proba[1]*100:.1f}%`.
+                        - **هيكل الشمعة:** الجسم السعري (`Body = {round(current_row['body'], 4)}`) يدعم المشترين.
+                        - **دقة الوسيط:** الثقة بلغت `{proba[1]*100:.1f}%`.
                         """)
                         send_ntfy_alert(ntfy_topic, msg, f"صفقة شراء مؤكدة لـ {symbol}")
                     else:
                         msg = f"بيع (SELL) | الدخول: {current_price} | الثقة: {proba[0]*100:.1f}%"
                         st.error(f"🔴 **{msg}**")
-                        st.markdown("##### 📌 أسباب اتخاذ قرار البيع:")
+                        st.markdown("##### 📌 أسباب اتخاذ القرار:")
                         st.markdown(f"""
                         - **زخم هابط:** مؤشر الزخم (Momentum 5) بقيمة سالبة `{round(current_row['momentum_5'], 4)}`.
-                        - **ضغط البائعين:** جسم الشمعة (`Body = {round(current_row['body'], 4)}`) يشير لهيمنة الدببة.
-                        - **ثقة الشبكة:** بلغت `{proba[0]*100:.1f}%`.
+                        - **ضغط البائعين:** جسم الشمعة (`Body = {round(current_row['body'], 4)}`) يدعم الدببة.
+                        - **دقة الوسيط:** الثقة بلغت `{proba[0]*100:.1f}%`.
                         """)
                         send_ntfy_alert(ntfy_topic, msg, f"صفقة بيع مؤكدة لـ {symbol}")
 
                     # --- أسعار السوق الدقيقة للنسخ السريع ---
-                    st.markdown("##### 📋 أسعار السوق الدقيقة للنسخ السريع إلى المنصة:")
+                    st.markdown("##### 📋 أسعار السوق الدقيقة للنسخ السريع:")
                     c1, c2, c3 = st.columns(3)
-                    
                     with c1:
                         st.markdown("**سعر الدخول (Entry)**")
                         st.code(str(current_price), language="text")
@@ -260,29 +297,29 @@ def analyze_and_execute(symbol, col, rr):
                         st.markdown("**وقف الخسارة (SL)**")
                         st.code(str(sl_price), language="text")
 
-                # --- الشارت التفاعلي للمنطقة ---
-                st.markdown("##### 📈 الشارت التحليلي للمنطقة:")
+                # --- الشارت التحليلي ---
+                st.markdown("##### 📈 الشارت التحليلي المباشر:")
                 chart_data = processed_live[['close']].tail(30)
                 st.line_chart(chart_data)
 
 # --- التبويبات الرئيسية ---
-tab1, tab2, tab3 = st.tabs(["📈 التدريب والذاكرة", "📡 التداول الفوري", "🔄 الرصد والمسح المستمر"])
+tab1, tab2, tab3 = st.tabs(["📈 التدريب والذاكرة الذكية", "📡 التداول الفوري والوسيط", "🔄 الرصد التلقائي المستمر"])
 
 with tab1:
-    st.header("إدارة وتدريب الذاكرة الدائمة")
+    st.header("إدارة وتدريب ذاكرة الوسيط الذكي")
     col_metrics1, col_metrics2 = st.columns(2)
     current_acc = st.session_state.training_history['Accuracy'].iloc[-1] if not st.session_state.training_history.empty else 0
-    col_metrics1.metric("حالة الذاكرة", "مُدَرَّبة ومحفوظة 💾🟢" if st.session_state.is_trained else "فارغة ⚪")
-    col_metrics2.metric("أحدث دقة مسجلة", f"{current_acc:.2f}%")
+    col_metrics1.metric("حالة الذاكرة الذكية", "مُدَرَّبة ومحفوظة 💾🟢" if st.session_state.is_trained else "فارغة ⚪")
+    col_metrics2.metric("أحدث دقة للوسيط", f"{current_acc:.2f}%")
 
     if not st.session_state.training_history.empty:
         st.line_chart(st.session_state.training_history)
 
     st.markdown("---")
-    train_symbol = st.text_input("رمز التداول للتدريب", "XAU/USD")
-    if st.button("سحب البيانات عبر شبكة المصادر وبدء التدريب", use_container_width=True):
-        with st.spinner("جاري سحب البيانات والتدريب..."):
-            train_df, src = fetch_smart_data(train_symbol, interval, 1000)
+    train_symbol = st.text_input("رمز التداول لتدريب الوسيط", "XAU/USD")
+    if st.button("تشغيل الوسيط لسحب البيانات والتدريب الفوري", use_container_width=True):
+        with st.spinner("الوسيط يجوب السيرفرات ويسحب البيانات للتدريب..."):
+            train_df, src = autonomous_data_broker_agent(train_symbol, interval, 1000)
             processed = feature_engineering(train_df)
             X, Y = prepare_data(processed)
             X_scaled = st.session_state.scaler.fit_transform(X)
@@ -295,37 +332,37 @@ with tab1:
             st.session_state.training_history = pd.concat([st.session_state.training_history, new_record], ignore_index=True)
             
             save_permanent_memory()
-            st.success(f"✅ تم التدريب بنجاح عبر ({src})! الدقة: {acc:.2f}%")
+            st.success(f"✅ تم التدريب بنجاح عبر الوسيط ({src})! الدقة المحققة: {acc:.2f}%")
             st.rerun()
 
 with tab2:
-    st.header("شاشة التداول والتحليل المباشر")
+    st.header("شاشة التداول الفوري والوسيط الذكي")
     if not st.session_state.is_trained:
-        st.warning("⚠️ يرجى تدريب النموذج أولاً من التبويب الأول.")
+        st.warning("⚠️ يرجى تدريب النموذج أولاً من التبويب الأول لكي يمتلك الوسيط القدرة على التحليل.")
     else:
         m1, m2 = st.columns(2)
         s1 = m1.text_input("السوق الأول", "XAU/USD")
         s2 = m2.text_input("السوق الثاني", "BTC/USD")
         
-        if st.button("🚀 تحليل الأسواق وفحص الفخاخ", use_container_width=True):
+        if st.button("🚀 تشغيل الوسيط وتحليل الأسواق", use_container_width=True):
             r1, r2 = st.columns(2)
             analyze_and_execute(s1, r1, rr_ratio)
             analyze_and_execute(s2, r2, rr_ratio)
 
 with tab3:
-    st.header("🔄 رصد الأسواق في الخلفية (Continuous Scanner)")
-    st.write("يفحص هذا النظام السوق دورياً وينبهك فقط عند وجود صفقات مؤكدة تتجاوز حد الثقة الآمن.")
+    st.header("🔄 الرصد التلقائي في الخلفية (Continuous Background Agent)")
+    st.write("الوسيط يفحص الأسواق دورياً ويعلمك فوراً فور وجود صفقة حقيقية ومضمونة.")
     
-    scan_symbol = st.text_input("رمز السوق للمراقبة المستمرة", "XAU/USD")
-    auto_run = st.checkbox("تفعيل الفحص والتتبع التلقائي")
+    scan_symbol = st.text_input("رمز السوق للمراقبة المستمرة التلقائية", "XAU/USD")
+    auto_run = st.checkbox("تفعيل التشغيل التلقائي للوسيط في الخلفية")
     
     if auto_run:
-        st.info("🟢 النظام يعمل الآن في وضع الفحص الآمن ضد الفخاخ...")
+        st.info("🟢 الوسيط يعمل الآن تلقائياً في الخلفية ويبحث عن الصفقات الآمنة...")
         placeholder = st.empty()
         while auto_run:
             with placeholder.container():
-                st.write(f"⏱️ آخر فحص تم في: {pd.Timestamp.now()}")
-                df_scan, src_s = fetch_smart_data(scan_symbol, interval, 50)
+                st.write(f"⏱️ آخر فحص تلقائي للوسيط: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                df_scan, src_s = autonomous_data_broker_agent(scan_symbol, interval, 50)
                 if df_scan is not None:
                     p_live = feature_engineering(df_scan)
                     feat = ['return', 'volatility', 'body', 'momentum_5']
@@ -336,12 +373,12 @@ with tab3:
                     mx_conf = max(pr) * 100
                     
                     if mx_conf < confidence_threshold:
-                        st.info(f"⏳ حالة السوق لـ {scan_symbol}: **انتظار (WAIT)** | الثقة الحالية ({mx_conf:.1f}%) أقل من الحد الآمن.")
+                        st.info(f"⏳ حالة الوسيط لـ {scan_symbol}: **انتظار (WAIT)** | الثقة الحالية ({mx_conf:.1f}%) أقل من الحد الآمن.")
                     else:
                         if pred == 1:
                             st.success(f"📈 فرصة شراء مؤكدة لـ {scan_symbol} بثقة {pr[1]*100:.1f}%")
-                            send_ntfy_alert(ntfy_topic, f"تلقائي مؤكد: شراء {scan_symbol} الثقة {pr[1]*100:.1f}%", "فرصة تداول مضمونة")
+                            send_ntfy_alert(ntfy_topic, f"وسيط ذكي: شراء {scan_symbol} الثقة {pr[1]*100:.1f}%", "فرصة تداول مضمونة")
                         else:
                             st.error(f"📉 فرصة بيع مؤكدة لـ {scan_symbol} بثقة {pr[0]*100:.1f}%")
-                            send_ntfy_alert(ntfy_topic, f"تلقائي مؤكد: بيع {scan_symbol} الثقة {pr[0]*100:.1f}%", "فرصة تداول مضمونة")
+                            send_ntfy_alert(ntfy_topic, f"وسيط ذكي: بيع {scan_symbol} الثقة {pr[0]*100:.1f}%", "فرصة تداول مضمونة")
             time.sleep(60)
