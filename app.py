@@ -10,7 +10,7 @@ from sklearn.preprocessing import StandardScaler
 
 # --- إعدادات الصفحة ---
 st.set_page_config(page_title="منصة التداول الذكية والذكية", layout="wide", page_icon="📈")
-st.title("🧠 منصة التداول الكمّي ذاتية الإدارة (مع نظام الانتظار الآمن والفخاخ)")
+st.title("🧠 منصة التداول الكمّي ذاتية الإدارة (النسخ السريع بأسعار السوق)")
 
 # مسارات حفظ الذاكرة
 MODEL_FILE = "trained_model.pkl"
@@ -24,7 +24,7 @@ api_key_alpha = st.sidebar.text_input("مفتاح Alpha Vantage API (اختيا�
 
 st.sidebar.markdown("---")
 st.sidebar.header("🔔 إعدادات التنبيهات (Ntfy)")
-ntfy_topic = st.sidebar.text_input("اسم قناة Ntfy الخاصة بهم", placeholder="مثال: my_crypto_signals_99")
+ntfy_topic = st.sidebar.text_input("اسم قناة Ntfy الخاصة بك", placeholder="مثال: my_crypto_signals_99")
 
 st.sidebar.markdown("---")
 st.sidebar.header("⚙️ إعدادات الذكاء الاصطناعي والتحليل")
@@ -32,8 +32,6 @@ interval = st.sidebar.selectbox("الإطار الزمني", ["1min", "5min", "1
 hidden_layers = st.sidebar.text_input("هيكل الخلايا العصبية", "128, 64, 32")
 activation = st.sidebar.selectbox("دالة التنشيط", ["relu", "tanh", "logistic"])
 rr_ratio = st.sidebar.slider("نسبة العائد للمخاطرة (TP/SL)", 1.0, 5.0, 2.0, 0.5)
-
-# عتبة الثقة لتجنب الفخاخ (إذا كانت الثقة أقل من هذه النسبة، يتحول القرار إلى انتظار)
 confidence_threshold = st.sidebar.slider("حد الثقة الأدنى لدخول الصفقة (%)", 50, 90, 58, 1)
 
 if st.sidebar.button("🗑️ مسح الذاكرة الدائمة"):
@@ -159,14 +157,12 @@ def analyze_and_execute(symbol, col, rr):
                 
                 st.markdown("---")
                 
-                # التحقق مما إذا كانت الثقة أقل من الحد المحدد لتجنب الفخاخ
                 if max_confidence < confidence_threshold:
                     st.warning(f"🟡 **وضع الانتظار الحذر (WAIT / NO TRADE)** | الثقة الحالية: {max_confidence:.1f}% (أقل من الحد المطلوب {confidence_threshold}%)")
                     st.markdown("##### 🛡️ أسباب البقاء في وضع الانتظار وتجنب الفخاخ:")
                     st.markdown(f"""
-                    - **حالة تذبذب غير واضحة:** السوق يعاني من تداخل في الشموع وضعف وضوح الاتجاه.
-                    - **نسبة ثقة منخفضة:** الثقة المحسوبة للنموذج (`{max_confidence:.1f}%`) لا توفر الحماية الكافية ضد الانقلابات السعرية المفاجئة.
-                    - **توصية النظام:** تجنب الدخول حالياً لحماية رأس المال من الفخاخ والانزلاقات السعرية.
+                    - **تذبذب غير واضح:** تداخل الشموع وضعف وضوح الاتجاه الفني.
+                    - **ثقة منخفضة:** النسبة المحسوبة (`{max_confidence:.1f}%`) لا تضمن أمان الصفقة.
                     """)
                 else:
                     sl_distance = vol * 1.5
@@ -180,9 +176,9 @@ def analyze_and_execute(symbol, col, rr):
                         st.success(f"🟢 **{msg}**")
                         st.markdown("##### 📌 أسباب اتخاذ قرار الشراء:")
                         st.markdown(f"""
-                        - **زخم صاعد قوي:** مؤشر الزخم (Momentum 5) يسجل قيمة موجبة بواقع `{round(current_row['momentum_5'], 4)}`.
+                        - **زخم صاعد:** مؤشر الزخم (Momentum 5) بقيمة موجبة `{round(current_row['momentum_5'], 4)}`.
                         - **هيكل الشمعة:** الجسم السعري (`Body = {round(current_row['body'], 4)}`) يدعم سيطرة المشترين.
-                        - **ثقة الشبكة العصبية:** تجاوزت الحد الأدنى وبلغت `{proba[1]*100:.1f}%`.
+                        - **ثقة الشبكة:** بلغت `{proba[1]*100:.1f}%`.
                         """)
                         send_ntfy_alert(ntfy_topic, msg, f"صفقة شراء مؤكدة لـ {symbol}")
                     else:
@@ -190,18 +186,25 @@ def analyze_and_execute(symbol, col, rr):
                         st.error(f"🔴 **{msg}**")
                         st.markdown("##### 📌 أسباب اتخاذ قرار البيع:")
                         st.markdown(f"""
-                        - **زخم هابط قوي:** مؤشر الزخم (Momentum 5) يسجل قيمة سالبة بواقع `{round(current_row['momentum_5'], 4)}`.
-                        - **ضغط البائعين:** جسم الشمعة السلبي (`Body = {round(current_row['body'], 4)}`) يشير لهيمنة الدببة.
-                        - **ثقة الشبكة العصبية:** تجاوزت الحد الأدنى وبلغت `{proba[0]*100:.1f}%`.
+                        - **زخم هابط:** مؤشر الزخم (Momentum 5) بقيمة سالبة `{round(current_row['momentum_5'], 4)}`.
+                        - **ضغط البائعين:** جسم الشمعة (`Body = {round(current_row['body'], 4)}`) يشير لهيمنة الدببة.
+                        - **ثقة الشبكة:** بلغت `{proba[0]*100:.1f}%`.
                         """)
                         send_ntfy_alert(ntfy_topic, msg, f"صفقة بيع مؤكدة لـ {symbol}")
 
-                    # مربعات النسخ السريع تظهر فقط في حال وجود صفقة حقيقية ومؤكدة
-                    st.markdown("##### 📋 قيم سريعة للنسخ إلى المنصة:")
-                    c_box1, c_box2, c_box3 = st.columns(3)
-                    c_box1.text_input("سعر الدخول (Entry)", value=str(current_price), key=f"ent_{symbol}_{time.time()}")
-                    c_box2.text_input("الهدف (TP)", value=str(tp_price), key=f"tp_{symbol}_{time.time()}")
-                    c_box3.text_input("وقف الخسارة (SL)", value=str(sl_price), key=f"sl_{symbol}_{time.time()}")
+                    # --- مربعات أسعار السوق غير القابلة للتعديل والقابلة للنسخ السريع ---
+                    st.markdown("##### 📋 أسعار السوق الدقيقة للنسخ السريع إلى المنصة:")
+                    c1, c2, c3 = st.columns(3)
+                    
+                    with c1:
+                        st.markdown("**سعر الدخول (Entry)**")
+                        st.code(str(current_price), language="text")
+                    with c2:
+                        st.markdown("**الهدف (TP)**")
+                        st.code(str(tp_price), language="text")
+                    with c3:
+                        st.markdown("**وقف الخسارة (SL)**")
+                        st.code(str(sl_price), language="text")
 
                 # --- الشارت التفاعلي للمنطقة ---
                 st.markdown("##### 📈 الشارت التحليلي للمنطقة:")
