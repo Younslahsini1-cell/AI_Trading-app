@@ -4,27 +4,50 @@ import numpy as np
 import requests
 import joblib
 import os
+import json
 import time
+import yfinance as yf
 from sklearn.neural_network import MLPClassifier
 from sklearn.preprocessing import StandardScaler
 
 # --- إعدادات الصفحة ---
 st.set_page_config(page_title="منصة التداول الذكية والذكية", layout="wide", page_icon="📈")
-st.title("🧠 منصة التداول الكمّي ذاتية الإدارة (النسخ السريع بأسعار السوق)")
+st.title("🧠 منصة التداول الكمّي ذاتية الإدارة (مع الحفظ الدائم ومصدر Yahoo Finance)")
 
-# مسارات حفظ الذاكرة
+# مسارات حفظ الذاكرة والإعدادات
 MODEL_FILE = "trained_model.pkl"
 SCALER_FILE = "trained_scaler.pkl"
 HISTORY_FILE = "history_data.csv"
+SETTINGS_FILE = "settings_config.json"
 
-# --- القائمة الجانبية الإعدادات ---
-st.sidebar.header("🔑 مفاتيح مصادر البيانات")
-api_key_twelve = st.sidebar.text_input("مفتاح Twelve Data API", type="password")
-api_key_alpha = st.sidebar.text_input("مفتاح Alpha Vantage API (اختياري)", type="password")
+# --- إدارة الإعدادات والمفاتيح الدائمة ---
+def load_settings():
+    if os.path.exists(SETTINGS_FILE):
+        try:
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except:
+            pass
+    return {"twelve": "", "alpha": "", "ntfy": ""}
+
+def save_settings(twelve, alpha, ntfy):
+    with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+        json.dump({"twelve": twelve, "alpha": alpha, "ntfy": ntfy}, f)
+
+if 'settings' not in st.session_state:
+    st.session_state.settings = load_settings()
+
+# --- القائمة الجانبية الإعدادات (محفوظة تلقائياً) ---
+st.sidebar.header("🔑 مفاتيح مصادر البيانات والإشعارات")
+api_key_twelve = st.sidebar.text_input("مفتاح Twelve Data API", value=st.session_state.settings.get("twelve", ""), type="password")
+api_key_alpha = st.sidebar.text_input("مفتاح Alpha Vantage API (اختياري)", value=st.session_state.settings.get("alpha", ""), type="password")
 
 st.sidebar.markdown("---")
 st.sidebar.header("🔔 إعدادات التنبيهات (Ntfy)")
-ntfy_topic = st.sidebar.text_input("اسم قناة Ntfy الخاصة بك", placeholder="مثال: my_crypto_signals_99")
+ntfy_topic = st.sidebar.text_input("اسم قناة Ntfy الخاصة بك", value=st.session_state.settings.get("ntfy", ""), placeholder="مثال: my_crypto_signals_99")
+
+# حفظ الإعدادات مباشرة عند أي تعديل
+save_settings(api_key_twelve, api_key_alpha, ntfy_topic)
 
 st.sidebar.markdown("---")
 st.sidebar.header("⚙️ إعدادات الذكاء الاصطناعي والتحليل")
@@ -34,15 +57,15 @@ activation = st.sidebar.selectbox("دالة التنشيط", ["relu", "tanh", "l
 rr_ratio = st.sidebar.slider("نسبة العائد للمخاطرة (TP/SL)", 1.0, 5.0, 2.0, 0.5)
 confidence_threshold = st.sidebar.slider("حد الثقة الأدنى لدخول الصفقة (%)", 50, 90, 58, 1)
 
-if st.sidebar.button("🗑️ مسح الذاكرة الدائمة"):
-    for file in [MODEL_FILE, SCALER_FILE, HISTORY_FILE]:
+if st.sidebar.button("🗑️ مسح الذاكرة الدائمة والإعدادات"):
+    for file in [MODEL_FILE, SCALER_FILE, HISTORY_FILE, SETTINGS_FILE]:
         if os.path.exists(file):
             os.remove(file)
     st.session_state.clear()
-    st.success("تم مسح الذاكرة!")
+    st.success("تم مسح الذاكرة والإعدادات بالكامل!")
     st.rerun()
 
-# --- إدارة الذاكرة الدائمة ---
+# --- إدارة الذاكرة الدائمة للنموذج ---
 def load_permanent_memory():
     if os.path.exists(MODEL_FILE) and os.path.exists(SCALER_FILE):
         model = joblib.load(MODEL_FILE)
@@ -93,6 +116,7 @@ def generate_mock_data(size=500):
     return pd.DataFrame({'open': open_p, 'high': high, 'low': low, 'close': close})
 
 def fetch_smart_data(symbol, interval, outputsize=500):
+    # 1. المحاولة عبر Twelve Data إذا وُجد المفتاح
     if api_key_twelve:
         url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval}&apikey={api_key_twelve}&outputsize={outputsize}"
         try:
@@ -106,6 +130,7 @@ def fetch_smart_data(symbol, interval, outputsize=500):
         except:
             pass
 
+    # 2. المحاولة عبر Alpha Vantage إذا وُجد المفتاح
     if api_key_alpha:
         try:
             url_av = f"https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol={symbol}&interval={interval}&apikey={api_key_alpha}&outputsize=full"
@@ -120,6 +145,35 @@ def fetch_smart_data(symbol, interval, outputsize=500):
         except:
             pass
 
+    # 3. المحاولة عبر المصدر المجاني القوي Yahoo Finance (يدعم الذهب، العملات، والأسهم تلقائياً)
+    try:
+        yf_symbol = symbol.upper()
+        if "XAU" in yf_symbol:
+            yf_symbol = "GC=F"  # الذهب العقود الآجلة
+        elif "BTC" in yf_symbol:
+            yf_symbol = "BTC-USD"
+        elif "/" in yf_symbol:
+            yf_symbol = yf_symbol.replace("/", "") + "=X" # مثل EURUSD=X
+            
+        interval_map = {"1min": "1m", "5min": "5m", "15min": "15m", "1h": "1h", "1day": "1d"}
+        yf_interval = interval_map.get(interval, "15m")
+        
+        df_yf = yf.download(yf_symbol, period="5d", interval=yf_interval, progress=False)
+        if not df_yf.empty:
+            if isinstance(df_yf.columns, pd.MultiIndex):
+                df_yf.columns = df_yf.columns.droplevel(1)
+            df_yf = df_yf.reset_index()
+            df_yf.columns = [str(c).lower() for c in df_yf.columns]
+            if 'close' in df_yf.columns and 'open' in df_yf.columns:
+                cols = ['open', 'high', 'low', 'close']
+                if 'volume' in df_yf.columns: cols.append('volume')
+                df_clean = df_yf[cols].dropna().reset_index(drop=True)
+                if len(df_clean) > 10:
+                    return df_clean, f"Yahoo Finance ({yf_symbol})"
+    except:
+        pass
+
+    # 4. المحاولة أخيراً عبر محاكاة الطوارئ إذا تعطلت كل المصادر
     return generate_mock_data(outputsize), "Autonomous Mock Engine (Fallback)"
 
 def send_ntfy_alert(topic, message, title):
@@ -138,7 +192,7 @@ def analyze_and_execute(symbol, col, rr):
         st.subheader(f"📊 {symbol}")
         with st.spinner("جاري فحص السوق والبحث عن الفخاخ..."):
             live_df, source_used = fetch_smart_data(symbol, interval, outputsize=60)
-            st.caption(f"🔌 مصدر البيانات: `{source_used}`")
+            st.caption(f"🔌 مصدر البيانات النشط: `{source_used}`")
             
             if live_df is not None:
                 processed_live = feature_engineering(live_df)
@@ -192,7 +246,7 @@ def analyze_and_execute(symbol, col, rr):
                         """)
                         send_ntfy_alert(ntfy_topic, msg, f"صفقة بيع مؤكدة لـ {symbol}")
 
-                    # --- مربعات أسعار السوق غير القابلة للتعديل والقابلة للنسخ السريع ---
+                    # --- أسعار السوق الدقيقة للنسخ السريع ---
                     st.markdown("##### 📋 أسعار السوق الدقيقة للنسخ السريع إلى المنصة:")
                     c1, c2, c3 = st.columns(3)
                     
@@ -225,7 +279,7 @@ with tab1:
         st.line_chart(st.session_state.training_history)
 
     st.markdown("---")
-    train_symbol = st.text_input("رمز التداول للتدريب", "EUR/USD")
+    train_symbol = st.text_input("رمز التداول للتدريب", "XAU/USD")
     if st.button("سحب البيانات عبر شبكة المصادر وبدء التدريب", use_container_width=True):
         with st.spinner("جاري سحب البيانات والتدريب..."):
             train_df, src = fetch_smart_data(train_symbol, interval, 1000)
@@ -262,7 +316,7 @@ with tab3:
     st.header("🔄 رصد الأسواق في الخلفية (Continuous Scanner)")
     st.write("يفحص هذا النظام السوق دورياً وينبهك فقط عند وجود صفقات مؤكدة تتجاوز حد الثقة الآمن.")
     
-    scan_symbol = st.text_input("رمز السوق للمراقبة المستمرة", "EUR/USD")
+    scan_symbol = st.text_input("رمز السوق للمراقبة المستمرة", "XAU/USD")
     auto_run = st.checkbox("تفعيل الفحص والتتبع التلقائي")
     
     if auto_run:
