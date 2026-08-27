@@ -17,9 +17,86 @@ try:
 except ImportError:
     YFINANCE_AVAILABLE = False
 
-# --- إعدادات الصفحة ---
+# --- إعدادات الصفحة والتصميم الاحترافي (UI Customization) ---
 st.set_page_config(page_title="منصة التداول الكمّي الذكية", layout="wide", page_icon="📈")
-st.title("🧠 الوسيط الذكي المستقل لجلب وتدفق البيانات (Autonomous Data Agent)")
+
+st.markdown("""
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;600;700;900&display=swap');
+
+    /* تطبيق الخط العام على المنصة */
+    html, body, [class*="css"] {
+        font-family: 'Cairo', sans-serif !important;
+    }
+
+    /* خلفية التطبيق العامة */
+    .stApp {
+        background-color: #0b0f19;
+        color: #f3f4f6;
+    }
+
+    /* تنسيق القائمة الجانبية */
+    section[data-testid="stSidebar"] {
+        background-color: #111827;
+        border-right: 1px solid #1f2937;
+    }
+
+    /* تصميم البطاقات والعناصر */
+    div.stMarkdown {
+        color: #e5e7eb;
+    }
+
+    /* تخصيص صناديق الأكواد (أسعار الدخول، الهدف، وقف الخسارة) */
+    pre {
+        background: #1f2937 !important;
+        border: 1px solid #374151 !important;
+        border-radius: 10px !important;
+        color: #38bdf8 !important;
+        font-weight: 700 !important;
+        text-align: center;
+        font-size: 1.15rem !important;
+        padding: 10px !important;
+    }
+
+    /* الأزرار العصرية */
+    .stButton > button {
+        background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+        color: white;
+        border-radius: 10px;
+        font-weight: 700;
+        border: none;
+        padding: 0.6rem 1.2rem;
+        transition: all 0.3s ease;
+        box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+    }
+    .stButton > button:hover {
+        background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%);
+        box-shadow: 0 6px 16px rgba(59, 130, 246, 0.5);
+        transform: translateY(-1px);
+    }
+
+    /* تخصيص التبويبات (Tabs) */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 10px;
+        background-color: #111827;
+        padding: 8px;
+        border-radius: 12px;
+        border: 1px solid #1f2937;
+    }
+    .stTabs [data-baseweb="tab"] {
+        border-radius: 8px;
+        color: #9ca3af;
+        font-weight: 600;
+        padding: 8px 16px;
+    }
+    .stTabs [aria-selected="true"] {
+        background-color: #3b82f6 !important;
+        color: white !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+st.title("🧠 منصة التداول الكمّي ذاتية الإدارة (الوسيط المستقل)")
 
 # مسارات حفظ الذاكرة والإعدادات
 MODEL_FILE = "trained_model.pkl"
