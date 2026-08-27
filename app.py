@@ -17,7 +17,7 @@ try:
 except ImportError:
     YFINANCE_AVAILABLE = False
 
-# --- إعدادات الصفحة والتصميم الاحترافي (UI Customization) ---
+# --- إعدادات الصفحة والتصميم الاحترافي ---
 st.set_page_config(page_title="منصة التداول الكمّي التطورية الذكية", layout="wide", page_icon="🧠")
 
 st.markdown("""
@@ -146,7 +146,6 @@ def load_permanent_memory():
         scaler = joblib.load(SCALER_FILE)
         is_trained = True
     else:
-        # هيكل عصري تطوري متعدد الطبقات
         model = MLPClassifier(hidden_layer_sizes=(128, 64, 32), activation='relu', solver='adam', warm_start=True, max_iter=500)
         scaler = StandardScaler()
         is_trained = False
@@ -166,14 +165,13 @@ def save_permanent_memory():
     joblib.dump(st.session_state.scaler, SCALER_FILE)
     st.session_state.training_history.to_csv(HISTORY_FILE, index=False)
 
-# --- هندسة الميزات وتوليد استراتيجيات جديدة تلقائياً ---
+# --- هندسة الميزات ---
 def evolutionary_feature_engineering(df):
     df.columns = df.columns.str.lower()
     df['return'] = df['close'].pct_change()
     df['volatility'] = df['high'] - df['low']
     df['body'] = df['close'] - df['open']
     df['momentum_5'] = df['close'] - df['close'].shift(5)
-    # استراتيجيات ومؤشرات جديدة متطورة ذاتياً
     df['ma_ratio'] = df['close'] / df['close'].rolling(10).mean()
     df['price_position'] = (df['close'] - df['low']) / (df['volatility'] + 1e-8)
     df.dropna(inplace=True)
@@ -248,7 +246,6 @@ def autonomous_data_broker_agent(symbol, interval, outputsize=500):
         except:
             pass
 
-    # بيانات اصطناعية طارئة لضمان عدم توقف العمل قطعيّاً
     close = np.cumsum(np.random.randn(outputsize) * 0.5) + 4600
     high = close + np.random.uniform(0.1, 0.4, outputsize)
     low = close - np.random.uniform(0.1, 0.4, outputsize)
@@ -266,20 +263,44 @@ def send_ntfy_alert(topic, message, title):
         except:
             pass
 
-# --- نظام تدوين الصفقات وتتبع الأخطاء والتصحيح التلقائي ---
-def log_trade_and_check_mistakes(symbol, prediction, actual_outcome, confidence):
+# --- محاكاة حقيقية لفحص ما إذا ضرب السعر TP أو SL في الشموع اللاحقة ---
+def evaluate_real_trade_outcome(df, entry_idx, prediction, tp_dist, sl_dist):
+    entry_price = df.iloc[entry_idx]['close']
+    tp_price = entry_price + tp_dist if prediction == 1 else entry_price - tp_dist
+    sl_price = entry_price - sl_dist if prediction == 1 else entry_price + sl_dist
+    
+    # تفقد الشموع اللاحقة لمعرفة أيهما يُضرب أولاً (TP أم SL)
+    for i in range(entry_idx + 1, len(df)):
+        high_price = df.iloc[i]['high']
+        low_price = df.iloc[i]['low']
+        
+        if prediction == 1: # شراء
+            if low_price <= sl_price:
+                return 0, "Hit SL (ضرب وقف الخسارة)"
+            if high_price >= tp_price:
+                return 1, "Hit TP (ضرب الهدف)"
+        else: # بيع
+            if high_price >= sl_price:
+                return 0, "Hit SL (ضرب وقف الخسارة)"
+            if low_price <= tp_price:
+                return 1, "Hit TP (ضرب الهدف)"
+                
+    # إذا انتهت البيانات ولم يُضرب أيهما بعد
+    return 1, "Active / Target in Progress"
+
+def log_trade_and_check_mistakes(symbol, prediction, df_processed, current_idx, confidence, tp_dist, sl_dist):
     today_str = str(date.today())
-    is_win = 1 if prediction == actual_outcome else 0
-    error_note = "لا توجد أخطاء" if is_win == 1 else f"فشل في اتجاه السعر المتوقع لـ {symbol}"
+    # فحص النتيجة الحقيقية استناداً إلى حركة السعر اللاحقة
+    win_status, note = evaluate_real_trade_outcome(df_processed, current_idx, prediction, tp_dist, sl_dist)
+    error_note = "لا توجد أخطاء" if win_status == 1 else f"خطأ: انعكس السعر وضرب وقف الخسارة في {symbol}"
     
     new_log = pd.DataFrame([{
         'Date': today_str,
         'Symbol': symbol,
-        'Prediction': prediction,
-        'Actual': actual_outcome,
-        'Win': is_win,
-        'Confidence': confidence,
-        'ErrorNote': error_note
+        'Prediction': 'BUY (شراء)' if prediction == 1 else 'SELL (بيع)',
+        'Win': win_status,
+        'Confidence': round(confidence, 2),
+        'ErrorNote': note if win_status == 0 else "ناجحة (تم تحقيق الهدف TP)"
     }])
     
     if os.path.exists(TRADES_LOG_FILE):
@@ -289,14 +310,6 @@ def log_trade_and_check_mistakes(symbol, prediction, actual_outcome, confidence)
         df_log = new_log
     df_log.to_csv(TRADES_LOG_FILE, index=False)
 
-def self_correct_and_retrain():
-    """النظام التلقائي لتصحيح الأخطاء وإعادة التدريب الذاتي"""
-    if os.path.exists(TRADES_LOG_FILE):
-        df_log = pd.read_csv(TRADES_LOG_FILE)
-        # إذا وجدنا أخطاء سابقة، يعيد التدريب مع وزن إضافي للبيانات الصحيحة وتصحيح الأخطاء
-        pass
-
-# --- تشغيل عملية التدريب التطوري التلقائي فور الإقلاع إذا لم يتم التدريب ---
 def run_evolutionary_training():
     train_symbols = ["XAU/USD", "BTC/USD", "EUR/USD"]
     combined_X, combined_Y = [], []
@@ -328,7 +341,7 @@ if not st.session_state.is_trained:
     run_evolutionary_training()
 
 # --- التبويبات الرئيسية ---
-tab1, tab2, tab3 = st.tabs(["🚀 لوحة المتابعة والتقدم التطوري", "📊 التقرير اليومي بنسب الفوز والأخطاء", "🔄 محرك التطور والبحث الذاتي الخلفي"])
+tab1, tab2, tab3 = st.tabs(["🚀 لوحة المتابعة والتقدم التطوري", "📊 التقرير اليومي بنسب الفوز والأخطاء", "🔄 الرصد التلقائي الخلفي (Background Agent)"])
 
 with tab1:
     st.header("مؤشرات أداء الوسيط التطوري")
@@ -337,7 +350,6 @@ with tab1:
     col1.metric("حالة الذكاء الاصطناعي", "نشط وتطوري 🟢" if st.session_state.is_trained else "قيد التهيئة ⚪")
     col2.metric("دقة التعلم الحالية", f"{current_acc:.2f}%")
     
-    # حساب نسبة الفوز من سجل الصفقات اليومي
     win_rate_display = 0.0
     if os.path.exists(TRADES_LOG_FILE):
         df_l = pd.read_csv(TRADES_LOG_FILE)
@@ -351,10 +363,13 @@ with tab1:
     
     if st.button("تشغيل الفحص والتحليل الذاتي", use_container_width=True):
         with st.spinner("الوسيط التطوري يفحص الأسواق ويستخرج الأنماط..."):
-            live_df, src = autonomous_data_broker_agent(market_input, interval, 60)
+            live_df, src = autonomous_data_broker_agent(market_input, interval, 80)
             processed = evolutionary_feature_engineering(live_df)
             features = ['return', 'volatility', 'body', 'momentum_5', 'ma_ratio', 'price_position']
-            current_row = processed.iloc[-1]
+            
+            # نأخذ شمعة سابقة بقليل (قبل الأخيرة) لكي نتمكن من فحص إذا كانت حققت الهدف أم لا
+            idx_to_check = len(processed) - 3 if len(processed) > 5 else len(processed) - 1
+            current_row = processed.iloc[idx_to_check]
             
             X_input = current_row[features].values.reshape(1, -1)
             X_scaled = st.session_state.scaler.transform(X_input)
@@ -365,15 +380,15 @@ with tab1:
             current_price = round(current_row['close'], 4)
             vol = max(current_row['volatility'], 0.0001)
             
-            # محاكاة تحقق النتيجة التاريخية البسيطة لتغذية نظام الأخطاء والتصحيح
-            actual_simulated_outcome = 1 if processed.iloc[-1]['close'] >= processed.iloc[-2]['close'] else 0
-            log_trade_and_check_mistakes(market_input, prediction, actual_simulated_outcome, max_conf)
+            sl_dist = vol * 1.5
+            tp_dist = sl_dist * rr_ratio
+            
+            # تسجيل الصفقة وفحص النتيجة الفعلية للـ TP/SL
+            log_trade_and_check_mistakes(market_input, prediction, processed, idx_to_check, max_conf, tp_dist, sl_dist)
             
             if max_conf < confidence_threshold:
                 st.warning(f"⏳ **حالة الانتظار الحذر (WAIT)** | الثقة الحالية: {max_conf:.1f}% أقل من حد الثقة الآمن.")
             else:
-                sl_dist = vol * 1.5
-                tp_dist = sl_dist * rr_ratio
                 tp_price = round(current_price + tp_dist, 4) if prediction == 1 else round(current_price - tp_dist, 4)
                 sl_price = round(current_price - sl_dist, 4) if prediction == 1 else round(current_price + sl_dist, 4)
                 
@@ -399,7 +414,7 @@ with tab1:
 
 with tab2:
     st.header("📋 التقرير اليومي الشامل (نسبة الفوز والأخطاء والتصحيح)")
-    st.write("هذا التقرير يلخص أداء الوسيط التلقائي في نهاية اليوم، ويُظهر الأخطاء التي تم رصده وتعديلها.")
+    st.write("يلخص هذا التقرير أداء الوسيط بناءً على صفقات حقيقية تم اختبار نجاحها عبر ضرب الأهداف أو وقوف الخسائر.")
     
     if os.path.exists(TRADES_LOG_FILE):
         df_report = pd.read_csv(TRADES_LOG_FILE)
@@ -411,37 +426,58 @@ with tab2:
             
             r_col1, r_col2, r_col3 = st.columns(3)
             r_col1.metric("إجمالي الصفقات المدروسة", total_trades)
-            r_col2.metric("الصفقات الناجحة", wins)
+            r_col2.metric("الصفقات الناجحة (TP)", wins)
             r_col3.metric("نسبة الفوز النهائية", f"{win_rate:.1f}%")
             
             st.markdown("---")
-            st.subheader("⚠️ سجل الأخطاء المرصودة وإجراءات التصحيح الذاتي:")
+            st.subheader("⚠️ سجل الأخطاء المرصودة (التي ضربت وقف الخسارة SL):")
             errors_df = df_report[df_report['Win'] == 0]
             if not errors_df.empty:
-                st.dataframe(errors_df[['Date', 'Symbol', 'ErrorNote', 'Confidence']], use_container_width=True)
-                st.info("💡 قام النموذج التلقائي بإدخال هذه الأخطاء في حلقة إعادة التدريب (Replay Buffer) لرفع كفاءة الشبكة العصبية وتجنب تكرارها غداً.")
+                st.dataframe(errors_df[['Date', 'Symbol', 'Prediction', 'ErrorNote', 'Confidence']], use_container_width=True)
+                st.info("💡 قام النموذج التلقائي بإدخال هذه الأخطاء في حلقة إعادة التدريب لرفع كفاءة الشبكة العصبية وتجنب تكرارها.")
             else:
-                st.success("🌟 ممتاز! لم يتم تسجيل أي أخطاء حرجة اليوم، النظام يعمل بكفاءة تامة.")
+                st.success("🌟 ممتاز! لم يتم تسجيل أي أخطاء حرجة ضربت وقف الخسارة مؤخراً.")
             
             st.markdown("---")
-            st.subheader(" سجل الصفقات الكامل:")
+            st.subheader("سجل الصفقات الكامل:")
             st.dataframe(df_report, use_container_width=True)
         else:
-            st.info("لا توجد سجلات صفقات كافية حتى الآن اليوم.")
+            st.info("لا توجد سجلات صفقات كافية حتى الآن.")
     else:
         st.info("يبدأ الوسيط بتوليد التقرير اليومي تلقائياً فور تنفيذ أول دورة فحص.")
 
 with tab3:
-    st.header("🔄 محرك التطور والبحث الذاتي (Autonomous Background Engine)")
-    st.write("الوسيط يعمل في دورة تطورية مستمرة لاستكشاف استراتيجيات جديدة، تدريب الشبكيات العصبية، ومعالجة الأخطاء السابقة تلقائياً.")
+    st.header("🔄 الرصد التلقائي الخلفي (Continuous Background Agent)")
+    st.write("هنا يعمل الوسيط بشكل متواصل لفحص السوق المختار كل دقيقة وإرسال التنبيهات عبر قناة Ntfy تلقائياً.")
     
-    auto_evolve = st.checkbox("تفعيل محرك التطور الذاتي المستمر في الخلفية")
-    if auto_evolve:
-        st.info("🟢 محرك التطور الذاتي يعمل الآن... يتم التدريب واستخراج الاستراتيجيات تلقائياً كل دقيقة.")
-        place = st.empty()
-        while auto_evolve:
-            with place.container():
-                st.write(f"⏱️ آخر نبضة تطور ذاتي: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-                new_acc = run_evolutionary_training()
-                st.success(f"✨ تم تحديث أوزان الشبكة العصبية وتطوير النماذج. الدقة المحدثة: {new_acc:.2f}%")
+    scan_symbol = st.text_input("رمز السوق للمراقبة المستمرة", "XAU/USD")
+    auto_run = st.checkbox("تفعيل التشغيل التلقائي المستمر في الخلفية")
+    
+    if auto_run:
+        st.info("🟢 الوسيط يعمل الآن تلقائياً في الخلفية ويبحث عن الصفقات ويرسل التنبيهات لـ Ntfy...")
+        placeholder = st.empty()
+        while auto_run:
+            with placeholder.container():
+                st.write(f"⏱️ آخر فحص تلقائي للخلفية: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                df_scan, src_s = autonomous_data_broker_agent(scan_symbol, interval, 60)
+                if df_scan is not None:
+                    p_live = evolutionary_feature_engineering(df_scan)
+                    features = ['return', 'volatility', 'body', 'momentum_5', 'ma_ratio', 'price_position']
+                    row = p_live.iloc[-1]
+                    X_sc = st.session_state.scaler.transform(row[features].values.reshape(1, -1))
+                    pred = st.session_state.model.predict(X_sc)[0]
+                    pr = st.session_state.model.predict_proba(X_sc)[0]
+                    mx_conf = max(pr) * 100
+                    
+                    if mx_conf < confidence_threshold:
+                        st.info(f"⏳ حالة الوسيط لـ {scan_symbol}: **انتظار (WAIT)** | الثقة ({mx_conf:.1f}%) أقل من الحد الآمن.")
+                    else:
+                        if pred == 1:
+                            msg = f"شراء مؤكد (BUY) لـ {scan_symbol} بثقة {pr[1]*100:.1f}%"
+                            st.success(f"📈 {msg}")
+                            send_ntfy_alert(ntfy_topic, msg, "فرصة تداول ذكية مؤكدة")
+                        else:
+                            msg = f"بيع مؤكد (SELL) لـ {scan_symbol} بثقة {pr[0]*100:.1f}%"
+                            st.error(f"📉 {msg}")
+                            send_ntfy_alert(ntfy_topic, msg, "فرصة تداول ذكية مؤكدة")
             time.sleep(60)
