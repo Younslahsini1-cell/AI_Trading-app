@@ -1,4 +1,3 @@
-```python
 import streamlit as st
 from datetime import date, datetime
 import json
@@ -29,7 +28,7 @@ st.set_page_config(
 st.markdown(
     """
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;600;700;900&display=swap');
+    @import url('[https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;600;700;900&display=swap](https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;600;700;900&display=swap)');
 
     html, body, [class*="css"] {
         font-family: 'Cairo', sans-serif !important;
@@ -135,7 +134,7 @@ def send_ntfy_alert(topic, message, title='Smart Trading Signal'):
     if 'ntfy.sh/' in clean_topic:
       clean_topic = clean_topic.split('ntfy.sh/')[-1].strip('/')
 
-    url = f'https://ntfy.sh/{clean_topic}'
+    url = f'[https://ntfy.sh/](https://ntfy.sh/){clean_topic}'
     try:
       headers = {'Title': title, 'Priority': 'urgent'}
       response = requests.post(
@@ -312,7 +311,7 @@ def autonomous_data_broker_agent(symbol, interval, outputsize=600):
           '1day': '1d',
       }
       b_interval = interval_map.get(interval, '5m')
-      url = f'https://api.binance.com/api/v3/klines?symbol={binance_sym}&interval={b_interval}&limit={min(outputsize, 1000)}'
+      url = f'[https://api.binance.com/api/v3/klines?symbol=](https://api.binance.com/api/v3/klines?symbol=){binance_sym}&interval={b_interval}&limit={min(outputsize, 1000)}'
       res = requests.get(url, timeout=5).json()
       if isinstance(res, list) and len(res) > 0:
         df = pd.DataFrame(
@@ -376,7 +375,7 @@ def autonomous_data_broker_agent(symbol, interval, outputsize=600):
 
   if api_key_twelve:
     try:
-      url = f'https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval}&apikey={api_key_twelve}&outputsize={outputsize}'
+      url = f'[https://api.twelvedata.com/time_series?symbol=](https://api.twelvedata.com/time_series?symbol=){symbol}&interval={interval}&apikey={api_key_twelve}&outputsize={outputsize}'
       res = requests.get(url, timeout=5).json()
       if 'values' in res:
         df = pd.DataFrame(res['values'])
@@ -719,8 +718,8 @@ with tab3:
           price_bg = round(row_bg['close'], 4)
           vol_bg = max(row_bg['volatility'], 0.1)
 
-          sl_b = vol_bg * 1.2
-          tp_b = sl_b * rr_ratio
+          sl_bg = vol_bg * 1.2
+          tp_bg = sl_bg * rr_ratio
 
           if (
               conf_bg < confidence_threshold
@@ -732,14 +731,14 @@ with tab3:
             )
           else:
             tp_p = (
-                round(price_bg + tp_b, 4)
+                round(price_bg + tp_bg, 4)
                 if pred_bg == 1
-                else round(price_bg - tp_b, 4)
+                else round(price_bg - tp_bg, 4)
             )
             sl_p = (
-                round(price_bg - sl_b, 4)
+                round(price_bg - sl_bg, 4)
                 if pred_bg == 1
-                else round(price_bg + sl_b, 4)
+                else round(price_bg + sl_bg, 4)
             )
 
             if pred_bg == 1:
@@ -757,5 +756,3 @@ with tab3:
               st.error(f'📉 تنبيه بيع تلقائي لـ {monitor_symbol} عند {price_bg}')
               send_ntfy_alert(ntfy_topic, msg_bg, 'Autonomous SELL Alert')
       time.sleep(60)
-
-```
