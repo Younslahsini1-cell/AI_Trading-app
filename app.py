@@ -1,3 +1,4 @@
+import streamlit as st
 from datetime import date, datetime
 import json
 import os
@@ -125,17 +126,16 @@ def save_settings(twelve, alpha, ntfy):
 if 'settings' not in st.session_state:
   st.session_state.settings = load_settings()
 
+
 # --- دالة إرسال التنبيهات المُصححة ---
 def send_ntfy_alert(topic, message, title='Trading Signal'):
   if topic:
-    # تنظيف اسم القناة في حال كتب المستخدم الرابط كاملاً
     clean_topic = topic.strip()
     if 'ntfy.sh/' in clean_topic:
       clean_topic = clean_topic.split('ntfy.sh/')[-1].strip('/')
 
     url = f'https://ntfy.sh/{clean_topic}'
     try:
-      # استخدام عنوان إنجليزي لتجنب مشاكل التشفير في الـ Headers
       headers = {'Title': title, 'Priority': 'urgent'}
       response = requests.post(
           url, data=message.encode('utf-8'), headers=headers, timeout=5
@@ -169,7 +169,6 @@ ntfy_topic = st.sidebar.text_input(
 )
 save_settings(api_key_twelve, api_key_alpha, ntfy_topic)
 
-# زر فحص واختبار التنبيهات فوراً
 if st.sidebar.button('🧪 اختبار إرسال تنبيه Ntfy الآن'):
   success = send_ntfy_alert(
       ntfy_topic,
@@ -206,6 +205,7 @@ if st.sidebar.button('🗑️ إعادة تهيئة ذاكرة التطور ال
   st.session_state.clear()
   st.success('تم إعادة ضبط نظام التطور الذاتي بنجاح!')
   st.rerun()
+
 
 # --- إدارة الذاكرة الدائمة للنموذج التطوري ---
 def load_permanent_memory():
@@ -395,12 +395,12 @@ def evaluate_real_trade_outcome(df, entry_idx, prediction, tp_dist, sl_dist):
     high_price = df.iloc[i]['high']
     low_price = df.iloc[i]['low']
 
-    if prediction == 1:  # شراء
+    if prediction == 1:
       if low_price <= sl_price:
         return 0, 'Hit SL (ضرب وقف الخسارة)'
       if high_price >= tp_price:
         return 1, 'Hit TP (ضرب الهدف)'
-    else:  # بيع
+    else:
       if high_price >= sl_price:
         return 0, 'Hit SL (ضرب وقف الخسارة)'
       if low_price <= tp_price:
