@@ -104,3 +104,11 @@ with tab2:
                             st.error(f"🔴 **صفقة بيع (SELL)** | نسبة الثقة: {proba[0]*100:.1f}%")
                         
                         st.session_state.model.partial_fit(current_X_scaled, [prediction])
+def feature_engineering(df):
+    df.columns = df.columns.str.lower()  # أضف هذا السطر فقط
+    df['return'] = df['close'].pct_change()
+    df['volatility'] = df['high'] - df['low']
+    df['body'] = df['close'] - df['open']
+    df['momentum_5'] = df['close'] - df['close'].shift(5)
+    df.dropna(inplace=True)
+    return df
