@@ -10,7 +10,7 @@ from sklearn.preprocessing import StandardScaler
 
 # --- إعدادات الصفحة ---
 st.set_page_config(page_title="منصة التداول الذكية والذكية", layout="wide", page_icon="📈")
-st.title("🧠 منصة التداول الكمّي ذاتية الإدارة (مع نظام التبديل التلقائي والإشعارات)")
+st.title("🧠 منصة التداول الكمّي ذاتية الإدارة (مع الرسوم البيانية ومربعات النسخ السريع)")
 
 # مسارات حفظ الذاكرة
 MODEL_FILE = "trained_model.pkl"
@@ -85,18 +85,13 @@ def prepare_data(df):
     return X[:-1], Y[:-1]
 
 def generate_mock_data(size=500):
-    """مصدر بديل ذاتي (محاكاة ذكية متصلة) لمنع انقطاع الفحص تماماً"""
     close = np.cumsum(np.random.randn(size) * 0.5) + 100
     high = close + np.random.uniform(0.1, 0.4, size)
     low = close - np.random.uniform(0.1, 0.4, size)
     open_p = low + np.random.uniform(0.0, 0.3, size)
     return pd.DataFrame({'open': open_p, 'high': high, 'low': low, 'close': close})
 
-# --- شبكة تنظيم مصادر البيانات (Data Source Orchestrator) ---
 def fetch_smart_data(symbol, interval, outputsize=500):
-    """تقوم بالتنقل الذكي بين المصادر دون انقطاع"""
-    
-    # المحاولة الأولى: Twelve Data
     if api_key_twelve:
         url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval}&apikey={api_key_twelve}&outputsize={outputsize}"
         try:
@@ -110,7 +105,6 @@ def fetch_smart_data(symbol, interval, outputsize=500):
         except:
             pass
 
-    # المحاولة الثانية: Alpha Vantage (كمصدر احتياطي أول)
     if api_key_alpha:
         try:
             url_av = f"https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol={symbol}&interval={interval}&apikey={api_key_alpha}&outputsize=full"
@@ -125,11 +119,9 @@ def fetch_smart_data(symbol, interval, outputsize=500):
         except:
             pass
 
-    # المحاولة الثالثة والأخيرة: مصدر محاكاة الذكاء الذاتي لضمان عدم توقف الفحص نهائياً
     return generate_mock_data(outputsize), "Autonomous Mock Engine (Fallback)"
 
 def send_ntfy_alert(topic, message, title):
-    """إرسال إشعار فوري إلى هاتفك عبر ntfy.sh"""
     if topic:
         try:
             requests.post(
@@ -143,9 +135,9 @@ def send_ntfy_alert(topic, message, title):
 def analyze_and_execute(symbol, col, rr):
     with col:
         st.subheader(f"📊 {symbol}")
-        with st.spinner("جاري التبديل والفحص الذكي للمصادر..."):
-            live_df, source_used = fetch_smart_data(symbol, interval, outputsize=50)
-            st.caption(f"🔌 مصدر البيانات النشط حالياً: `{source_used}`")
+        with st.spinner("جاري التحليل واستخراج الأسباب والشارت..."):
+            live_df, source_used = fetch_smart_data(symbol, interval, outputsize=60)
+            st.caption(f"🔌 مصدر البيانات: `{source_used}`")
             
             if live_df is not None:
                 processed_live = feature_engineering(live_df)
@@ -164,21 +156,48 @@ def analyze_and_execute(symbol, col, rr):
                 sl_distance = vol * 1.5
                 tp_distance = sl_distance * rr
                 
-                st.markdown("---")
-                if prediction == 1:
-                    msg = f"شراء (BUY) | السعر: {current_price} | الثقة: {proba[1]*100:.1f}%"
-                    st.success(f"🟢 **{msg}**")
-                    st.write(f"**🎯 الهدف (TP):** `{round(current_price + tp_distance, 4)}`")
-                    st.write(f"**🛡️ الوقف (SL):** `{round(current_price - sl_distance, 4)}`")
-                    send_ntfy_alert(ntfy_topic, msg, f"تنبيه صفقة شراء لـ {symbol}")
-                else:
-                    msg = f"بيع (SELL) | السعر: {current_price} | الثقة: {proba[0]*100:.1f}%"
-                    st.error(f"🔴 **{msg}**")
-                    st.write(f"**🎯 الهدف (TP):** `{round(current_price - tp_distance, 4)}`")
-                    st.write(f"**🛡️ الوقف (SL):** `{round(current_price + sl_distance, 4)}`")
-                    send_ntfy_alert(ntfy_topic, msg, f"تنبيه صفقة بيع لـ {symbol}")
+                tp_price = round(current_price + tp_distance, 4) if prediction == 1 else round(current_price - tp_distance, 4)
+                sl_price = round(current_price - sl_distance, 4) if prediction == 1 else round(current_price + sl_distance, 4)
 
-# --- واجهة المستخدم (التبويبات) ---
+                st.markdown("---")
+                
+                # --- عرض الإشارة والأسباب ---
+                if prediction == 1:
+                    msg = f"شراء (BUY) | الدخول: {current_price} | الثقة: {proba[1]*100:.1f}%"
+                    st.success(f"🟢 **{msg}**")
+                    st.markdown("##### 📌 أسباب اتخاذ قرار الشراء:")
+                    st.markdown(f"""
+                    - **زخم صاعد إيجابي:** مؤشر الزخم (Momentum 5) يسجل قيمة موجبة بواقع `{round(current_row['momentum_5'], 4)}`.
+                    - **هيكل الشمعة:** الجسم السعري (`Body = {round(current_row['body'], 4)}`) يدعم ضغط المشترين.
+                    - **التقلب والمدى:** نطاق الحركة (Volatility) يبلغ `{round(vol, 4)}` مما يوفر مساحة آمنة للهدف.
+                    - **ثقة الشبكة العصبية:** بلغت النسبة المحسوبة للارتفاع `{proba[1]*100:.1f}%`.
+                    """)
+                    send_ntfy_alert(ntfy_topic, msg, f"صفقة شراء لـ {symbol}")
+                else:
+                    msg = f"بيع (SELL) | الدخول: {current_price} | الثقة: {proba[0]*100:.1f}%"
+                    st.error(f"🔴 **{msg}**")
+                    st.markdown("##### 📌 أسباب اتخاذ قرار البيع:")
+                    st.markdown(f"""
+                    - **زخم هابط سلبي:** مؤشر الزخم (Momentum 5) يسجل قيمة سالبة بواقع `{round(current_row['momentum_5'], 4)}`.
+                    - **ضغط البائعين:** جسم الشمعة السلبي (`Body = {round(current_row['body'], 4)}`) يشير لهيمنة الدببة.
+                    - **نطاق التقلب:** قياس التذبذب (Volatility) مساوٍ لـ `{round(vol, 4)}`.
+                    - **ثقة الشبكة العصبية:** بلغت النسبة المحسوبة للانخفاض `{proba[0]*100:.1f}%`.
+                    """)
+                    send_ntfy_alert(ntfy_topic, msg, f"صفقة بيع لـ {symbol}")
+
+                # --- مربعات النسخ السريع ---
+                st.markdown("##### 📋 قيم سريعة للنسخ إلى المنصة:")
+                c_box1, c_box2, c_box3 = st.columns(3)
+                c_box1.text_input("سعر الدخول (Entry)", value=str(current_price), key=f"ent_{symbol}_{time.time()}")
+                c_box2.text_input("الهدف (TP)", value=str(tp_price), key=f"tp_{symbol}_{time.time()}")
+                c_box3.text_input("وقف الخسارة (SL)", value=str(sl_price), key=f"sl_{symbol}_{time.time()}")
+
+                # --- الشارت التفاعلي للمنطقة ---
+                st.markdown("##### 📈 الشارت التحليلي للمنطقة:")
+                chart_data = processed_live[['close']].tail(30) # آخر 30 شمعة
+                st.line_chart(chart_data)
+
+# --- التبويبات الرئيسية ---
 tab1, tab2, tab3 = st.tabs(["📈 التدريب والذاكرة", "📡 التداول الفوري", "🔄 الرصد والمسح المستمر"])
 
 with tab1:
@@ -220,14 +239,14 @@ with tab2:
         s1 = m1.text_input("السوق الأول", "XAU/USD")
         s2 = m2.text_input("السوق الثاني", "BTC/USD")
         
-        if st.button("🚀 تحليل الأسواق وإرسال التنبيهات الآن", use_container_width=True):
+        if st.button("🚀 تحليل الأسواق واستخراج الشارت والتنبيهات", use_container_width=True):
             r1, r2 = st.columns(2)
             analyze_and_execute(s1, r1, rr_ratio)
             analyze_and_execute(s2, r2, rr_ratio)
 
 with tab3:
     st.header("🔄 رصد الأسواق في الخلفية (Continuous Scanner)")
-    st.write("يقوم هذا النظام بفحص السوق تلقائياً كل فترة زمنية وإرسال إشعارات فورية لهاتفك عند رصد أي فرصة.")
+    st.write("يفحص هذا النظام السوق بشكل دوري ويسجل التنبيهات مع إرسالها لهاتفك عبر Ntfy.")
     
     scan_symbol = st.text_input("رمز السوق للمراقبة المستمرة", "EUR/USD")
     auto_run = st.checkbox("تفعيل الفحص والتتبع التلقائي")
@@ -253,4 +272,4 @@ with tab3:
                     else:
                         st.error(f"📉 رصد إشارة بيع تلقائية لـ {scan_symbol} بنسبة ثقة {pr[0]*100:.1f}%")
                         send_ntfy_alert(ntfy_topic, f"تلقائي: بيع {scan_symbol} الثقة {pr[0]*100:.1f}%", "فرصة تداول تلقائية")
-            time.sleep(60) # يفحص كل 60 ثانية تلقائياً
+            time.sleep(60)
