@@ -8,7 +8,6 @@ import json
 import time
 from datetime import datetime
 from sklearn.neural_network import MLPClassifier
-from sklearn.preprocessing:: StandardScaler # type: ignore
 from sklearn.preprocessing import StandardScaler
 
 # محاولة استيراد yfinance بأمان
@@ -124,13 +123,8 @@ def generate_mock_data(size=500):
 
 # --- الوسيط الذكي المستقل لجلب البيانات تلقائياً ---
 def autonomous_data_broker_agent(symbol, interval, outputsize=500):
-    """
-    وسيط ذكي مستقل يبحث تلقائياً في عدة مصادر وسيرفرات عالمية 
-    دون أي تدخل بشري فور الدخول للموقع.
-    """
     clean_symbol = symbol.upper().strip()
 
-    # 1. محاولة جلب عبر Binance Public API (للعملات الرقمية فوراً وبدون مفاتيح)
     if any(crypto in clean_symbol for crypto in ["BTC", "ETH", "SOL", "BNB", "CRYPTO"]):
         try:
             binance_sym = clean_symbol.replace("/", "").replace("-", "")
@@ -153,7 +147,6 @@ def autonomous_data_broker_agent(symbol, interval, outputsize=500):
         except:
             pass
 
-    # 2. محاولة جلب عبر Yahoo Finance (للذهب والعملات والأسهم تلقائياً)
     if YFINANCE_AVAILABLE:
         try:
             yf_symbol = clean_symbol
@@ -182,7 +175,6 @@ def autonomous_data_broker_agent(symbol, interval, outputsize=500):
         except:
             pass
 
-    # 3. محاولة جلب عبر Twelve Data إذا وجد المفتاح
     if api_key_twelve:
         try:
             url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval}&apikey={api_key_twelve}&outputsize={outputsize}"
@@ -196,7 +188,6 @@ def autonomous_data_broker_agent(symbol, interval, outputsize=500):
         except:
             pass
 
-    # 4. محاولة جلب عبر Alpha Vantage إذا وجد المفتاح
     if api_key_alpha:
         try:
             url_av = f"https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol={symbol}&interval={interval}&apikey={api_key_alpha}&outputsize=full"
@@ -211,7 +202,6 @@ def autonomous_data_broker_agent(symbol, interval, outputsize=500):
         except:
             pass
 
-    # 5. الملاذ الآمن التلقائي (محاكاة ذكية متصلة بأسعار السوق الحالية)
     return generate_mock_data(outputsize), "Autonomous Emergency Synthetic Broker"
 
 def send_ntfy_alert(topic, message, title):
@@ -251,11 +241,6 @@ def analyze_and_execute(symbol, col, rr):
                 
                 if max_confidence < confidence_threshold:
                     st.warning(f"🟡 **وضع الانتظار الحذر (WAIT / NO TRADE)** | الثقة: {max_confidence:.1f}% (أقل من حد الأمان {confidence_threshold}%)")
-                    st.markdown("##### 🛡️ أسباب الانتظار وتجنب الفخاخ:")
-                    st.markdown(f"""
-                    - **تذبذب عالي / سيولة ضعيفة:** الوسيط رصد تداخل في الشموع وعدم تأكيد الاتجاه.
-                    - **حماية رأس المال:** البقاء في وضع الانتظار لمنع الانعكاسات المفاجئة.
-                    """)
                 else:
                     sl_distance = vol * 1.5
                     tp_distance = sl_distance * rr
@@ -266,25 +251,12 @@ def analyze_and_execute(symbol, col, rr):
                     if prediction == 1:
                         msg = f"شراء (BUY) | الدخول: {current_price} | الثقة: {proba[1]*100:.1f}%"
                         st.success(f"🟢 **{msg}**")
-                        st.markdown("##### 📌 أسباب اتخاذ القرار:")
-                        st.markdown(f"""
-                        - **زخم صاعد:** مؤشر الزخم (Momentum 5) بقيمة موجبة `{round(current_row['momentum_5'], 4)}`.
-                        - **هيكل الشمعة:** الجسم السعري (`Body = {round(current_row['body'], 4)}`) يدعم المشترين.
-                        - **دقة الوسيط:** الثقة بلغت `{proba[1]*100:.1f}%`.
-                        """)
                         send_ntfy_alert(ntfy_topic, msg, f"صفقة شراء مؤكدة لـ {symbol}")
                     else:
                         msg = f"بيع (SELL) | الدخول: {current_price} | الثقة: {proba[0]*100:.1f}%"
                         st.error(f"🔴 **{msg}**")
-                        st.markdown("##### 📌 أسباب اتخاذ القرار:")
-                        st.markdown(f"""
-                        - **زخم هابط:** مؤشر الزخم (Momentum 5) بقيمة سالبة `{round(current_row['momentum_5'], 4)}`.
-                        - **ضغط البائعين:** جسم الشمعة (`Body = {round(current_row['body'], 4)}`) يدعم الدببة.
-                        - **دقة الوسيط:** الثقة بلغت `{proba[0]*100:.1f}%`.
-                        """)
                         send_ntfy_alert(ntfy_topic, msg, f"صفقة بيع مؤكدة لـ {symbol}")
 
-                    # --- أسعار السوق الدقيقة للنسخ السريع ---
                     st.markdown("##### 📋 أسعار السوق الدقيقة للنسخ السريع:")
                     c1, c2, c3 = st.columns(3)
                     with c1:
@@ -297,7 +269,6 @@ def analyze_and_execute(symbol, col, rr):
                         st.markdown("**وقف الخسارة (SL)**")
                         st.code(str(sl_price), language="text")
 
-                # --- الشارت التحليلي ---
                 st.markdown("##### 📈 الشارت التحليلي المباشر:")
                 chart_data = processed_live[['close']].tail(30)
                 st.line_chart(chart_data)
