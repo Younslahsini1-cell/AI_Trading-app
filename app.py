@@ -17,7 +17,7 @@ if 'scaler' not in st.session_state:
 if 'is_trained' not in st.session_state:
     st.session_state.is_trained = False
 
-# --- تعريف الدوال أولاً قبل استدعائها ---
+# --- تعريف الدوال ---
 def feature_engineering(df):
     df.columns = df.columns.str.lower()
     df['return'] = df['close'].pct_change()
@@ -42,20 +42,78 @@ def fetch_twelve_data(symbol, api_key, interval="15min", outputsize=500):
         df = df.iloc[::-1].reset_index(drop=True)
         return df
     else:
-        st.error(f"خطأ في API: {response.get('message', 'تأكد من الرمز ومفتاح API')}")
+        st.error(f"خطأ في جلب بيانات {symbol}: تأكد من الرمز ومفتاح API")
         return None
+
+def analyze_market(symbol, api_key, interval, col):
+    """دالة مخصصة لتحليل سوق معين وعرض نتائجه داخل عمود محدد"""
+    with col:
+        st.subheader(f"📊 تحليل سوق {symbol}")
+        
+        with st.spinner(f"جاري قراءة تحركات {symbol}..."):
+            live_df = fetch_twelve_data(symbol, api_key, interval, outputsize=50)
+            
+            if live_df is not None:
+                processed_live = feature_engineering(live_df)
+                features = ['return', 'volatility', 'body', 'momentum_5']
+                current_row = processed_live.iloc[-1]
+                
+                current_X = current_row[features].values.reshape(1, -1)
+                current_X_scaled = st.session_state.scaler.transform(current_X)
+                
+                prediction = st.session_state.model.predict(current_X_scaled)[0]
+                proba = st.session_state.model.predict_proba(current_X_scaled)[0]
+                
+                # استخراج بيانات الشمعة الحالية لحساب TP و SL
+                current_price = current_row['close']
+                vol = max(current_row['volatility'], 0.0001) # منع القسمة على صفر
+                momentum = current_row['momentum_5']
+                body = current_row['body']
+                
+                # إدارة المخاطر (نسبة العائد للمخاطرة 1:2)
+                sl_distance = vol * 1.5
+                tp_distance = vol * 3.0
+                
+                st.markdown("---")
+                if prediction == 1:
+                    st.success(f"🟢 **صفقة شراء (BUY)** | نسبة الثقة: {proba[1]*100:.1f}%")
+                    st.write(f"**سعر الدخول:** `{current_price}`")
+                    st.write(f"**🎯 الهدف (TP):** `{round(current_price + tp_distance, 4)}`")
+                    st.write(f"**🛡️ وقف الخسارة (SL):** `{round(current_price - sl_distance, 4)}`")
+                    
+                    st.markdown("**📝 أسباب الدخول:**")
+                    st.caption(f"- **الزخم (Momentum):** {'يدعم الصعود بقوة' if momentum > 0 else 'ضعيف حالياً لكن الذكاء الاصطناعي يتوقع ارتداداً صاعداً بناءً على تاريخ السعر.'}")
+                    st.caption(f"- **هيكل الشمعة:** {'شمعة شرائية (إغلاق أعلى من الفتح)' if body > 0 else 'تجميع سيولة قبل الانطلاق.'}")
+                    st.caption(f"- **التقلبات (Volatility):** السعر يتحرك في نطاق {round(vol, 4)} نقطة، مما يسمح بوضع وقف خسارة آمن.")
+                    
+                else:
+                    st.error(f"🔴 **صفقة بيع (SELL)** | نسبة الثقة: {proba[0]*100:.1f}%")
+                    st.write(f"**سعر الدخول:** `{current_price}`")
+                    st.write(f"**🎯 الهدف (TP):** `{round(current_price - tp_distance, 4)}`")
+                    st.write(f"**🛡️ وقف الخسارة (SL):** `{round(current_price + sl_distance, 4)}`")
+                    
+                    st.markdown("**📝 أسباب الدخول:**")
+                    st.caption(f"- **الزخم (Momentum):** {'يدعم الهبوط بقوة' if momentum < 0 else 'الذكاء الاصطناعي رصد تشبعاً شرائياً ويتوقع انعكاساً هابطاً.'}")
+                    st.caption(f"- **هيكل الشمعة:** {'شمعة بيعية (إغلاق أقل من الفتح)' if body < 0 else 'تصريف سيولة تمهيداً للهبوط.'}")
+                    st.caption(f"- **التقلبات (Volatility):** السعر يتحرك في نطاق {round(vol, 4)} نقطة، وتم تحديد الأهداف بناءً على ذلك.")
+
+                # التعلم المستمر
+                st.session_state.model.partial_fit(current_X_scaled, [prediction])
 
 # --- الواجهة الجانبية ---
 st.sidebar.header("⚙️ الإعدادات العامة")
 api_key = st.sidebar.text_input("Twelve Data API Key", type="password")
-symbol = st.sidebar.text_input("رمز التداول", "EUR/USD")
 interval = st.sidebar.selectbox("الإطار الزمني", ["1min", "5min", "15min", "1h", "1day"], index=2)
 
 # --- التبويبات الرئيسية ---
-tab1, tab2 = st.tabs(["📂 تدريب النموذج", "📡 التداول الحي والتوقعات"])
+tab1, tab2 = st.tabs(["📂 تدريب النموذج", "📡 التداول الحي (مراقبة سوقين)"])
 
 with tab1:
     st.header("تدريب نموذج الذكاء الاصطناعي")
+    st.info("يجب عليك تدريب النموذج هنا على بيانات أي زوج أولاً لكي يتمكن من تحليل الأسواق في التبويب الثاني.")
+    
+    # دمجنا التدريب هنا لتبسيط الواجهة وتركيزها على التدريب اليدوي/التلقائي
+    symbol_train = st.text_input("رمز التداول للتدريب (مثال: EUR/USD)", "EUR/USD")
     data_source = st.radio("اختر مصدر بيانات التدريب:", ["سحب تلقائي عبر API", "سحب يدوي (رفع ملف CSV)"], horizontal=True)
     train_df = None
     
@@ -66,14 +124,12 @@ with tab1:
                 st.error("يرجى إدخال مفتاح Twelve Data API في القائمة الجانبية أولاً.")
             else:
                 with st.spinner("جاري سحب البيانات..."):
-                    train_df = fetch_twelve_data(symbol, api_key, interval, output_size)
+                    train_df = fetch_twelve_data(symbol_train, api_key, interval, output_size)
     else:
         uploaded_file = st.file_uploader("اختر ملف CSV", type="csv")
         if uploaded_file is not None:
             train_df = pd.read_csv(uploaded_file)
             st.dataframe(train_df.head(3))
-            if st.button("بدء تدريب النموذج على الملف المرفوع"):
-                pass
 
     if train_df is not None:
         with st.spinner("جاري تدريب الخلايا العصبية..."):
@@ -86,29 +142,25 @@ with tab1:
             st.success(f"✅ تم التدريب بنجاح! دقة النموذج: {acc:.2f}%")
 
 with tab2:
-    st.header("استخراج إشارات التداول الحية")
+    st.header("شاشة المراقبة المزدوجة (Live Trading)")
+    
     if not st.session_state.is_trained:
-        st.warning("⚠️ يجب تدريب النموذج أولاً من التبويب الأول.")
+        st.warning("⚠️ لا يمكن استخراج إشارات. قم بتدريب النموذج في التبويب الأول أولاً.")
     else:
-        if st.button("تحليل السوق الآن"):
+        st.write("قم بإدخال رمزي السوقين اللذين ترغب في مراقبتهما معاً:")
+        
+        # تقسيم الشاشة لعمودين لإدخال الأسواق
+        input_col1, input_col2 = st.columns(2)
+        market1 = input_col1.text_input("السوق الأول (المعدن الأصفر)", "XAU/USD")
+        market2 = input_col2.text_input("السوق الثاني (سوق عالي الزخم)", "BTC/USD")
+        
+        if st.button("🚀 قراءة الأسواق واستخراج الصفقات الآن", use_container_width=True):
             if not api_key:
                 st.error("أدخل مفتاح API في القائمة الجانبية.")
             else:
-                with st.spinner("جاري قراءة السوق..."):
-                    live_df = fetch_twelve_data(symbol, api_key, interval, outputsize=50)
-                    if live_df is not None:
-                        processed_live = feature_engineering(live_df)
-                        features = ['return', 'volatility', 'body', 'momentum_5']
-                        current_X = processed_live[features].iloc[-1].values.reshape(1, -1)
-                        current_X_scaled = st.session_state.scaler.transform(current_X)
-                        
-                        prediction = st.session_state.model.predict(current_X_scaled)[0]
-                        proba = st.session_state.model.predict_proba(current_X_scaled)[0]
-                        
-                        st.markdown("---")
-                        if prediction == 1:
-                            st.success(f"🟢 **صفقة شراء (BUY)** | نسبة الثقة: {proba[1]*100:.1f}%")
-                        else:
-                            st.error(f"🔴 **صفقة بيع (SELL)** | نسبة الثقة: {proba[0]*100:.1f}%")
-                        
-                        st.session_state.model.partial_fit(current_X_scaled, [prediction])
+                # تقسيم الشاشة لعمودين لعرض النتائج جنباً إلى جنب
+                res_col1, res_col2 = st.columns(2)
+                
+                # تشغيل التحليل للسوقين
+                analyze_market(market1, api_key, interval, res_col1)
+                analyze_market(market2, api_key, interval, res_col2)
