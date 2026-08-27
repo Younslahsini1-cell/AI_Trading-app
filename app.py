@@ -5,9 +5,11 @@ import requests
 from sklearn.neural_network import MLPClassifier
 from sklearn.preprocessing import StandardScaler
 
+# --- إعدادات الصفحة ---
 st.set_page_config(page_title="منصة التداول الكمّي الذكية", layout="wide")
 st.title("🧠 منصة تدريب الذكاء الاصطناعي للتداول")
 
+# --- تهيئة متغيرات الجلسة ---
 if 'model' not in st.session_state:
     st.session_state.model = MLPClassifier(hidden_layer_sizes=(128, 64, 32), activation='relu', solver='adam', warm_start=True)
 if 'scaler' not in st.session_state:
@@ -15,7 +17,9 @@ if 'scaler' not in st.session_state:
 if 'is_trained' not in st.session_state:
     st.session_state.is_trained = False
 
+# --- تعريف الدوال أولاً قبل استدعائها ---
 def feature_engineering(df):
+    df.columns = df.columns.str.lower()
     df['return'] = df['close'].pct_change()
     df['volatility'] = df['high'] - df['low']
     df['body'] = df['close'] - df['open']
@@ -41,11 +45,13 @@ def fetch_twelve_data(symbol, api_key, interval="15min", outputsize=500):
         st.error(f"خطأ في API: {response.get('message', 'تأكد من الرمز ومفتاح API')}")
         return None
 
+# --- الواجهة الجانبية ---
 st.sidebar.header("⚙️ الإعدادات العامة")
 api_key = st.sidebar.text_input("Twelve Data API Key", type="password")
 symbol = st.sidebar.text_input("رمز التداول", "EUR/USD")
 interval = st.sidebar.selectbox("الإطار الزمني", ["1min", "5min", "15min", "1h", "1day"], index=2)
 
+# --- التبويبات الرئيسية ---
 tab1, tab2 = st.tabs(["📂 تدريب النموذج", "📡 التداول الحي والتوقعات"])
 
 with tab1:
@@ -66,6 +72,8 @@ with tab1:
         if uploaded_file is not None:
             train_df = pd.read_csv(uploaded_file)
             st.dataframe(train_df.head(3))
+            if st.button("بدء تدريب النموذج على الملف المرفوع"):
+                pass
 
     if train_df is not None:
         with st.spinner("جاري تدريب الخلايا العصبية..."):
@@ -80,11 +88,11 @@ with tab1:
 with tab2:
     st.header("استخراج إشارات التداول الحية")
     if not st.session_state.is_trained:
-        st.warning("⚠️ يجب تدريب النموذج أولاً.")
+        st.warning("⚠️ يجب تدريب النموذج أولاً من التبويب الأول.")
     else:
         if st.button("تحليل السوق الآن"):
             if not api_key:
-                st.error("أدخل مفتاح API.")
+                st.error("أدخل مفتاح API في القائمة الجانبية.")
             else:
                 with st.spinner("جاري قراءة السوق..."):
                     live_df = fetch_twelve_data(symbol, api_key, interval, outputsize=50)
@@ -104,11 +112,3 @@ with tab2:
                             st.error(f"🔴 **صفقة بيع (SELL)** | نسبة الثقة: {proba[0]*100:.1f}%")
                         
                         st.session_state.model.partial_fit(current_X_scaled, [prediction])
-def feature_engineering(df):
-    df.columns = df.columns.str.lower()  # أضف هذا السطر فقط
-    df['return'] = df['close'].pct_change()
-    df['volatility'] = df['high'] - df['low']
-    df['body'] = df['close'] - df['open']
-    df['momentum_5'] = df['close'] - df['close'].shift(5)
-    df.dropna(inplace=True)
-    return df
