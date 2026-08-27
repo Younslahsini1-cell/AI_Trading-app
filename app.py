@@ -88,7 +88,7 @@ def generate_mock_data(size=500):
     high = close + np.random.uniform(0.1, 0.5, size)
     low = close - np.random.uniform(0.1, 0.5, size)
     open_p = low + np.random.uniform(0.0, 0.4, size)
-    return pd.DataFrame({'open': open_p, 'high': high, 'low': low, 'close': close, 'volume': 1000})
+    return pd.DataFrame({'open': open_p, 'high': high, 'low': low, 'close': close})
 
 def fetch_twelve_data(symbol, api_key, interval, outputsize=500):
     if not api_key:
@@ -100,7 +100,13 @@ def fetch_twelve_data(symbol, api_key, interval, outputsize=500):
         response = requests.get(url).json()
         if 'values' in response:
             df = pd.DataFrame(response['values'])
-            df[['open', 'high', 'low', 'close', 'volume']] = df[['open', 'high', 'low', 'close', 'volume']].astype(float)
+            
+            # التحقق من الأعمدة الموجودة وتفادي الخطأ إذا كان "volume" غير موجود
+            cols = ['open', 'high', 'low', 'close']
+            if 'volume' in df.columns:
+                cols.append('volume')
+                
+            df[cols] = df[cols].astype(float)
             df = df.iloc[::-1].reset_index(drop=True)
             return df
         else:
