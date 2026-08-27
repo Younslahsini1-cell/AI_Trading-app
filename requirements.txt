@@ -1,7 +1,8 @@
 streamlit
+streamlit-autorefresh
 pandas
 numpy
-requests
-joblib
 scikit-learn
+joblib
+requests
 yfinance
