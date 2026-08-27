@@ -10,7 +10,7 @@ from sklearn.preprocessing import StandardScaler
 
 # --- إعدادات الصفحة ---
 st.set_page_config(page_title="منصة التداول الذكية والذكية", layout="wide", page_icon="📈")
-st.title("🧠 منصة التداول الكمّي ذاتية الإدارة (مع الرسوم البيانية ومربعات النسخ السريع)")
+st.title("🧠 منصة التداول الكمّي ذاتية الإدارة (مع نظام الانتظار الآمن والفخاخ)")
 
 # مسارات حفظ الذاكرة
 MODEL_FILE = "trained_model.pkl"
@@ -24,7 +24,7 @@ api_key_alpha = st.sidebar.text_input("مفتاح Alpha Vantage API (اختيا�
 
 st.sidebar.markdown("---")
 st.sidebar.header("🔔 إعدادات التنبيهات (Ntfy)")
-ntfy_topic = st.sidebar.text_input("اسم قناة Ntfy الخاصة بك", placeholder="مثال: my_crypto_signals_99")
+ntfy_topic = st.sidebar.text_input("اسم قناة Ntfy الخاصة بهم", placeholder="مثال: my_crypto_signals_99")
 
 st.sidebar.markdown("---")
 st.sidebar.header("⚙️ إعدادات الذكاء الاصطناعي والتحليل")
@@ -32,6 +32,9 @@ interval = st.sidebar.selectbox("الإطار الزمني", ["1min", "5min", "1
 hidden_layers = st.sidebar.text_input("هيكل الخلايا العصبية", "128, 64, 32")
 activation = st.sidebar.selectbox("دالة التنشيط", ["relu", "tanh", "logistic"])
 rr_ratio = st.sidebar.slider("نسبة العائد للمخاطرة (TP/SL)", 1.0, 5.0, 2.0, 0.5)
+
+# عتبة الثقة لتجنب الفخاخ (إذا كانت الثقة أقل من هذه النسبة، يتحول القرار إلى انتظار)
+confidence_threshold = st.sidebar.slider("حد الثقة الأدنى لدخول الصفقة (%)", 50, 90, 58, 1)
 
 if st.sidebar.button("🗑️ مسح الذاكرة الدائمة"):
     for file in [MODEL_FILE, SCALER_FILE, HISTORY_FILE]:
@@ -135,7 +138,7 @@ def send_ntfy_alert(topic, message, title):
 def analyze_and_execute(symbol, col, rr):
     with col:
         st.subheader(f"📊 {symbol}")
-        with st.spinner("جاري التحليل واستخراج الأسباب والشارت..."):
+        with st.spinner("جاري فحص السوق والبحث عن الفخاخ..."):
             live_df, source_used = fetch_smart_data(symbol, interval, outputsize=60)
             st.caption(f"🔌 مصدر البيانات: `{source_used}`")
             
@@ -150,51 +153,59 @@ def analyze_and_execute(symbol, col, rr):
                 prediction = st.session_state.model.predict(current_X_scaled)[0]
                 proba = st.session_state.model.predict_proba(current_X_scaled)[0]
                 
+                max_confidence = max(proba) * 100
                 current_price = round(current_row['close'], 4)
                 vol = max(current_row['volatility'], 0.0001)
                 
-                sl_distance = vol * 1.5
-                tp_distance = sl_distance * rr
-                
-                tp_price = round(current_price + tp_distance, 4) if prediction == 1 else round(current_price - tp_distance, 4)
-                sl_price = round(current_price - sl_distance, 4) if prediction == 1 else round(current_price + sl_distance, 4)
-
                 st.markdown("---")
                 
-                # --- عرض الإشارة والأسباب ---
-                if prediction == 1:
-                    msg = f"شراء (BUY) | الدخول: {current_price} | الثقة: {proba[1]*100:.1f}%"
-                    st.success(f"🟢 **{msg}**")
-                    st.markdown("##### 📌 أسباب اتخاذ قرار الشراء:")
+                # التحقق مما إذا كانت الثقة أقل من الحد المحدد لتجنب الفخاخ
+                if max_confidence < confidence_threshold:
+                    st.warning(f"🟡 **وضع الانتظار الحذر (WAIT / NO TRADE)** | الثقة الحالية: {max_confidence:.1f}% (أقل من الحد المطلوب {confidence_threshold}%)")
+                    st.markdown("##### 🛡️ أسباب البقاء في وضع الانتظار وتجنب الفخاخ:")
                     st.markdown(f"""
-                    - **زخم صاعد إيجابي:** مؤشر الزخم (Momentum 5) يسجل قيمة موجبة بواقع `{round(current_row['momentum_5'], 4)}`.
-                    - **هيكل الشمعة:** الجسم السعري (`Body = {round(current_row['body'], 4)}`) يدعم ضغط المشترين.
-                    - **التقلب والمدى:** نطاق الحركة (Volatility) يبلغ `{round(vol, 4)}` مما يوفر مساحة آمنة للهدف.
-                    - **ثقة الشبكة العصبية:** بلغت النسبة المحسوبة للارتفاع `{proba[1]*100:.1f}%`.
+                    - **حالة تذبذب غير واضحة:** السوق يعاني من تداخل في الشموع وضعف وضوح الاتجاه.
+                    - **نسبة ثقة منخفضة:** الثقة المحسوبة للنموذج (`{max_confidence:.1f}%`) لا توفر الحماية الكافية ضد الانقلابات السعرية المفاجئة.
+                    - **توصية النظام:** تجنب الدخول حالياً لحماية رأس المال من الفخاخ والانزلاقات السعرية.
                     """)
-                    send_ntfy_alert(ntfy_topic, msg, f"صفقة شراء لـ {symbol}")
                 else:
-                    msg = f"بيع (SELL) | الدخول: {current_price} | الثقة: {proba[0]*100:.1f}%"
-                    st.error(f"🔴 **{msg}**")
-                    st.markdown("##### 📌 أسباب اتخاذ قرار البيع:")
-                    st.markdown(f"""
-                    - **زخم هابط سلبي:** مؤشر الزخم (Momentum 5) يسجل قيمة سالبة بواقع `{round(current_row['momentum_5'], 4)}`.
-                    - **ضغط البائعين:** جسم الشمعة السلبي (`Body = {round(current_row['body'], 4)}`) يشير لهيمنة الدببة.
-                    - **نطاق التقلب:** قياس التذبذب (Volatility) مساوٍ لـ `{round(vol, 4)}`.
-                    - **ثقة الشبكة العصبية:** بلغت النسبة المحسوبة للانخفاض `{proba[0]*100:.1f}%`.
-                    """)
-                    send_ntfy_alert(ntfy_topic, msg, f"صفقة بيع لـ {symbol}")
+                    sl_distance = vol * 1.5
+                    tp_distance = sl_distance * rr
+                    
+                    tp_price = round(current_price + tp_distance, 4) if prediction == 1 else round(current_price - tp_distance, 4)
+                    sl_price = round(current_price - sl_distance, 4) if prediction == 1 else round(current_price + sl_distance, 4)
 
-                # --- مربعات النسخ السريع ---
-                st.markdown("##### 📋 قيم سريعة للنسخ إلى المنصة:")
-                c_box1, c_box2, c_box3 = st.columns(3)
-                c_box1.text_input("سعر الدخول (Entry)", value=str(current_price), key=f"ent_{symbol}_{time.time()}")
-                c_box2.text_input("الهدف (TP)", value=str(tp_price), key=f"tp_{symbol}_{time.time()}")
-                c_box3.text_input("وقف الخسارة (SL)", value=str(sl_price), key=f"sl_{symbol}_{time.time()}")
+                    if prediction == 1:
+                        msg = f"شراء (BUY) | الدخول: {current_price} | الثقة: {proba[1]*100:.1f}%"
+                        st.success(f"🟢 **{msg}**")
+                        st.markdown("##### 📌 أسباب اتخاذ قرار الشراء:")
+                        st.markdown(f"""
+                        - **زخم صاعد قوي:** مؤشر الزخم (Momentum 5) يسجل قيمة موجبة بواقع `{round(current_row['momentum_5'], 4)}`.
+                        - **هيكل الشمعة:** الجسم السعري (`Body = {round(current_row['body'], 4)}`) يدعم سيطرة المشترين.
+                        - **ثقة الشبكة العصبية:** تجاوزت الحد الأدنى وبلغت `{proba[1]*100:.1f}%`.
+                        """)
+                        send_ntfy_alert(ntfy_topic, msg, f"صفقة شراء مؤكدة لـ {symbol}")
+                    else:
+                        msg = f"بيع (SELL) | الدخول: {current_price} | الثقة: {proba[0]*100:.1f}%"
+                        st.error(f"🔴 **{msg}**")
+                        st.markdown("##### 📌 أسباب اتخاذ قرار البيع:")
+                        st.markdown(f"""
+                        - **زخم هابط قوي:** مؤشر الزخم (Momentum 5) يسجل قيمة سالبة بواقع `{round(current_row['momentum_5'], 4)}`.
+                        - **ضغط البائعين:** جسم الشمعة السلبي (`Body = {round(current_row['body'], 4)}`) يشير لهيمنة الدببة.
+                        - **ثقة الشبكة العصبية:** تجاوزت الحد الأدنى وبلغت `{proba[0]*100:.1f}%`.
+                        """)
+                        send_ntfy_alert(ntfy_topic, msg, f"صفقة بيع مؤكدة لـ {symbol}")
+
+                    # مربعات النسخ السريع تظهر فقط في حال وجود صفقة حقيقية ومؤكدة
+                    st.markdown("##### 📋 قيم سريعة للنسخ إلى المنصة:")
+                    c_box1, c_box2, c_box3 = st.columns(3)
+                    c_box1.text_input("سعر الدخول (Entry)", value=str(current_price), key=f"ent_{symbol}_{time.time()}")
+                    c_box2.text_input("الهدف (TP)", value=str(tp_price), key=f"tp_{symbol}_{time.time()}")
+                    c_box3.text_input("وقف الخسارة (SL)", value=str(sl_price), key=f"sl_{symbol}_{time.time()}")
 
                 # --- الشارت التفاعلي للمنطقة ---
                 st.markdown("##### 📈 الشارت التحليلي للمنطقة:")
-                chart_data = processed_live[['close']].tail(30) # آخر 30 شمعة
+                chart_data = processed_live[['close']].tail(30)
                 st.line_chart(chart_data)
 
 # --- التبويبات الرئيسية ---
@@ -239,24 +250,24 @@ with tab2:
         s1 = m1.text_input("السوق الأول", "XAU/USD")
         s2 = m2.text_input("السوق الثاني", "BTC/USD")
         
-        if st.button("🚀 تحليل الأسواق واستخراج الشارت والتنبيهات", use_container_width=True):
+        if st.button("🚀 تحليل الأسواق وفحص الفخاخ", use_container_width=True):
             r1, r2 = st.columns(2)
             analyze_and_execute(s1, r1, rr_ratio)
             analyze_and_execute(s2, r2, rr_ratio)
 
 with tab3:
     st.header("🔄 رصد الأسواق في الخلفية (Continuous Scanner)")
-    st.write("يفحص هذا النظام السوق بشكل دوري ويسجل التنبيهات مع إرسالها لهاتفك عبر Ntfy.")
+    st.write("يفحص هذا النظام السوق دورياً وينبهك فقط عند وجود صفقات مؤكدة تتجاوز حد الثقة الآمن.")
     
     scan_symbol = st.text_input("رمز السوق للمراقبة المستمرة", "EUR/USD")
     auto_run = st.checkbox("تفعيل الفحص والتتبع التلقائي")
     
     if auto_run:
-        st.info("🟢 النظام يعمل الآن في وضع الفحص النشط... (اترك هذه الصفحة مفتوحة لضمان الاستمرارية).")
+        st.info("🟢 النظام يعمل الآن في وضع الفحص الآمن ضد الفخاخ...")
         placeholder = st.empty()
         while auto_run:
             with placeholder.container():
-                st.write(f"⏱️ آخر عملية فحص تمت في: {pd.Timestamp.now()}")
+                st.write(f"⏱️ آخر فحص تم في: {pd.Timestamp.now()}")
                 df_scan, src_s = fetch_smart_data(scan_symbol, interval, 50)
                 if df_scan is not None:
                     p_live = feature_engineering(df_scan)
@@ -265,11 +276,15 @@ with tab3:
                     X_sc = st.session_state.scaler.transform(row[feat].values.reshape(1, -1))
                     pred = st.session_state.model.predict(X_sc)[0]
                     pr = st.session_state.model.predict_proba(X_sc)[0]
+                    mx_conf = max(pr) * 100
                     
-                    if pred == 1:
-                        st.success(f"📈 رصد إشارة شراء تلقائية لـ {scan_symbol} بنسبة ثقة {pr[1]*100:.1f}%")
-                        send_ntfy_alert(ntfy_topic, f"تلقائي: شراء {scan_symbol} الثقة {pr[1]*100:.1f}%", "فرصة تداول تلقائية")
+                    if mx_conf < confidence_threshold:
+                        st.info(f"⏳ حالة السوق لـ {scan_symbol}: **انتظار (WAIT)** | الثقة الحالية ({mx_conf:.1f}%) أقل من الحد الآمن.")
                     else:
-                        st.error(f"📉 رصد إشارة بيع تلقائية لـ {scan_symbol} بنسبة ثقة {pr[0]*100:.1f}%")
-                        send_ntfy_alert(ntfy_topic, f"تلقائي: بيع {scan_symbol} الثقة {pr[0]*100:.1f}%", "فرصة تداول تلقائية")
+                        if pred == 1:
+                            st.success(f"📈 فرصة شراء مؤكدة لـ {scan_symbol} بثقة {pr[1]*100:.1f}%")
+                            send_ntfy_alert(ntfy_topic, f"تلقائي مؤكد: شراء {scan_symbol} الثقة {pr[1]*100:.1f}%", "فرصة تداول مضمونة")
+                        else:
+                            st.error(f"📉 فرصة بيع مؤكدة لـ {scan_symbol} بثقة {pr[0]*100:.1f}%")
+                            send_ntfy_alert(ntfy_topic, f"تلقائي مؤكد: بيع {scan_symbol} الثقة {pr[0]*100:.1f}%", "فرصة تداول مضمونة")
             time.sleep(60)
