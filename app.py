@@ -1,14 +1,14 @@
-import streamlit as st
 from datetime import date, datetime
 import json
 import os
-import time
 import joblib
 import numpy as np
 import pandas as pd
 import requests
 from sklearn.neural_network import MLPClassifier
 from sklearn.preprocessing import StandardScaler
+import streamlit as st
+from streamlit_autorefresh import st_autorefresh
 
 # محاولة استيراد yfinance بأمان
 try:
@@ -28,70 +28,17 @@ st.set_page_config(
 st.markdown(
     """
 <style>
-    @import url('[https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;600;700;900&display=swap](https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;600;700;900&display=swap)');
-
-    html, body, [class*="css"] {
-        font-family: 'Cairo', sans-serif !important;
-    }
-
-    .stApp {
-        background-color: #0b0f19;
-        color: #f3f4f6;
-    }
-
-    section[data-testid="stSidebar"] {
-        background-color: #111827;
-        border-right: 1px solid #1f2937;
-    }
-
-    div.stMarkdown {
-        color: #e5e7eb;
-    }
-
-    pre {
-        background: #1f2937 !important;
-        border: 1px solid #374151 !important;
-        border-radius: 10px !important;
-        color: #38bdf8 !important;
-        font-weight: 700 !important;
-        text-align: center;
-        font-size: 1.15rem !important;
-        padding: 10px !important;
-    }
-
-    .stButton > button {
-        background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
-        color: white;
-        border-radius: 10px;
-        font-weight: 700;
-        border: none;
-        padding: 0.6rem 1.2rem;
-        transition: all 0.3s ease;
-        box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
-    }
-    .stButton > button:hover {
-        background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%);
-        box-shadow: 0 6px 16px rgba(59, 130, 246, 0.5);
-        transform: translateY(-1px);
-    }
-
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 10px;
-        background-color: #111827;
-        padding: 8px;
-        border-radius: 12px;
-        border: 1px solid #1f2937;
-    }
-    .stTabs [data-baseweb="tab"] {
-        border-radius: 8px;
-        color: #9ca3af;
-        font-weight: 600;
-        padding: 8px 16px;
-    }
-    .stTabs [aria-selected="true"] {
-        background-color: #3b82f6 !important;
-        color: white !important;
-    }
+    @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;600;700;900&display=swap');
+    html, body, [class*="css"] { font-family: 'Cairo', sans-serif !important; }
+    .stApp { background-color: #0b0f19; color: #f3f4f6; }
+    section[data-testid="stSidebar"] { background-color: #111827; border-right: 1px solid #1f2937; }
+    div.stMarkdown { color: #e5e7eb; }
+    pre { background: #1f2937 !important; border: 1px solid #374151 !important; border-radius: 10px !important; color: #38bdf8 !important; font-weight: 700 !important; text-align: center; font-size: 1.15rem !important; padding: 10px !important; }
+    .stButton > button { background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%); color: white; border-radius: 10px; font-weight: 700; border: none; padding: 0.6rem 1.2rem; transition: all 0.3s ease; box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3); }
+    .stButton > button:hover { background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%); box-shadow: 0 6px 16px rgba(59, 130, 246, 0.5); transform: translateY(-1px); }
+    .stTabs [data-baseweb="tab-list"] { gap: 10px; background-color: #111827; padding: 8px; border-radius: 12px; border: 1px solid #1f2937; }
+    .stTabs [data-baseweb="tab"] { border-radius: 8px; color: #9ca3af; font-weight: 600; padding: 8px 16px; }
+    .stTabs [aria-selected="true"] { background-color: #3b82f6 !important; color: white !important; }
 </style>
 """,
     unsafe_allow_html=True,
@@ -99,7 +46,7 @@ st.markdown(
 
 st.title("🧠 منصة التداول التطوري الذاتي (Autonomous Evolutionary Agent)")
 
-# مسارات الذاكرة والتقارير (ذاكرة غير محدودة ومحفوظة دائماً)
+# مسارات الذاكرة والتقارير
 MODEL_FILE = 'evo_model_v2.pkl'
 SCALER_FILE = 'evo_scaler_v2.pkl'
 HISTORY_FILE = 'evo_history_v2.csv'
@@ -107,7 +54,6 @@ SETTINGS_FILE = 'evo_settings_v2.json'
 TRADES_LOG_FILE = 'evo_trades_log_v2.csv'
 
 
-# --- إدارة الإعدادات والذاكرة الدائمة ---
 def load_settings():
   if os.path.exists(SETTINGS_FILE):
     try:
@@ -127,14 +73,12 @@ if 'settings' not in st.session_state:
   st.session_state.settings = load_settings()
 
 
-# --- دالة إرسال التنبيهات مع تفاصيل TP و SL الكاملة ---
 def send_ntfy_alert(topic, message, title='Smart Trading Signal'):
   if topic:
     clean_topic = topic.strip()
     if 'ntfy.sh/' in clean_topic:
       clean_topic = clean_topic.split('ntfy.sh/')[-1].strip('/')
-
-    url = f'[https://ntfy.sh/](https://ntfy.sh/){clean_topic}'
+    url = f'https://ntfy.sh/{clean_topic}'
     try:
       headers = {'Title': title, 'Priority': 'urgent'}
       response = requests.post(
@@ -179,7 +123,7 @@ if st.sidebar.button('🧪 اختبار إرسال تنبيه Ntfy الآن'):
   if success:
     st.sidebar.success('✅ تم إرسال التنبيه بنجاح لقناتك!')
   else:
-    st.sidebar.error('❌ فشل الإرسال، تحقق من اسم القناة.')
+    st.sidebar.error('❌ فشل الإرسال، تحقق من اسم القناة وتأكد من كتابتها بشكل صحيح.')
 
 st.sidebar.markdown('---')
 st.sidebar.header('⚙️ معايير الذكاء الاصطناعي والتطور')
@@ -193,22 +137,7 @@ confidence_threshold = st.sidebar.slider(
     'حد الثقة الأدنى للتنفيذ (%) - للتصفيات', 50, 95, 62, 1
 )
 
-if st.sidebar.button('🗑️ إعادة تهيئة ذاكرة التطور الكاملة'):
-  for file in [
-      MODEL_FILE,
-      SCALER_FILE,
-      HISTORY_FILE,
-      SETTINGS_FILE,
-      TRADES_LOG_FILE,
-  ]:
-    if os.path.exists(file):
-      os.remove(file)
-  st.session_state.clear()
-  st.success('تم إعادة ضبط ذاكرة التطور بالكامل وبدء ذاكرة لا نهائية جديدة!')
-  st.rerun()
 
-
-# --- إدارة الذاكرة الدائمة للنموذج العضوي المتعدد ---
 def load_permanent_memory():
   if os.path.exists(MODEL_FILE) and os.path.exists(SCALER_FILE):
     model = joblib.load(MODEL_FILE)
@@ -224,7 +153,6 @@ def load_permanent_memory():
     )
     scaler = StandardScaler()
     is_trained = False
-
   history = (
       pd.read_csv(HISTORY_FILE)
       if os.path.exists(HISTORY_FILE)
@@ -247,7 +175,6 @@ def save_permanent_memory():
   st.session_state.training_history.to_csv(HISTORY_FILE, index=False)
 
 
-# --- هندسة الميزات المتقدمة والعميقة ---
 def evolutionary_feature_engineering(df):
   df.columns = df.columns.str.lower()
   df['return'] = df['close'].pct_change()
@@ -289,20 +216,17 @@ def prepare_data(df):
   return X[:-1], Y[:-1], features
 
 
-# --- الوسيط الذكي لجلب البيانات الحقيقية للأسواق ---
 def autonomous_data_broker_agent(symbol, interval, outputsize=600):
   clean_symbol = symbol.upper().strip()
-
   if any(
       crypto in clean_symbol for crypto in ['BTC', 'ETH', 'SOL', 'BNB', 'XAU']
   ):
     try:
       binance_sym = clean_symbol.replace('/', '').replace('-', '')
       if 'XAU' in binance_sym or 'GOLD' in binance_sym:
-        binance_sym = 'PAXGUSDT'  # استخدام بديل حقيقي للذهب في بينانس لتفادي الأخطاء
+        binance_sym = 'PAXGUSDT'
       elif 'USDT' not in binance_sym:
         binance_sym += 'USDT'
-
       interval_map = {
           '1min': '1m',
           '5min': '5m',
@@ -311,7 +235,7 @@ def autonomous_data_broker_agent(symbol, interval, outputsize=600):
           '1day': '1d',
       }
       b_interval = interval_map.get(interval, '5m')
-      url = f'[https://api.binance.com/api/v3/klines?symbol=](https://api.binance.com/api/v3/klines?symbol=){binance_sym}&interval={b_interval}&limit={min(outputsize, 1000)}'
+      url = f'https://api.binance.com/api/v3/klines?symbol={binance_sym}&interval={b_interval}&limit={min(outputsize, 1000)}'
       res = requests.get(url, timeout=5).json()
       if isinstance(res, list) and len(res) > 0:
         df = pd.DataFrame(
@@ -346,7 +270,6 @@ def autonomous_data_broker_agent(symbol, interval, outputsize=600):
         yf_symbol = 'BTC-USD'
       elif '/' in yf_symbol:
         yf_symbol = yf_symbol.replace('/', '') + '=X'
-
       interval_map = {
           '1min': '1m',
           '5min': '5m',
@@ -373,20 +296,6 @@ def autonomous_data_broker_agent(symbol, interval, outputsize=600):
     except:
       pass
 
-  if api_key_twelve:
-    try:
-      url = f'[https://api.twelvedata.com/time_series?symbol=](https://api.twelvedata.com/time_series?symbol=){symbol}&interval={interval}&apikey={api_key_twelve}&outputsize={outputsize}'
-      res = requests.get(url, timeout=5).json()
-      if 'values' in res:
-        df = pd.DataFrame(res['values'])
-        cols = ['open', 'high', 'low', 'close']
-        if 'volume' in df.columns:
-          cols.append('volume')
-        df[cols] = df[cols].astype(float)
-        return df.iloc[::-1].reset_index(drop=True), 'Twelve Data API'
-    except:
-      pass
-
   base_p = 2650.0 if 'XAU' in symbol.upper() else 4600.0
   close = np.cumsum(np.random.randn(outputsize) * 0.8) + base_p
   high = close + np.random.uniform(0.2, 0.8, outputsize)
@@ -400,7 +309,6 @@ def autonomous_data_broker_agent(symbol, interval, outputsize=600):
   )
 
 
-# --- تقييم نتيجة الصفقة وتصحيح الأخطاء تلقائياً ---
 def evaluate_real_trade_outcome(df, entry_idx, prediction, tp_dist, sl_dist):
   entry_price = df.iloc[entry_idx]['close']
   tp_price = (
@@ -409,22 +317,19 @@ def evaluate_real_trade_outcome(df, entry_idx, prediction, tp_dist, sl_dist):
   sl_price = (
       entry_price - sl_dist if prediction == 1 else entry_price + sl_dist
   )
-
   for i in range(entry_idx + 1, len(df)):
     high_price = df.iloc[i]['high']
     low_price = df.iloc[i]['low']
-
     if prediction == 1:
       if low_price <= sl_price:
-        return 0, 'Hit SL (وقف خسارة - تم تسجيل الخطأ للتعلم)'
+        return 0, 'Hit SL (وقف خسارة)'
       if high_price >= tp_price:
-        return 1, 'Hit TP (تحقيق الهدف بنجاح)'
+        return 1, 'Hit TP (تحقيق الهدف)'
     else:
       if high_price >= sl_price:
-        return 0, 'Hit SL (وقف خسارة - تم تسجيل الخطأ للتعلم)'
+        return 0, 'Hit SL (وقف خسارة)'
       if low_price <= tp_price:
-        return 1, 'Hit TP (تحقيق الهدف بنجاح)'
-
+        return 1, 'Hit TP (تحقيق الهدف)'
   return 1, 'Active / In Progress'
 
 
@@ -435,7 +340,6 @@ def log_trade_and_check_mistakes(
   win_status, note = evaluate_real_trade_outcome(
       df_processed, current_idx, prediction, tp_dist, sl_dist
   )
-
   new_log = pd.DataFrame([{
       'Date': today_str,
       'Symbol': symbol,
@@ -444,7 +348,6 @@ def log_trade_and_check_mistakes(
       'Confidence': round(confidence, 2),
       'ErrorNote': note,
   }])
-
   if os.path.exists(TRADES_LOG_FILE):
     df_log = pd.read_csv(TRADES_LOG_FILE)
     df_log = pd.concat([df_log, new_log], ignore_index=True)
@@ -474,7 +377,6 @@ def log_trade_and_check_mistakes(
 def run_evolutionary_training():
   train_symbols = ['XAU/USD', 'BTC/USD', 'EUR/USD', 'GBP/USD']
   combined_X, combined_Y = [], []
-
   for sym in train_symbols:
     df_t, _ = autonomous_data_broker_agent(sym, interval, 800)
     proc = evolutionary_feature_engineering(df_t)
@@ -482,16 +384,13 @@ def run_evolutionary_training():
     if len(X) > 0:
       combined_X.append(X)
       combined_Y.append(Y)
-
   if combined_X:
     X_all = np.vstack(combined_X)
     Y_all = np.concatenate(combined_Y)
     X_scaled = st.session_state.scaler.fit_transform(X_all)
-
     st.session_state.model.fit(X_scaled, Y_all)
     st.session_state.is_trained = True
     acc = st.session_state.model.score(X_scaled, Y_all) * 100
-
     new_rec = pd.DataFrame({'Accuracy': [acc]})
     st.session_state.training_history = pd.concat(
         [st.session_state.training_history, new_rec], ignore_index=True
@@ -521,7 +420,7 @@ with tab1:
   )
   col1.metric(
       'حالة الذاكرة العصبية',
-      'تعلم مستمر 24/7 🟢'
+      'تعلم مستمر 🟢'
       if st.session_state.is_trained
       else 'قيد التهيئة الأولي ⚪',
   )
@@ -535,13 +434,13 @@ with tab1:
   col3.metric('نسبة نجاح الصفقات', f'{win_rate_display:.1f}%')
 
   st.markdown('---')
-  st.subheader('تحليل السوق الفعلي (مع إمكانية إعطاء إشارات انتظار WAIT)')
+  st.subheader('تحليل السوق الفعلي')
   market_input = st.text_input(
       'أدخل رمز السوق (مثال: XAU/USD أو BTC/USD)', 'XAU/USD'
   )
 
   if st.button('فحص السوق وإعطاء القرار (شراء / بيع / انتظار)', use_container_width=True):
-    with st.spinner('الشبكات العصبية المتعددة تفحص السوق...'):
+    with st.spinner('الشبكات العصبية تفحص السوق...'):
       live_df, src = autonomous_data_broker_agent(market_input, interval, 100)
       processed = evolutionary_feature_engineering(live_df)
       features = [
@@ -555,10 +454,8 @@ with tab1:
           'price_position',
           'rsi_proxy',
       ]
-
       current_idx = len(processed) - 1
       current_row = processed.iloc[current_idx]
-
       X_input = current_row[features].values.reshape(1, -1)
       X_scaled = st.session_state.scaler.transform(X_input)
 
@@ -576,14 +473,13 @@ with tab1:
           or abs(proba[1] - proba[0]) < 0.12
       ):
         st.warning(
-            f'⏳ **حالة انتظار حذر (WAIT / NO TRADE)** | الثقة الحالية:'
-            f' {max_conf:.1f}% (أقل من الحد الآمن لتجنب الصفقات العشوائية).'
+            f'⏳ **حالة انتظار حذر (WAIT)** | الثقة الحالية: {max_conf:.1f}%'
         )
-        msg_wait = (
-            f'WAIT Signal | Symbol: {market_input} | Price: {current_price} |'
-            f' Market is consolidating (Conf: {max_conf:.1f}%)'
+        send_ntfy_alert(
+            ntfy_topic,
+            f'WAIT Signal | Symbol: {market_input} | Price: {current_price}',
+            'Market WAIT Alert',
         )
-        send_ntfy_alert(ntfy_topic, msg_wait, 'Market WAIT Alert')
       else:
         tp_price = (
             round(current_price + tp_dist, 4)
@@ -608,8 +504,8 @@ with tab1:
 
         if prediction == 1:
           msg = (
-              f'BUY Signal | Symbol: {market_input} | Entry: {current_price} |'
-              f' TP: {tp_price} | SL: {sl_price} | Conf: {proba[1]*100:.1f}%'
+              f'BUY | Symbol: {market_input} | Entry: {current_price} | TP:'
+              f' {tp_price} | SL: {sl_price} | Conf: {proba[1]*100:.1f}%'
           )
           st.success(
               f'🟢 **شراء مؤكد (BUY)** | السعر الحالي: {current_price}'
@@ -617,13 +513,12 @@ with tab1:
           send_ntfy_alert(ntfy_topic, msg, '🚀 Smart BUY Signal with TP/SL')
         else:
           msg = (
-              f'SELL Signal | Symbol: {market_input} | Entry: {current_price} |'
-              f' TP: {tp_price} | SL: {sl_price} | Conf: {proba[0]*100:.1f}%'
+              f'SELL | Symbol: {market_input} | Entry: {current_price} | TP:'
+              f' {tp_price} | SL: {sl_price} | Conf: {proba[0]*100:.1f}%'
           )
           st.error(f'🔴 **بيع مؤكد (SELL)** | السعر الحالي: {current_price}')
           send_ntfy_alert(ntfy_topic, msg, '🚀 Smart SELL Signal with TP/SL')
 
-        st.markdown('##### 📋 مستويات التنفيذ الدقيقة:')
         c1, c2, c3 = st.columns(3)
         c1.markdown('**سعر الدخول (Entry)**')
         c1.code(str(current_price))
@@ -635,124 +530,97 @@ with tab1:
       st.line_chart(processed[['close']].tail(40))
 
 with tab2:
-  st.header('📊 سجل الأخطاء والتعلم الذاتي (الذاكرة اللا نهائية)')
-  st.write(
-      'كل خطأ يرتكبه النموذج يتم تحليله فوراً وتعديل الأوزان العصبية لضمان عدم'
-      ' تكراره مستقبلاً.'
-  )
-
+  st.header('📊 سجل الصفقات والأخطاء والتعلم الذاتي')
   if os.path.exists(TRADES_LOG_FILE):
     df_report = pd.read_csv(TRADES_LOG_FILE)
     if not df_report.empty:
       total_t = len(df_report)
       wins_t = df_report['Win'].sum()
       win_pct = (wins_t / total_t) * 100 if total_t > 0 else 0
-
       rc1, rc2, rc3 = st.columns(3)
-      rc1.metric('إجمالي الصفقات المعالجة', total_t)
-      rc2.metric('الناجحة المحققة للهدف', wins_t)
-      rc3.metric('معدل النجاح الكلي', f'{win_pct:.1f}%')
-
-      st.markdown('---')
-      st.subheader('⚠️ سجل الأخطاء المصححة (دروس مستفادة للشبكات العصبية):')
-      err_df = df_report[df_report['Win'] == 0]
-      if not err_df.empty:
-        st.dataframe(
-            err_df[['Date', 'Symbol', 'Prediction', 'ErrorNote', 'Confidence']],
-            use_container_width=True,
-        )
-      else:
-        st.success('🌟 ممتاز! الأداء ممتاز ولم يتم تسجيل أخطاء حديثة.')
-
+      rc1.metric('إجمالي الصفقات', total_t)
+      rc2.metric('الصفقات الناجحة', wins_t)
+      rc3.metric('نسبة النجاح', f'{win_pct:.1f}%')
       st.markdown('---')
       st.subheader('سجل الصفقات التفصيلي الكامل:')
       st.dataframe(df_report, use_container_width=True)
     else:
-      st.info('لا توجد سجلات صفقات سابقة.')
+      st.info('لا توجد سجلات صفقات سابقة حتى الآن.')
   else:
-    st.info('يبدأ السجل بالتعبئة تلقائياً عند أول عملية فحص.')
+    st.info('سيظهر سجل الصفقات تلقائياً عند إجراء أول عملية فحص.')
 
 with tab3:
-  st.header('🔄 الرصد الخلفي المستمر والإنذارات التلقائية (24/7)')
+  st.header('🔄 الرصد الخلفي الآمن والإنذارات (24/7)')
   st.write(
-      'يعمل هذا الوسيط في الخلفية لمراقبة الأسواق بشكل دوري وإرسال اشارات'
-      ' متكاملة تتضمن (Entry, TP, SL) حتى في أوقات الانشغال أو إغلاق الموقع.'
+      'تستخدم هذه الميزة نظام تحديث تلقائي آمن للواجهة بدون تجميد، لتتمكن من'
+      ' مراقبة الأسواق وإرسال التنبيهات بانتظام.'
   )
 
-  monitor_symbol = st.text_input('رمز السوق للمراقبة المستمرة 24/7', 'XAU/USD')
-  continuous_run = st.checkbox('تفعيل المراقبة والتحليل التلقائي المستمر')
+  monitor_symbol = st.text_input('رمز السوق للمراقبة المستمرة', 'XAU/USD')
+  continuous_run = st.checkbox('تفعيل التحديث والمراقبة التلقائية')
 
   if continuous_run:
+    # تحديث تلقائي آمن كل 60 ثانية بدون تجميد الخيط الرئيسي
+    st_autorefresh(interval=60000, key='auto_monitor')
     st.info(
-        '🟢 نظام المراقبة الخلفية يعمل الآن ويرسل التنبيهات مع مستويات TP و SL'
-        ' عبر Ntfy بشكل منتظم...'
+        f'🟢 المراقبة التلقائية نشطة لـ {monitor_symbol} (آخر فحص:'
+        f" {datetime.now().strftime('%H:%M:%S')})..."
     )
-    live_placeholder = st.empty()
-    while continuous_run:
-      with live_placeholder.container():
-        st.write(
-            '⏱️ آخر تحديث خلفي للرصد:'
-            f" {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+
+    df_bg, _ = autonomous_data_broker_agent(monitor_symbol, interval, 80)
+    if df_bg is not None:
+      p_bg = evolutionary_feature_engineering(df_bg)
+      features = [
+          'return',
+          'volatility',
+          'body',
+          'momentum_5',
+          'momentum_10',
+          'ma_ratio',
+          'ema_ratio',
+          'price_position',
+          'rsi_proxy',
+      ]
+      row_bg = p_bg.iloc[-1]
+      X_bg = st.session_state.scaler.transform(
+          row_bg[features].values.reshape(1, -1)
+      )
+      pred_bg = st.session_state.model.predict(X_bg)[0]
+      prob_bg = st.session_state.model.predict_proba(X_bg)[0]
+      conf_bg = max(prob_bg) * 100
+      price_bg = round(row_bg['close'], 4)
+      vol_bg = max(row_bg['volatility'], 0.1)
+
+      sl_bg = vol_bg * 1.2
+      tp_bg = sl_bg * rr_ratio
+
+      if conf_bg >= confidence_threshold and abs(prob_bg[1] - prob_bg[0]) >= 0.12:
+        tp_p = (
+            round(price_bg + tp_bg, 4)
+            if pred_bg == 1
+            else round(price_bg - tp_bg, 4)
         )
-        df_bg, _ = autonomous_data_broker_agent(monitor_symbol, interval, 80)
-        if df_bg is not None:
-          p_bg = evolutionary_feature_engineering(df_bg)
-          features = [
-              'return',
-              'volatility',
-              'body',
-              'momentum_5',
-              'momentum_10',
-              'ma_ratio',
-              'ema_ratio',
-              'price_position',
-              'rsi_proxy',
-          ]
-          row_bg = p_bg.iloc[-1]
-          X_bg = st.session_state.scaler.transform(
-              row_bg[features].values.reshape(1, -1)
+        sl_p = (
+            round(price_bg - sl_bg, 4)
+            if pred_bg == 1
+            else round(price_bg + sl_bg, 4)
+        )
+        if pred_bg == 1:
+          msg_bg = (
+              f'AUTO BUY | {monitor_symbol} | Entry: {price_bg} | TP: {tp_p} |'
+              f' SL: {sl_p}'
           )
-          pred_bg = st.session_state.model.predict(X_bg)[0]
-          prob_bg = st.session_state.model.predict_proba(X_bg)[0]
-          conf_bg = max(prob_bg) * 100
-          price_bg = round(row_bg['close'], 4)
-          vol_bg = max(row_bg['volatility'], 0.1)
-
-          sl_bg = vol_bg * 1.2
-          tp_bg = sl_bg * rr_ratio
-
-          if (
-              conf_bg < confidence_threshold
-              or abs(prob_bg[1] - prob_bg[0]) < 0.12
-          ):
-            st.info(
-                f'⏳ حالة الانتظار (WAIT) لـ {monitor_symbol} | الثقة:'
-                f' {conf_bg:.1f}%'
-            )
-          else:
-            tp_p = (
-                round(price_bg + tp_bg, 4)
-                if pred_bg == 1
-                else round(price_bg - tp_bg, 4)
-            )
-            sl_p = (
-                round(price_bg - sl_bg, 4)
-                if pred_bg == 1
-                else round(price_bg + sl_bg, 4)
-            )
-
-            if pred_bg == 1:
-              msg_bg = (
-                  f'AUTOMATED BUY | {monitor_symbol} | Entry: {price_bg} | TP:'
-                  f' {tp_p} | SL: {sl_p} | Conf: {prob_bg[1]*100:.1f}%'
-              )
-              st.success(f'📈 تنبيه شراء تلقائي لـ {monitor_symbol} عند {price_bg}')
-              send_ntfy_alert(ntfy_topic, msg_bg, 'Autonomous BUY Alert')
-            else:
-              msg_bg = (
-                  f'AUTOMATED SELL | {monitor_symbol} | Entry: {price_bg} | TP:'
-                  f' {tp_p} | SL: {sl_p} | Conf: {prob_bg[0]*100:.1f}%'
-              )
-              st.error(f'📉 تنبيه بيع تلقائي لـ {monitor_symbol} عند {price_bg}')
-              send_ntfy_alert(ntfy_topic, msg_bg, 'Autonomous SELL Alert')
-      time.sleep(60)
+          st.success(f'📈 تنبيه شراء تلقائي مرسل لـ {monitor_symbol}')
+          send_ntfy_alert(ntfy_topic, msg_bg, 'Autonomous BUY Alert')
+        else:
+          msg_bg = (
+              f'AUTO SELL | {monitor_symbol} | Entry: {price_bg} | TP: {tp_p} |'
+              f' SL: {sl_p}'
+          )
+          st.error(f'📉 تنبيه بيع تلقائي مرسل لـ {monitor_symbol}')
+          send_ntfy_alert(ntfy_topic, msg_bg, 'Autonomous SELL Alert')
+      else:
+        st.write(
+            f'⏳ السوق في حالة استقرار (الثقة: {conf_bg:.1f}%) - لا توجد صفقة'
+            ' جديدة مرسلة.'
+        )
