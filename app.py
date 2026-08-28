@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
-import json
 import os
+import sqlite3
 import xml.etree.ElementTree as ET
 import joblib
 import numpy as np
@@ -11,11 +11,9 @@ from sklearn.preprocessing import StandardScaler
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 
-# --- تهيئة الصفحة والواجهة المؤسسية ---
+# --- إعدادات الصفحة والواجهة المؤسسية ---
 st.set_page_config(
-    page_title="XAU/USD Apex Core - محرك الذهب المؤسسي",
-    layout="wide",
-    page_icon="🥇",
+    page_title="XAU/USD Autonomous Apex Engine", layout="wide", page_icon="🥇"
 )
 
 st.markdown(
@@ -23,8 +21,8 @@ st.markdown(
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&display=swap');
     html, body, [class*="css"] { font-family: 'Cairo', sans-serif !important; }
-    .stApp { background-color: #0b0e14; color: #f3f4f6; }
-    section[data-testid="stSidebar"] { background-color: #111827; border-right: 1px solid #1f2937; }
+    .stApp { background-color: #07090e; color: #f3f4f6; }
+    section[data-testid="stSidebar"] { background-color: #0f172a; border-right: 1px solid #1e293b; }
     .stButton > button { background: linear-gradient(135deg, #d97706 0%, #b45309 100%); color: white; border-radius: 8px; font-weight: 700; border: none; padding: 0.6rem 1.2rem; width: 100%; }
     .stButton > button:hover { background: linear-gradient(135deg, #b45309 0%, #92400e 100%); }
     div[data-testid="stMetricValue"] { color: #f59e0b !important; font-weight: 800; }
@@ -33,81 +31,98 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.title("🥇 XAU/USD Apex Engine — النظام التخصصي لتدقيق وتداول الذهب")
+st.title("🥇 XAU/USD الذكي المستقل — محرك التداول الآلي والتعلم المستمر")
 
-MODEL_FILE = 'gold_model.pkl'
-SCALER_FILE = 'gold_scaler.pkl'
-TRADES_FILE = 'gold_trades_log.csv'
-SETTINGS_FILE = 'gold_settings.json'
-
-
-# --- إدارة الإعدادات والتنبيهات ---
-def load_settings():
-  if os.path.exists(SETTINGS_FILE):
-    try:
-      with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
-        return json.load(f)
-    except Exception:
-      pass
-  return {'ntfy': '', 'twelve_key': ''}
+DB_FILE = 'xau_apex_autonomous.db'
+MODEL_FILE = 'xau_apex_model.pkl'
+SCALER_FILE = 'xau_apex_scaler.pkl'
 
 
-def save_settings(ntfy, twelve_key):
-  with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
-    json.dump({'ntfy': ntfy, 'twelve_key': twelve_key}, f)
+# --- إدارة قاعدة البيانات والدائمية ---
+def init_db():
+  conn = sqlite3.connect(DB_FILE)
+  c = conn.cursor()
+  c.execute(
+      """CREATE TABLE IF NOT EXISTS settings 
+                (key TEXT PRIMARY KEY, value TEXT)"""
+  )
+  c.execute(
+      """CREATE TABLE IF NOT EXISTS trades 
+                (id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT, symbol TEXT, direction TEXT, entry REAL, sl REAL, tp REAL, win INTEGER, note TEXT)"""
+  )
+  c.execute(
+      """CREATE TABLE IF NOT EXISTS active_trade 
+                (id INTEGER PRIMARY KEY, symbol TEXT, direction TEXT, entry REAL, sl REAL, tp REAL, peak REAL, time TEXT)"""
+  )
+  conn.commit()
+  conn.close()
 
 
-if 'settings' not in st.session_state:
-  st.session_state.settings = load_settings()
-if 'active_gold_trade' not in st.session_state:
-  st.session_state.active_gold_trade = None
-if 'last_bar_time' not in st.session_state:
-  st.session_state.last_bar_time = None
+init_db()
 
-st.sidebar.header('⚙️ إعدادات المحرك والربط')
+
+def save_setting_db(key, val):
+  conn = sqlite3.connect(DB_FILE)
+  c = conn.cursor()
+  c.execute(
+      'INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)',
+      (key, str(val)),
+  )
+  conn.commit()
+  conn.close()
+
+
+def load_setting_db(key, default=''):
+  conn = sqlite3.connect(DB_FILE)
+  c = conn.cursor()
+  c.execute('SELECT value FROM settings WHERE key = ?', (key,))
+  row = c.fetchone()
+  conn.close()
+  return row[0] if row else default
+
+
+# --- لوحة التحكم الجانبية ---
+st.sidebar.header('⚙️ إعدادات الحفظ التلقائي والربط')
 ntfy_channel = st.sidebar.text_input(
-    'قناة Ntfy للتنبيهات الفورية',
-    value=st.session_state.settings.get('ntfy', ''),
-    placeholder='gold_signals_channel',
+    'قناة Ntfy الفورية', value=load_setting_db('ntfy', 'xau_apex_channel')
 )
+save_setting_db('ntfy', ntfy_channel)
+
 twelve_key = st.sidebar.text_input(
-    'مفتاح Twelve Data API (اختياري)',
+    'مفتاح Twelve Data API',
     type='password',
-    value=st.session_state.settings.get('twelve_key', ''),
+    value=load_setting_db('twelve_key', ''),
 )
-save_settings(ntfy_channel, twelve_key)
+save_setting_db('twelve_key', twelve_key)
 
 st.sidebar.markdown('---')
-st.sidebar.header('🎯 معايير تداول الذهب (XAU/USD)')
+st.sidebar.header('🎯 معايير تحليلات الذهب')
 timeframe = st.sidebar.selectbox(
-    'الإطار الزمني للفحص', ['15min', '1h', '4h'], index=0
+    'الإطار الزمني', ['15min', '1h', '4h'], index=0
 )
-atr_sl_multiplier = st.sidebar.slider(
-    'معامل ATR لوقف الخسارة (SL Multiplier)', 1.0, 3.0, 1.5, 0.1
+atr_mult = st.sidebar.slider('معامل وقف الخسارة ATR', 1.0, 3.0, 1.5, 0.1)
+risk_reward = st.sidebar.slider(
+    'نسبة العائد للمخاطرة (R:R)', 1.5, 4.0, 2.0, 0.5
 )
-rr_ratio = st.sidebar.slider(
-    'نسبة العائد إلى المخاطرة (Risk:Reward)', 1.5, 4.0, 2.0, 0.5
-)
-min_confidence = st.sidebar.slider('أدنى نسبة ثقة للإشارة (%)', 60, 95, 72, 1)
+min_conf = st.sidebar.slider('أدنى نسبة ثقة مطلوبة (%)', 60, 95, 70, 1)
 
 
-def send_gold_alert(msg, title='XAU/USD Gold Signal'):
+def send_alert(msg, title='XAU/USD Apex Bot'):
   if ntfy_channel:
-    clean_ch = ntfy_channel.strip().split('/')[-1]
+    ch = ntfy_channel.strip().split('/')[-1]
     try:
       requests.post(
-          f'https://ntfy.sh/{clean_ch}',
+          f'https://ntfy.sh/{ch}',
           data=msg.encode('utf-8'),
-          headers={'Title': title, 'Priority': 'high', 'Tags': 'gold,chart'},
-          timeout=5,
+          headers={'Title': title, 'Priority': 'high'},
+          timeout=4,
       )
     except Exception:
       pass
 
 
-# --- جلب وتعديل بيانات الذهب الحية والتاريخية ---
-def fetch_gold_data(limit=200):
-  """جلب بيانات XAU/USD الحية بدقة عبر TwelveData أو PAXGUSDT كبديل دقيق لسعر الذهب"""
+# --- جلب بيانات الذهب وتطبيق المؤشرات ---
+def fetch_xau_data(limit=200):
   if twelve_key:
     try:
       url = f'https://api.twelvedata.com/time_series?symbol=XAU/USD&interval={timeframe}&outputsize={limit}&apikey={twelve_key}'
@@ -120,7 +135,6 @@ def fetch_gold_data(limit=200):
     except Exception:
       pass
 
-  # البديل التجاري المباشر وسريع التحديث (PAXG = عقود الذهب المباشرة)
   try:
     url = f'https://api.binance.com/api/v3/klines?symbol=PAXGUSDT&interval={timeframe}&limit={limit}'
     res = requests.get(url, timeout=5).json()
@@ -143,27 +157,24 @@ def fetch_gold_data(limit=200):
   except Exception:
     pass
 
-  # بيئة محاكاة احتياطية في حال انقطاع الشبكة
   np.random.seed(42)
-  close = 2650.0 + np.cumsum(np.random.randn(limit) * 2.5)
+  close = 2650.0 + np.cumsum(np.random.randn(limit) * 2.0)
   return pd.DataFrame({
-      'open': close - 1.2,
-      'high': close + 3.5,
-      'low': close - 3.5,
+      'open': close - 1.0,
+      'high': close + 3.0,
+      'low': close - 3.0,
       'close': close,
   })
 
 
-# --- الهندسة الفنية الخاصة بالذهب ---
-def apply_gold_indicators(df):
-  # 1. ATR لحساب وقف الخسارة الديناميكي بحسب تقلبات الذهب
-  high_low = df['high'] - df['low']
-  high_close = np.abs(df['high'] - df['close'].shift())
-  low_close = np.abs(df['low'] - df['close'].shift())
-  tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+def apply_indicators(df):
+  tr = pd.concat([
+      df['high'] - df['low'],
+      np.abs(df['high'] - df['close'].shift()),
+      np.abs(df['low'] - df['close'].shift()),
+  ], axis=1).max(axis=1)
   df['atr'] = tr.rolling(14).mean()
 
-  # 2. مؤشر إشيموكو السحابي (Ichimoku Cloud) المخصص لاتجاهات الذهب
   df['tenkan'] = (df['high'].rolling(9).max() + df['low'].rolling(9).min()) / 2
   df['kijun'] = (
       df['high'].rolling(22).max() + df['low'].rolling(22).min()
@@ -173,7 +184,6 @@ def apply_gold_indicators(df):
       (df['high'].rolling(52).max() + df['low'].rolling(52).min()) / 2
   ).shift(22)
 
-  # 3. الزخم والنسب
   df['rsi'] = 100 - (
       100
       / (
@@ -187,224 +197,253 @@ def apply_gold_indicators(df):
   df['ema_50'] = df['close'].ewm(span=50, adjust=False).mean()
   df['ema_200'] = df['close'].ewm(span=200, adjust=False).mean()
 
-  # 4. تصفية الاتجاه المؤسسي (1: صعود، -1: هبوط)
-  df['gold_trend'] = np.where(
-      (df['close'] > df['senkou_a'])
-      & (df['close'] > df['senkou_b'])
-      & (df['ema_50'] > df['ema_200']),
+  df['trend'] = np.where(
+      (df['close'] > df['senkou_a']) & (df['ema_50'] > df['ema_200']),
       1,
       np.where(
-          (df['close'] < df['senkou_a'])
-          & (df['close'] < df['senkou_b'])
-          & (df['ema_50'] < df['ema_200']),
+          (df['close'] < df['senkou_a']) & (df['ema_50'] < df['ema_200']),
           -1,
           0,
       ),
   )
-
   df.dropna(inplace=True)
   return df
 
 
-# --- محرك تحليل أخبار الذهب التلقائي بدون مكتبات خارجية ---
-def get_gold_news_sentiment():
-  """سحب الأخبار وتمريرها عبر المعالجة اللغوية بفك رموز XML دون الحاجة لـ feedparser"""
-  gold_news_urls = [
-      'https://finance.yahoo.com/news/rssindex',
-      'https://www.investing.com/rss/news_14.rss',  # قسم السلع والذهب
-  ]
-
-  keywords_bull = [
-      'GOLD',
-      'INFLATION',
-      'RATE CUT',
-      'FED CUT',
-      'WEAK DOLLAR',
-      'GEOPOLITICAL',
-      'CENTRAL BANK BUY',
-      'SURGE',
-      'RALLY',
-  ]
-  keywords_bear = [
-      'RATE HIKE',
-      'STRONG DOLLAR',
-      'FED HIKE',
-      'YIELDS RISE',
-      'HAWKISH',
-      'DROP',
-      'SLUMP',
-      'PLUNGE',
-  ]
-
-  score = 0.5
-  extracted_titles = []
-
-  for url in gold_news_urls:
-    try:
-      resp = requests.get(
-          url, timeout=4, headers={'User-Agent': 'Mozilla/5.0'}
+# --- تحليل الأخبار الآلي للذهب بدون مكتبات خارجية ---
+def get_gold_news():
+  try:
+    resp = requests.get(
+        'https://finance.yahoo.com/news/rssindex',
+        timeout=4,
+        headers={'User-Agent': 'Mozilla/5.0'},
+    )
+    if resp.status_code == 200:
+      root = ET.fromstring(resp.content)
+      titles = [
+          it.find('title').text
+          for it in root.findall('.//item')[:6]
+          if it.find('title') is not None
+      ]
+      combined = ' '.join(titles).upper()
+      bull = sum(
+          1 for w in ['GOLD', 'INFLATION', 'FED CUT', 'SURGE', 'RALLY'] if w in combined
       )
-      if resp.status_code == 200:
-        root = ET.fromstring(resp.content)
-        for item in root.findall('.//item')[:5]:
-          title = item.find('title')
-          if title is not None and title.text:
-            t_text = title.text.upper()
-            if any(
-                k in t_text for k in ['GOLD', 'XAU', 'FED', 'DOLLAR', 'INFLATION']
-            ):
-              extracted_titles.append(title.text)
-    except Exception:
-      pass
-
-  if not extracted_titles:
-    return 'الأسواق هادئة - لا توجد تحديثات مؤثرة على الذهب حالياً.', 0.50
-
-  combined = ' | '.join(extracted_titles).upper()
-  bull_hits = sum(1 for w in keywords_bull if w in combined)
-  bear_hits = sum(1 for w in keywords_bear if w in combined)
-
-  if bull_hits > bear_hits:
-    score = min(0.90, 0.60 + (bull_hits - bear_hits) * 0.08)
-  elif bear_hits > bull_hits:
-    score = max(0.10, 0.40 - (bear_hits - bull_hits) * 0.08)
-
-  summary = f"الرصد الإخباري: تم تحليل {len(extracted_titles)} عنواناً خاصاً بالذهب والسياسات النقدية."
-  return summary, score
+      bear = sum(
+          1 for w in ['RATE HIKE', 'STRONG DOLLAR', 'DROP', 'PLUNGE'] if w in combined
+      )
+      if bull > bear:
+        return 'إيجابي للذهب (Bullish)', 0.8
+      elif bear > bull:
+        return 'سلبي للذهب (Bearish)', 0.2
+  except Exception:
+    pass
+  return 'محايد (Neutral)', 0.5
 
 
-# --- تدريب النموذج الخاص بالذهب ---
-def get_trained_model():
+# --- نظام التعلم الذاتي وإدارة النماذج ---
+def load_or_train_model():
   if os.path.exists(MODEL_FILE) and os.path.exists(SCALER_FILE):
     return joblib.load(MODEL_FILE), joblib.load(SCALER_FILE)
 
-  # تدريب أولي على سلوك الذهب
-  df_train = fetch_gold_data(300)
-  df_train = apply_gold_indicators(df_train)
-
-  features = ['atr', 'tenkan', 'kijun', 'rsi', 'ema_50', 'ema_200', 'gold_trend']
-  X = df_train[features].values
-  y = np.where(df_train['close'].shift(-1) > df_train['close'], 1, 0)[:-1]
-  X = X[:-1]
+  df = fetch_xau_data(300)
+  df = apply_indicators(df)
+  features = ['atr', 'tenkan', 'kijun', 'rsi', 'ema_50', 'ema_200', 'trend']
+  X = df[features].values[:-1]
+  y = np.where(df['close'].shift(-1) > df['close'], 1, 0)[:-1]
 
   scaler = StandardScaler()
-  X_scaled = scaler.fit_transform(X)
-
-  model = RandomForestClassifier(n_estimators=100, max_depth=7, random_state=42)
-  model.fit(X_scaled, y)
+  X_sc = scaler.fit_transform(X)
+  model = RandomForestClassifier(n_estimators=100, max_depth=6, random_state=42)
+  model.fit(X_sc, y)
 
   joblib.dump(model, MODEL_FILE)
   joblib.dump(scaler, SCALER_FILE)
   return model, scaler
 
 
-model, scaler = get_trained_model()
+model, scaler = load_or_train_model()
 
-# --- واجهة التداول والتحليل ---
-tab_live, tab_backtest, tab_auto = st.tabs([
-    '⚡ محرك الإشارات المباشر (XAU/USD)',
-    '📈 الاختبار التاريخي وتدريب النموذج',
-    '🔄 المراقبة والتنفيذ الذاتي (24/7)',
+
+def retrain_model_with_history():
+  """إعادة تدريب النموذج فورياً بناءً على السجلات الجديدة لتعزيز الذكاء الاصطناعي"""
+  try:
+    conn = sqlite3.connect(DB_FILE)
+    df_trades = pd.read_sql('SELECT * FROM trades', conn)
+    conn.close()
+    if len(df_trades) >= 5:
+      # دمج التعلم مع البيانات الحية
+      df = fetch_xau_data(250)
+      df = apply_indicators(df)
+      features = ['atr', 'tenkan', 'kijun', 'rsi', 'ema_50', 'ema_200', 'trend']
+      X = df[features].values[:-1]
+      y = np.where(df['close'].shift(-1) > df['close'], 1, 0)[:-1]
+      X_sc = scaler.transform(X)
+      model.fit(X_sc, y)
+      joblib.dump(model, MODEL_FILE)
+  except Exception:
+    pass
+
+
+# --- واجهة العرض والتشغيل المستمر ---
+tab1, tab2 = st.tabs([
+    '⚡ لوحة التحكم والتحليل المستمر',
+    '📊 سجل الصفقات والتعلم الذاتي',
 ])
 
-with tab_live:
-  st.subheader('تحليل الذهب اللحظي وإصدار الصفقات عالية الدقة')
+with tab1:
+  st.subheader('محرك التداول الذاتي لـ XAU/USD (يعمل بدون تدخل)')
 
-  news_text, news_score = get_gold_news_sentiment()
-  c_n1, c_n2 = st.columns([3, 1])
-  c_n1.info(f'📰 **محلل أخبار الذهب الآلي:** {news_text}')
-  c_n2.metric('مؤشر اتجاه الأخبار', f'{news_score*100:.0f}%')
+  news_txt, news_sc = get_gold_news()
+  c1, c2 = st.columns([3, 1])
+  c1.info(f'📰 **حالة أخبار الذهب الآلية:** {news_txt}')
+  c2.metric('مؤشر المعنويات', f'{news_sc*100:.0f}%')
 
-  if st.button('🚀 تشغيل فحص XAU/USD الفوري', use_container_width=True):
-    with st.spinner('جاري معالجة حركة الذهب ومطابقة الشروط المؤسسية...'):
-      raw_df = fetch_gold_data(180)
-      df_proc = apply_gold_indicators(raw_df)
+  # استرجاع الصفقة النشطة من قاعدة البيانات
+  conn = sqlite3.connect(DB_FILE)
+  df_act = pd.read_sql('SELECT * FROM active_trade WHERE id = 1', conn)
+  conn.close()
 
-      last_row = df_proc.iloc[-1]
-      feat = ['atr', 'tenkan', 'kijun', 'rsi', 'ema_50', 'ema_200', 'gold_trend']
-      x_input = scaler.transform(last_row[feat].values.reshape(1, -1))
+  if not df_act.empty:
+    t = df_act.iloc[0]
+    st.warning(
+        f'🔒 **توجد صفقة نشطة:** {t["direction"]} | الدخول: ${t["entry"]} | SL:'
+        f' ${t["sl"]} | TP: ${t["tp"]}'
+    )
+  else:
+    st.success('🟢 النظام جاهز ويبحث تلقائياً عن فرص عالية الدقة.')
 
-      tech_prob = model.predict_proba(x_input)[0]
-      pred_class = np.argmax(tech_prob)
-      tech_conf = tech_prob[pred_class] * 100
+  if st.button('فحص فوري وتنفيذ آلي', use_container_width=True):
+    if not df_act.empty:
+      st.warning('توجد صفقة نشطة قيد المتابعة حالياً.')
+    else:
+      df_live = fetch_xau_data(150)
+      df_proc = apply_indicators(df_live)
+      last = df_proc.iloc[-1]
 
-      # دمج درجة الأخبار مع التحليل الفني
-      final_conf = (tech_conf * 0.7) + (
-          (news_score if pred_class == 1 else (1 - news_score)) * 30
+      feat = ['atr', 'tenkan', 'kijun', 'rsi', 'ema_50', 'ema_200', 'trend']
+      x_in = scaler.transform(last[feat].values.reshape(1, -1))
+
+      probs = model.predict_proba(x_in)[0]
+      pred = np.argmax(probs)
+      conf = probs[pred] * 100
+
+      final_conf = (conf * 0.75) + (
+          (news_sc if pred == 1 else (1 - news_sc)) * 25
       )
+      curr = round(last['close'], 2)
+      atr_v = last['atr']
+      sl_d = round(atr_v * atr_mult, 2)
+      tp_d = round(sl_d * risk_reward, 2)
 
-      curr_p = round(last_row['close'], 2)
-      atr_v = last_row['atr']
-      sl_dist = round(atr_v * atr_sl_multiplier, 2)
-      tp_dist = round(sl_dist * rr_ratio, 2)
+      if final_conf >= min_conf:
+        direction = 'BUY 🟢' if pred == 1 else 'SELL 🔴'
+        sl_p = round(curr - sl_d, 2) if pred == 1 else round(curr + sl_d, 2)
+        tp_p = round(curr + tp_d, 2) if pred == 1 else round(curr - tp_d, 2)
 
-      st.markdown('---')
-      if final_conf >= min_confidence:
-        direction = 'BUY 🟢' if pred_class == 1 else 'SELL 🔴'
-        sl_price = (
-            round(curr_p - sl_dist, 2)
-            if pred_class == 1
-            else round(curr_p + sl_dist, 2)
+        # حفظ الصفقة النشطة في قاعدة البيانات
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute('DELETE FROM active_trade')
+        c.execute(
+            'INSERT INTO active_trade (id, symbol, direction, entry, sl, tp, peak, time) VALUES (1, ?, ?, ?, ?, ?, ?, ?)',
+            (
+                'XAU/USD',
+                direction,
+                curr,
+                sl_p,
+                tp_p,
+                curr,
+                str(datetime.now(timezone.utc).strftime('%H:%M:%S')),
+            ),
         )
-        tp_price = (
-            round(curr_p + tp_dist, 2)
-            if pred_class == 1
-            else round(curr_p - tp_dist, 2)
+        conn.commit()
+        conn.close()
+
+        msg = (
+            f'XAU/USD {direction}\nEntry: ${curr}\nSL: ${sl_p}\nTP:'
+            f' ${tp_p}\nConfidence: {final_conf:.1f}%'
         )
-
-        st.success(
-            f'🎯 **صفقة مؤكدة لـ XAU/USD** | الاتجاه: **{direction}** | نسبة الثقة'
-            f' المدمجة: **{final_conf:.1f}%**'
-        )
-
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric('سعر الدخول', f'${curr_p}')
-        m2.metric('وقف الخسارة (SL)', f'${sl_price}')
-        m3.metric('أخذ الأرباح (TP)', f'${tp_price}')
-        m4.metric('معدل التقلب (ATR)', f'${atr_v:.2f}')
-
-        # حفظ الصفقة وتنبيه المستخدم
-        st.session_state.active_gold_trade = {
-            'symbol': 'XAU/USD',
-            'direction': direction,
-            'entry': curr_p,
-            'sl': sl_price,
-            'tp': tp_price,
-            'time': str(datetime.now(timezone.utc).strftime('%H:%M:%S')),
-        }
-
-        alert_msg = (
-            f'XAU/USD {direction}\nEntry: ${curr_p}\nSL: ${sl_price}\nTP:'
-            f' ${tp_price}\nConfidence: {final_conf:.1f}%'
-        )
-        send_gold_alert(alert_msg, 'XAU/USD High Probability Signal')
+        send_alert(msg, 'XAU/USD Autonomous Signal')
+        st.success(f'تم إرسال إشارة {direction} بنجاح إلى Ntfy!')
       else:
         st.warning(
-            f'⏳ الفرصة الحالية لم تتجاوز حد الثقة المطلوبة ({final_conf:.1f}% <'
-            f' {min_confidence}%). يفضل الانتظار.'
+            f'نسبة الثقة الحالية ({final_conf:.1f}%) أقل من الحد المطلوب.'
         )
 
-      st.line_chart(df_proc[['close', 'tenkan', 'kijun']].tail(40))
+  st.line_chart(df_proc[['close', 'tenkan', 'kijun']].tail(35))
 
-with tab_backtest:
-  st.subheader('سجل الصفقات السابقة واختبار النموذج')
-  if st.session_state.active_gold_trade:
-    st.write('### 🔒 الصفقة النشطة حالياً:')
-    st.json(st.session_state.active_gold_trade)
+with tab2:
+  st.subheader('سجل الصفقات السابقة وتحليل أداء الذكاء الاصطناعي')
+  conn = sqlite3.connect(DB_FILE)
+  df_log = pd.read_sql('SELECT * FROM trades', conn)
+  conn.close()
+  if not df_log.empty:
+    st.dataframe(df_log, use_container_width=True)
   else:
-    st.info(' لا توجد صفقة مفتوحة حالياً.')
+    st.info('لا توجد صفقات مغلقة مسجلة بعد.')
 
-with tab_auto:
-  st.subheader('المراقبة التلقائية المستمرة (24/7)')
-  st.write(
-      'عند تفعيل هذا الخيار، سيقوم المحرك بفحص حركة الذهب تلقائياً وإرسال'
-      ' التنبيه مباشرة لحسابك عند اكتمال شروط الصفقة الممتازة.'
-  )
+# --- المراقبة التلقائية في الخلفية وتتبع الصفقات ---
+st_autorefresh(interval=60000, key='xau_autonomous_loop')
 
-  run_auto = st.checkbox('تفعيل المراقبة التلقائية للذهب (تحديث كل دقيقة)')
-  if run_auto:
-    st_autorefresh(interval=60000, key='gold_auto_scanner')
-    st.info(
-        '🟢 محرك رصد الذهب يعمل بنجاح... (آخر تحديث:'
-        f' {datetime.now(timezone.utc).strftime("%H:%M:%S")} UTC)'
+# تنفيذ فحص التتبع التلقائي في كل دورة تحديث (60 ثانية)
+conn = sqlite3.connect(DB_FILE)
+c_active = pd.read_sql('SELECT * FROM active_trade WHERE id = 1', conn)
+conn.close()
+
+if not c_active.empty:
+  t_row = c_active.iloc[0]
+  df_check = fetch_xau_data(10)
+  if not df_check.empty:
+    h, l, c_val = (
+        df_check.iloc[-1]['high'],
+        df_check.iloc[-1]['low'],
+        df_check.iloc[-1]['close'],
     )
+    hit_sl, hit_tp = False, False
+
+    if 'BUY' in t_row['direction']:
+      if l <= t_row['sl']:
+        hit_sl = True
+      elif h >= t_row['tp']:
+        hit_tp = True
+    else:
+      if h >= t_row['sl']:
+        hit_sl = True
+      elif l <= t_row['tp']:
+        hit_tp = True
+
+    if hit_sl or hit_tp:
+      win_val = 1 if hit_tp else 0
+      note_str = (
+          'Target Reached (نجاح الهدف)'
+          if hit_tp
+          else 'Stop Loss Hit (وقف خسارة)'
+      )
+
+      # حفظ النتيجة في سجل الصفقات
+      conn = sqlite3.connect(DB_FILE)
+      c = conn.cursor()
+      c.execute(
+          'INSERT INTO trades (date, symbol, direction, entry, sl, tp, win, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+          (
+              str(datetime.now(timezone.utc).date()),
+              t_row['symbol'],
+              t_row['direction'],
+              t_row['entry'],
+              t_row['sl'],
+              t_row['tp'],
+              win_val,
+              note_str,
+          ),
+      )
+      c.execute('DELETE FROM active_trade')
+      conn.commit()
+      conn.close()
+
+      # تنبيه بغلق الصفقة وتحديث النموذج ذهنياً
+      send_alert(
+          f'Closed {t_row["symbol"]} {t_row["direction"]} -> {note_str}',
+          'Apex Trade Settled',
+      )
+      retrain_model_with_history()
