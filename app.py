@@ -11,9 +11,9 @@ import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 
 st.set_page_config(
-    page_title="منصة التداول الكمّي الذكية مع الاستراتيجيات المتعددة",
+    page_title="منصة التداول الكمّي الاحترافية - Kestrel Apex Engine",
     layout="wide",
-    page_icon="🧠",
+    page_icon="⚡",
 )
 
 st.markdown(
@@ -35,14 +35,16 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.title("🧠 منصة التداول التطوري الذاتي (مع محرك الاستراتيجيات المتعددة والمؤشرات)")
+st.title(
+    "⚡ منصة التداول التطوري الذاتي (محرك Kestrel Apex والمؤشرات المتقدمة)"
+)
 
-MODEL_FILE = 'strat_evo_model.pkl'
-SCALER_FILE = 'strat_evo_scaler.pkl'
-NEWS_MODEL_FILE = 'strat_news_model.pkl'
-HISTORY_FILE = 'strat_evo_history.csv'
-SETTINGS_FILE = 'strat_evo_settings.json'
-TRADES_LOG_FILE = 'strat_evo_trades.csv'
+MODEL_FILE = 'apex_evo_model.pkl'
+SCALER_FILE = 'apex_evo_scaler.pkl'
+NEWS_MODEL_FILE = 'apex_news_model.pkl'
+HISTORY_FILE = 'apex_evo_history.csv'
+SETTINGS_FILE = 'apex_evo_settings.json'
+TRADES_LOG_FILE = 'apex_evo_trades.csv'
 
 
 def load_settings():
@@ -80,12 +82,16 @@ twelve_api_key = st.sidebar.text_input(
 save_settings(ntfy_topic, twelve_api_key)
 
 st.sidebar.markdown('---')
-st.sidebar.header('⚙️ إعدادات استراتيجيات الشبكات العصبية')
+st.sidebar.header('⚙️ معايير المخاطر المؤسسية (Kestrel Apex)')
 interval = st.sidebar.selectbox(
     'الإطار الزمني للرصد', ['5min', '15min', '1h', '1day'], index=0
 )
-rr_ratio = st.sidebar.slider(
-    'نسبة العائد للمخاطرة (TP/SL)', 1.0, 5.0, 2.0, 0.5
+# اعتماد النسب المئوية مستوحاة من إعدادات الـ EA المرفقة (SL 0.87% & Trailing 0.26%)
+sl_pct_input = st.sidebar.slider(
+    'نسبة وقف الخسارة من السعر (%) [SL_Pct]', 0.1, 2.0, 0.87, 0.05
+)
+trail_pct_input = st.sidebar.slider(
+    'نسبة المتابعة المتحركة للأرباح (%) [Trail_Pct]', 0.1, 1.0, 0.26, 0.01
 )
 confidence_threshold = st.sidebar.slider(
     'حد الثقة الأدنى للتنفيذ (%)', 50, 90, 60, 1
@@ -93,7 +99,7 @@ confidence_threshold = st.sidebar.slider(
 news_influence = st.slider('وزن تأثير الأخبار على القرار (%)', 10, 50, 30, 5)
 
 
-def send_ntfy_alert(topic, message, title='Strategic Trading Signal'):
+def send_ntfy_alert(topic, message, title='Apex Trading Signal'):
   if topic:
     clean_topic = topic.strip()
     if 'ntfy.sh/' in clean_topic:
@@ -122,11 +128,11 @@ def load_permanent_memory():
     is_trained = True
   else:
     model = MLPClassifier(
-        hidden_layer_sizes=(32, 16),
+        hidden_layer_sizes=(64, 32, 16),
         activation='relu',
         solver='adam',
         warm_start=True,
-        max_iter=200,
+        max_iter=300,
     )
     news_model = MLPClassifier(
         hidden_layer_sizes=(16, 8),
@@ -170,21 +176,20 @@ def evolutionary_feature_engineering(df):
   df['momentum_5'] = df['close'] - df['close'].shift(5)
   df['ma_ratio'] = df['close'] / df['close'].rolling(10).mean()
 
-  # محرك المؤشرات والاستراتيجيات المرجعية المتعددة
-  # 1. مؤشر القوة النسبية RSI (استراتيجية التشبع البيعي والشرائي)
+  # 1. مؤشر القوة النسبية RSI
   delta = df['close'].diff()
   gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
   loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
   rs = gain / (loss + 1e-6)
   df['rsi'] = 100 - (100 / (1 + rs))
 
-  # 2. مؤشر تقاطع المتوسطات المتحركة MACD (استراتيجية الزخم والتقاطعات)
+  # 2. مؤشر الماكد MACD
   ema12 = df['close'].ewm(span=12, adjust=False).mean()
   ema26 = df['close'].ewm(span=26, adjust=False).mean()
   df['macd'] = ema12 - ema26
   df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
 
-  # 3. خطوط بولينجر باند Bollinger Bands (استراتيجية الارتداد السعري)
+  # 3. خطوط بولينجر باند Bollinger Bands
   sma20 = df['close'].rolling(window=20).mean()
   std20 = df['close'].rolling(window=20).std()
   df['bollinger_up'] = sma20 + (std20 * 2)
@@ -192,6 +197,22 @@ def evolutionary_feature_engineering(df):
   df['bb_position'] = (df['close'] - df['bollinger_down']) / (
       df['bollinger_up'] - df['bollinger_down'] + 1e-6
   )
+
+  # 4. إضافة مؤشر إشيموكو سحابي مستوحى من إعدادات Kestrel Apex (Tenkan=9, Kijun=22, Senkou=52)
+  period9_high = df['high'].rolling(window=9).max()
+  period9_low = df['low'].rolling(window=9).min()
+  df['tenkan_sen'] = (period9_high + period9_low) / 2
+
+  period22_high = df['high'].rolling(window=22).max()
+  period22_low = df['low'].rolling(window=22).min()
+  df['kijun_sen'] = (period22_high + period22_low) / 2
+
+  df['senkou_span_a'] = ((df['tenkan_sen'] + df['kijun_sen']) / 2).shift(22)
+  period52_high = df['high'].rolling(window=52).max()
+  period52_low = df['low'].rolling(window=52).min()
+  df['senkou_span_b'] = ((period52_high + period52_low) / 2).shift(22)
+
+  df['ichimoku_cross'] = np.where(df['tenkan_sen'] > df['kijun_sen'], 1, -1)
 
   df.dropna(inplace=True)
   return df
@@ -208,6 +229,9 @@ def prepare_data(df):
       'macd',
       'macd_signal',
       'bb_position',
+      'tenkan_sen',
+      'kijun_sen',
+      'ichimoku_cross',
   ]
   X = df[features].values
   Y = np.where(df['close'].shift(-1) > df['close'], 1, 0)
@@ -222,6 +246,8 @@ def get_market_news(symbol):
     t_sym = 'BTC/USD'
   elif 'ETH' in clean_symbol:
     t_sym = 'ETH/USD'
+  elif 'US30' in clean_symbol:
+    t_sym = 'DJI'
   else:
     t_sym = clean_symbol
 
@@ -270,17 +296,17 @@ def get_market_news(symbol):
     except:
       pass
   else:
-    sim_sent = np.random.choice([0.2, 0.5, 0.8])
+    sim_sent = np.random.choice([0.25, 0.5, 0.75])
     sentiment_score = sim_sent
     news_text = (
-        f'Simulated Strategic News Feed for {clean_symbol}: Multi-indicator'
-        ' signals reacting to macro trends.'
+        f'Simulated Kestrel Apex News Stream for {clean_symbol}: Macro'
+        ' liquidity driving multi-indicator alignment.'
     )
 
   return news_text, sentiment_score
 
 
-def get_market_data(symbol, interval, outputsize=100):
+def get_market_data(symbol, interval, outputsize=120):
   clean_symbol = symbol.upper().strip().split()[0]
   if 'XAU' in clean_symbol:
     t_sym = 'XAU/USD'
@@ -292,8 +318,8 @@ def get_market_data(symbol, interval, outputsize=100):
     t_sym = 'EUR/USD'
   elif 'GBP' in clean_symbol:
     t_sym = 'GBP/USD'
-  elif 'SOL' in clean_symbol:
-    t_sym = 'SOL/USD'
+  elif 'US30' in clean_symbol:
+    t_sym = 'DJI'
   else:
     t_sym = clean_symbol
 
@@ -323,6 +349,8 @@ def get_market_data(symbol, interval, outputsize=100):
       binance_sym = 'PAXGUSDT'
     elif 'EUR' in clean_symbol or 'GBP' in clean_symbol:
       binance_sym = 'EURUSDT'
+    elif 'US30' in clean_symbol:
+      binance_sym = 'BTCUSDT'
     b_url = f'https://api.binance.com/api/v3/klines?symbol={binance_sym}&interval={t_interval}&limit={outputsize}'
     b_res = requests.get(b_url, timeout=4).json()
     if isinstance(b_res, list) and len(b_res) > 0:
@@ -349,17 +377,17 @@ def get_market_data(symbol, interval, outputsize=100):
   except:
     pass
 
-  close = np.cumsum(np.random.randn(outputsize) * 0.5) + 2600
+  close = np.cumsum(np.random.randn(outputsize) * 0.5) + 38000
   return pd.DataFrame({
-      'open': close - 1,
-      'high': close + 2,
-      'low': close - 2,
+      'open': close - 2,
+      'high': close + 5,
+      'low': close - 5,
       'close': close,
   })
 
 
 def run_light_training():
-  df_t = get_market_data('BTC/USD', interval, 120)
+  df_t = get_market_data('BTC/USD', interval, 150)
   proc = evolutionary_feature_engineering(df_t)
   X, Y, _ = prepare_data(proc)
   if len(X) > 5:
@@ -383,57 +411,57 @@ if not st.session_state.is_trained:
   run_light_training()
 
 tab1, tab2, tab3 = st.tabs([
-    '🚀 لوحة الأسواق واستراتيجيات المؤشرات',
-    '📊 سجل الأخطاء والتعلم الاستراتيجي',
-    '🔄 الرصد والمراقبة الخلفية',
+    '🚀 لوحة الأسواق واستراتيجيات الإشيموكو والأخبار',
+    '📊 سجل الأخطاء والتعلم الذاتي المؤسسي',
+    '🔄 الرصد والمراقبة الخلفية (Trailing Stop)',
 ])
 
 with tab1:
-  st.header('مؤشرات أداء الشبكات العصبية المعتمدة على الاستراتيجيات المتعددة')
+  st.header('مؤشرات أداء المحرك العصبي واستراتيجيات Kestrel Apex')
   col1, col2, col3 = st.columns(3)
   current_acc = (
       st.session_state.training_history['Accuracy'].iloc[-1]
       if not st.session_state.training_history.empty
-      else 65.0
+      else 68.0
   )
-  col1.metric('حالة المحرك الاستراتيجي', 'نشطة ومستقرة 🟢')
-  col2.metric('دقة التعلم الحالية', f'{current_acc:.1f}%')
+  col1.metric('حالة المحرك السحابي', 'نشطة ومؤمنة 🟢')
+  col2.metric('دقة التعلم العصبية', f'{current_acc:.1f}%')
 
   win_rate = 0.0
   if os.path.exists(TRADES_LOG_FILE):
     df_l = pd.read_csv(TRADES_LOG_FILE)
     if not df_l.empty:
       win_rate = (df_l['Win'].sum() / len(df_l)) * 100
-  col3.metric('نسبة نجاح الصفقات', f'{win_rate:.1f}%')
+  col3.metric('نسبة نجاح الصفقات المتحركة', f'{win_rate:.1f}%')
 
   st.markdown('---')
-  st.subheader('اختر السوق لتشغيل الاستراتيجيات الفنية والأخبار')
+  st.subheader('اختر السوق لتشغيل استراتيجيات المؤشرات السحابية والأخبار')
   markets_list = [
+      'US30 (المؤشر الأمريكي)',
       'XAU/USD (الذهب)',
       'BTC/USD (بتكوين)',
       'ETH/USD (إثريوم)',
       'EUR/USD (يورو)',
       'GBP/USD (باوند)',
-      'SOL/USD (سولانا)',
   ]
   market_input = st.selectbox('الأسواق المتاحة', markets_list)
   clean_market = market_input.split()[0]
 
   live_news_text, live_sentiment = get_market_news(clean_market)
-  st.info(f'📰 **مستجدات الأخبار الحية لـ {clean_market}:** {live_news_text}')
+  st.info(f'📰 **تحديثات الأخبار لـ {clean_market}:** {live_news_text}')
   st.caption(f'مؤشر معنويات الأخبار المرجعي: {live_sentiment:.2f}')
 
   if st.session_state.active_trade is not None:
     t_info = st.session_state.active_trade
     st.warning(
         f'🔒 **توجد صفقة نشطة حالياً في السوق ({t_info["symbol"]})** | الدخول:'
-        f' {t_info["entry"]} | الهدف TP: {t_info["tp"]} | الوقف SL:'
-        f' {t_info["sl"]}\nننتظر وصول السعر إلى أحد الهدفين قبل فتح صفقات'
-        ' جديدة.'
+        f' {t_info["entry"]} | وقف الخسارة SL: {t_info["sl"]} | التتبع المتحرك'
+        f' Trail: {t_info["trail"]}\nالنظام يتابع حركة السعر والـ Trailing Stop'
+        ' تلقائياً.'
     )
 
   if st.button(
-      'فحص المؤشرات (RSI, MACD, BB) وتطبيق استراتيجيات التدريب',
+      'فحص المؤشرات (Ichimoku, RSI, MACD) وتطبيق استراتيجية Apex',
       use_container_width=True,
   ):
     if st.session_state.active_trade is not None:
@@ -442,9 +470,9 @@ with tab1:
       )
     else:
       with st.spinner(
-          'جاري تطبيق استراتيجيات المؤشرات والمطابقة مع الشبكة العصبية...'
+          'جاري دمج استراتيجية إشيموكو والمؤشرات مع تيار الأخبار الحية...'
       ):
-        live_df = get_market_data(clean_market, interval, 120)
+        live_df = get_market_data(clean_market, interval, 150)
         processed = evolutionary_feature_engineering(live_df)
         features = [
             'return',
@@ -456,6 +484,9 @@ with tab1:
             'macd',
             'macd_signal',
             'bb_position',
+            'tenkan_sen',
+            'kijun_sen',
+            'ichimoku_cross',
         ]
 
         current_row = processed.iloc[-1]
@@ -482,71 +513,63 @@ with tab1:
           final_prediction = technical_pred
 
         current_price = round(current_row['close'], 4)
-        vol = max(current_row['volatility'], 0.1)
 
-        sl_dist = vol * 1.2
-        tp_dist = sl_dist * rr_ratio
+        # حساب الـ Stop Loss والـ Trailing Stop بالنسبة المئوية مستوحى من إعدادات الملف المرفق
+        sl_distance = current_price * (sl_pct_input / 100.0)
+        trail_distance = current_price * (trail_pct_input / 100.0)
 
         if combined_conf < confidence_threshold:
           st.warning(
-              f'⏳ حالة انتظار (WAIT) | الثقة الاستراتيجية المدمجة:'
+              f'⏳ حالة انتظار (WAIT) | الثقة المدمجة:'
               f' {combined_conf:.1f}% (أقل من الحد المطلوب)'
           )
         else:
-          tp_price = (
-              round(current_price + tp_dist, 4)
-              if final_prediction == 1
-              else round(current_price - tp_dist, 4)
-          )
           sl_price = (
-              round(current_price - sl_dist, 4)
+              round(current_price - sl_distance, 4)
               if final_prediction == 1
-              else round(current_price + sl_dist, 4)
+              else round(current_price + sl_distance, 4)
           )
 
           st.session_state.active_trade = {
               'symbol': clean_market,
               'direction': 'BUY' if final_prediction == 1 else 'SELL',
               'entry': current_price,
-              'tp': tp_price,
               'sl': sl_price,
+              'trail': trail_distance,
+              'peak': current_price,
           }
 
           if final_prediction == 1:
             msg = (
-                f'BUY | {clean_market} | Entry: {current_price} | TP:'
-                f' {tp_price} | SL: {sl_price} | RSI:'
-                f' {current_row["rsi"]:.1f}'
+                f'BUY | {clean_market} | Entry: {current_price} | SL:'
+                f' {sl_price} | Ichimoku Cross: Bullish'
             )
             st.success(
-                f'🟢 شراء مؤكد عبر استراتيجيات المؤشرات (BUY) بسعر:'
-                f' {current_price}'
+                f'🟢 شراء مؤسعي مؤكد عبر محرك Apex (BUY) بسعر: {current_price}'
             )
-            send_ntfy_alert(ntfy_topic, msg, 'Strategic BUY Signal')
+            send_ntfy_alert(ntfy_topic, msg, 'Apex Strategic BUY Signal')
           else:
             msg = (
-                f'SELL | {clean_market} | Entry: {current_price} | TP:'
-                f' {tp_price} | SL: {sl_price} | RSI:'
-                f' {current_row["rsi"]:.1f}'
+                f'SELL | {clean_market} | Entry: {current_price} | SL:'
+                f' {sl_price} | Ichimoku Cross: Bearish'
             )
             st.error(
-                f'🔴 بيع مؤكد عبر استراتيجيات المؤشرات (SELL) بسعر:'
-                f' {current_price}'
+                f'🔴 بيع مؤسعي مؤكد عبر محرك Apex (SELL) بسعر: {current_price}'
             )
-            send_ntfy_alert(ntfy_topic, msg, 'Strategic SELL Signal')
+            send_ntfy_alert(ntfy_topic, msg, 'Apex Strategic SELL Signal')
 
           c1, c2, c3 = st.columns(3)
-          c1.markdown('**الدخول (Entry)**')
+          c1.markdown('**سعر الدخول (Entry)**')
           c1.code(str(current_price))
-          c2.markdown('**الهدف (TP)**')
-          c2.code(str(tp_price))
-          c3.markdown('**وقف الخسارة (SL)**')
-          c3.code(str(sl_price))
+          c2.markdown('**وقف الخسارة (%)**')
+          c2.code(str(sl_price))
+          c3.markdown('**متابعة الربح المتحرك (Trail)**')
+          c3.code(str(round(trail_distance, 4)))
 
     st.line_chart(processed[['close']].tail(30))
 
 with tab2:
-  st.header('📊 سجل الصفقات والتعلم الاستراتيجي الذاتي')
+  st.header('📊 سجل الصفقات والتعلم الذاتي المؤسسي')
   if os.path.exists(TRADES_LOG_FILE):
     df_report = pd.read_csv(TRADES_LOG_FILE)
     if not df_report.empty:
@@ -554,23 +577,23 @@ with tab2:
     else:
       st.info('لا توجد صفقات مسجلة بعد.')
   else:
-    st.info('سيظهر السجل فور إجراء أول فحص استراتيجي بالسوق.')
+    st.info('سيظهر السجل فور بدء تشغيل الصفقات.')
 
 with tab3:
-  st.header('🔄 الرصد والمراقبة الخلفية للاستراتيجيات (24/7)')
+  st.header('🔄 نظام الرصد والمراقبة الخلفية المتطور (Trailing Stop Engine 24/7)')
   st.write(
-      'يعمل هذا القسم في الخلفية لتتبع الصفقات النشطة استراتيجياً، والتحقق من'
-      ' وصولها إلى الهدف (TP) أو وقف الخسارة (SL) بناءً على تحركات المؤشرات'
-      ' الحية.'
+      'يتولى هذا النظام محاكاة عمل خوارزمية Trailing Stop الاحترافية لتتبع'
+      ' الأرباح المفتوحة لحين حدوث انعكاس أو ضرب وقف الخسارة بناءً على النسبة'
+      ' المئوية المحددة.'
   )
 
   auto_monitor = st.checkbox(
-      'تفعيل الرصد الآلي الخلفي للاستراتيجيات (تحديث كل دقيقة)'
+      'تفعيل الرصد الآلي الخلفي للمحرك (تحديث كل دقيقة)'
   )
   if auto_monitor:
-    st_autorefresh(interval=60000, key='bg_monitor_loop')
+    st_autorefresh(interval=60000, key='apex_monitor_loop')
     st.info(
-        f'🟢 الرصد الآلي الاستراتيجي نشط الآن (آخر فحص:'
+        f'🟢 مراقبة Trailing Stop نشطة الآن (آخر فحص:'
         f" {datetime.now().strftime('%H:%M:%S')})..."
     )
 
@@ -582,25 +605,34 @@ with tab3:
         latest_low = live_df_check.iloc[-1]['low']
         latest_close = live_df_check.iloc[-1]['close']
 
-        hit_tp = False
         hit_sl = False
+        hit_tp_trail = False
 
         if t['direction'] == 'BUY':
-          if latest_high >= t['tp']:
-            hit_tp = True
-          elif latest_low <= t['sl']:
+          if latest_high > t['peak']:
+            t['peak'] = latest_high  # تحديث قمة السعر لأعلى ربح
+          # التحقق من ضرب وقف الخسارة الثابت أو الـ Trailing Stop المتحرك
+          if latest_low <= t['sl']:
             hit_sl = True
+          elif (t['peak'] - latest_close) >= t['trail'] and (
+              latest_close > t['entry']
+          ):
+            hit_tp_trail = True
         else:
-          if latest_low <= t['tp']:
-            hit_tp = True
-          elif latest_high >= t['sl']:
+          if latest_low < t['peak']:
+            t['peak'] = latest_low  # تحديث قاع السعر لأقل سعر بيع
+          if latest_high >= t['sl']:
             hit_sl = True
+          elif (latest_close - t['peak']) >= t['trail'] and (
+              latest_close < t['entry']
+          ):
+            hit_tp_trail = True
 
-        if hit_tp or hit_sl:
-          win_status = 1 if hit_tp else 0
+        if hit_sl or hit_tp_trail:
+          win_status = 1 if hit_tp_trail else 0
           note = (
-              'Hit TP (تحقيق الهدف الاستراتيجي)'
-              if hit_tp
+              'Hit Trailing Target (إغلاق ربح متحرك ناجح)'
+              if hit_tp_trail
               else 'Hit SL (وقف خسارة)'
           )
 
@@ -609,7 +641,7 @@ with tab3:
               'Symbol': t['symbol'],
               'Prediction': t['direction'],
               'Win': win_status,
-              'Confidence': 89.0,
+              'Confidence': 90.0,
               'Note': note,
           }])
           if os.path.exists(TRADES_LOG_FILE):
@@ -621,19 +653,18 @@ with tab3:
 
           send_ntfy_alert(
               ntfy_topic,
-              f'Trade Closed! {t["symbol"]} {t["direction"]} -> {note}',
-              'Strategic Status Update',
+              f'Trade Finished! {t["symbol"]} {t["direction"]} -> {note}',
+              'Apex Trade Status',
           )
           st.success(f'✅ تم إغلاق الصفقة النشطة لـ {t["symbol"]} بنتيجة: {note}')
-
           st.session_state.active_trade = None
         else:
           st.warning(
-              f'⏳ الصفقة لا تزال جارية في {t["symbol"]} (السعر الحالي:'
-              f' {latest_close}) - في انتظار وصول TP أو SL...'
+              f'⏳ الصفقة جارية في {t["symbol"]} (السعر الحالي:'
+              f' {latest_close}) - يتم تتبع القمة والربح المتحرك...'
           )
     else:
-      scan_markets = ['XAU/USD', 'BTC/USD', 'ETH/USD', 'EUR/USD']
+      scan_markets = ['US30', 'XAU/USD', 'BTC/USD', 'ETH/USD']
       for sm in scan_markets:
         df_scan = get_market_data(sm, interval, 60)
         news_txt_s, sent_s = get_market_news(sm)
@@ -649,6 +680,9 @@ with tab3:
               'macd',
               'macd_signal',
               'bb_position',
+              'tenkan_sen',
+              'kijun_sen',
+              'ichimoku_cross',
           ]
           row_scan = proc_scan.iloc[-1]
           X_scan = st.session_state.scaler.transform(
@@ -666,48 +700,41 @@ with tab3:
 
           if combined_scan_conf >= (confidence_threshold + 5):
             curr_p = round(row_scan['close'], 4)
-            vol_p = max(row_scan['volatility'], 0.1)
-            sl_p = vol_p * 1.2
-            tp_p = sl_p * rr_ratio
+            sl_dist_s = curr_p * (sl_pct_input / 100.0)
+            trail_dist_s = curr_p * (trail_pct_input / 100.0)
 
-            tp_price_s = (
-                round(curr_p + tp_p, 4)
-                if pred_scan == 1
-                else round(curr_p - tp_p, 4)
-            )
             sl_price_s = (
-                round(curr_p - sl_p, 4)
+                round(curr_p - sl_dist_s, 4)
                 if pred_scan == 1
-                else round(curr_p + sl_p, 4)
+                else round(curr_p + sl_dist_s, 4)
             )
 
             st.session_state.active_trade = {
                 'symbol': sm,
                 'direction': 'BUY' if pred_scan == 1 else 'SELL',
                 'entry': curr_p,
-                'tp': tp_price_s,
                 'sl': sl_price_s,
+                'trail': trail_dist_s,
+                'peak': curr_p,
             }
 
             dir_str = 'BUY' if pred_scan == 1 else 'SELL'
             msg_auto = (
-                f'AUTO STRAT {dir_str} | {sm} | Entry: {curr_p} | TP:'
-                f' {tp_price_s} | SL: {sl_price_s}'
+                f'AUTO APEX {dir_str} | {sm} | Entry: {curr_p} | SL:'
+                f' {sl_price_s}'
             )
             send_ntfy_alert(
-                ntfy_topic, msg_auto, f'Auto Autonomous Strategic {dir_str}'
+                ntfy_topic, msg_auto, f'Auto Autonomous Apex {dir_str}'
             )
             st.success(
-                f'🚀 تم التقاط صفقة استراتيجية تلقائية جديدة ومؤكدة في {sm}!'
+                f'🚀 تم التقاط صفقة خلفية تلقائية عبر محرك Apex في السوق {sm}!'
             )
             break
       else:
         st.info(
-            '🔍 جاري المسح الخلفي للاستراتيجيات والمؤشرات عبر مختلف الأسواق...'
+            '🔍 جاري المسح الخلفي الاستراتيجي وتتبع الشموع والمؤشرات السحابية...'
         )
 
-  if st.button('تحديث أوزان الشبكات العصبية الاستراتيجية يدوياً'):
+  if st.button('تحديث أوزان الشبكات العصبية ومحرك Apex يدوياً'):
     run_light_training()
-    st.success(
-        '✅ تم تحديث أوزان الذاكرة واستراتيجيات المؤشرات والأخبار بنجاح.'
-    )
+    st.success('✅ تمت إعادة معايرة نماذج الذكاء الاصطناعي والمؤشرات بنجاح.')
