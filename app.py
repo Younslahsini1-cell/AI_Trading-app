@@ -115,18 +115,14 @@ def send_alert(msg, title='XAU/USD Keyless Apex'):
 
 # --- جلب البيانات المجانية والماكرو من FXMacroData مباشرة دون مفتاح ---
 def fetch_gold_and_keyless_macro(limit=200):
-  # استخدام مسارات FXMacroData العامة المجانية (بيانات الدولار والماكرو الأساسية)
   try:
-    res = requests.get(
+    requests.get(
         'https://api.fxmacrodata.com/api/v1/announcements/usd/latest',
         timeout=4,
     )
-    if res.status_code == 200:
-      pass  # يتم دمج المعنويات لاحقاً
   except Exception:
     pass
 
-  # جلب أسعار الذهب الفورية عبر بدائل السوق المفتوحة
   try:
     url = f'https://api.binance.com/api/v3/klines?symbol=PAXGUSDT&interval={timeframe}&limit={limit}'
     res = requests.get(url, timeout=5).json()
@@ -160,7 +156,6 @@ def fetch_gold_and_keyless_macro(limit=200):
 
 
 def get_free_fxmacro_sentiment():
-  """جلب مؤشرات ماكرو الدولار مجاناً بدون مفتاح"""
   try:
     resp = requests.get(
         'https://api.fxmacrodata.com/api/v1/announcements/usd/latest',
@@ -241,7 +236,6 @@ model, scaler = load_or_train_model()
 
 
 def execute_automatic_scan_on_load():
-  """تنفيذ الفحص أوتوماتيكياً فور فتح الصفحة"""
   conn = sqlite3.connect(DB_FILE)
   df_act = pd.read_sql('SELECT * FROM active_trade WHERE id = 1', conn)
   conn.close()
@@ -260,7 +254,7 @@ def execute_automatic_scan_on_load():
   pred = np.argmax(probs)
   conf = probs[pred] * 100
 
-  macro_txt, macro_sc = get_free_fxmacro_sentiment()
+  _, macro_sc = get_free_fxmacro_sentiment()
   final_conf = (conf * 0.70) + (
       (macro_sc if pred == 1 else (1 - macro_sc)) * 30
   )
@@ -279,7 +273,8 @@ def execute_automatic_scan_on_load():
     c = conn.cursor()
     c.execute('DELETE FROM active_trade')
     c.execute(
-        'INSERT INTO active_trade (id, symbol, direction, entry, sl, tp, peak, time) VALUES (1, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO active_trade (id, symbol, direction, entry, sl, tp, peak,'
+        ' time) VALUES (1, ?, ?, ?, ?, ?, ?, ?)',
         (
             'XAU/USD',
             direction,
@@ -322,7 +317,6 @@ with tab1:
   c1.info(f'🌐 **حالة ماكرو FXMacroData:** {macro_txt}')
   c2.metric('قوة الماكرو', f'{macro_sc*100:.0f}%')
 
-  # تشغيل التحليل تلقائياً بمجرد دخول الموقع
   with st.spinner('جاري التحليل التلقائي الفوري فور فتح الموقع...'):
     auto_msg = execute_automatic_scan_on_load()
 
@@ -333,8 +327,8 @@ with tab1:
   if not df_act.empty:
     t = df_act.iloc[0]
     st.warning(
-        f'🔒 **صفقة نشطة حالياً:** {t["direction']} | الدخول: ${t["entry"]} | SL:'
-        f' ${t["sl"]} | TP: ${t["tp"]}'
+        f"🔒 **صفقة نشطة حالياً:** {t['direction']} | الدخول: ${t['entry']} | SL:"
+        f" ${t['sl']} | TP: ${t['tp']}"
     )
   else:
     st.success(f'🟢 {auto_msg}')
