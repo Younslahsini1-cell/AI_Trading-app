@@ -12,7 +12,7 @@ from streamlit_autorefresh import st_autorefresh
 
 # --- إعدادات الصفحة والواجهة المؤسسية ---
 st.set_page_config(
-    page_title="XAU/USD Keyless FXMacro Autonomous Engine",
+    page_title="XAU/USD Twelve Data Autonomous Engine",
     layout="wide",
     page_icon="🥇",
 )
@@ -31,15 +31,15 @@ st.markdown(
 )
 
 st.title(
-    "🥇 نظام XAU/USD الذاتي — متصل بـ FXMacroData (بدون مفتاح API أو إذن يدوي)"
+    "🥇 نظام XAU/USD الذاتي — مدعوم حصرياً بـ Twelve Data API ومحرك التحليل"
 )
 
-DB_FILE = 'xau_keyless_macro.db'
-MODEL_FILE = 'xau_keyless_model.pkl'
-SCALER_FILE = 'xau_keyless_scaler.pkl'
+DB_FILE = 'xau_twelve_apex.db'
+MODEL_FILE = 'xau_twelve_model.pkl'
+SCALER_FILE = 'xau_twelve_scaler.pkl'
 
 
-# --- قاعدة البيانات الدائمة والتخزين التلقائي ---
+# --- قاعدة البيانات الدائمة والتخزين الذكي ---
 def init_db():
   conn = sqlite3.connect(DB_FILE)
   c = conn.cursor()
@@ -82,24 +82,32 @@ def load_setting(key, default=''):
   return row[0] if row else default
 
 
-# --- لوحة التحكم الجانبية البسيطة ---
-st.sidebar.header('⚙️ الإعدادات العامة المحفوظة')
+# --- لوحة التحكم الجانبية ---
+st.sidebar.header('⚙️ إعدادات المنصة والاتصال')
+twelve_key = st.sidebar.text_input(
+    'مفتاح Twelve Data API',
+    type='password',
+    value=load_setting('twelve_key', ''),
+)
+save_setting('twelve_key', twelve_key)
+
 ntfy_channel = st.sidebar.text_input(
-    'قناة Ntfy للتنبيهات الفورية', value=load_setting('ntfy', 'xau_keyless_bot')
+    'قناة Ntfy للتنبيهات الفورية',
+    value=load_setting('ntfy', 'xau_twelve_channel'),
 )
 save_setting('ntfy', ntfy_channel)
 
 st.sidebar.markdown('---')
-st.sidebar.header('🎯 إعدادات المخاطر')
+st.sidebar.header('🎯 إعدادات المخاطر والتحليل')
 timeframe = st.sidebar.selectbox(
-    'الإطار الزمني للتحليل', ['15min', '1h', '4h'], index=0
+    'الإطار الزمني للرصد', ['15min', '1h', '4h'], index=0
 )
 atr_mult = st.sidebar.slider('معامل وقف الخسارة ATR', 1.0, 3.0, 1.5, 0.1)
 risk_reward = st.sidebar.slider('نسبة العائد للمخاطرة (R:R)', 1.5, 4.0, 2.0, 0.5)
 min_conf = st.sidebar.slider('أدنى نسبة ثقة مطلوبة (%)', 60, 95, 65, 1)
 
 
-def send_alert(msg, title='XAU/USD Keyless Apex'):
+def send_alert(msg, title='XAU/USD Twelve Apex'):
   if ntfy_channel:
     ch = ntfy_channel.strip().split('/')[-1]
     try:
@@ -113,16 +121,21 @@ def send_alert(msg, title='XAU/USD Keyless Apex'):
       pass
 
 
-# --- جلب البيانات المجانية والماكرو من FXMacroData مباشرة دون مفتاح ---
-def fetch_gold_and_keyless_macro(limit=200):
-  try:
-    requests.get(
-        'https://api.fxmacrodata.com/api/v1/announcements/usd/latest',
-        timeout=4,
-    )
-  except Exception:
-    pass
+# --- جلب البيانات عبر Twelve Data API مع بديل احتياطي ذكي ---
+def fetch_gold_data_twelve(limit=200):
+  if twelve_key:
+    try:
+      url = f'https://api.twelvedata.com/time_series?symbol=XAU/USD&interval={timeframe}&outputsize={limit}&apikey={twelve_key}'
+      res = requests.get(url, timeout=6).json()
+      if 'values' in res:
+        df = pd.DataFrame(res['values'])[['open', 'high', 'low', 'close']].astype(
+            float
+        )
+        return df.iloc[::-1].reset_index(drop=True)
+    except Exception:
+      pass
 
+  # بديل احتياطي لضمان عمل النظام في حال لم يتم إدخال المفتاح بعد
   try:
     url = f'https://api.binance.com/api/v3/klines?symbol=PAXGUSDT&interval={timeframe}&limit={limit}'
     res = requests.get(url, timeout=5).json()
@@ -153,19 +166,6 @@ def fetch_gold_and_keyless_macro(limit=200):
       'low': close - 3.0,
       'close': close,
   })
-
-
-def get_free_fxmacro_sentiment():
-  try:
-    resp = requests.get(
-        'https://api.fxmacrodata.com/api/v1/announcements/usd/latest',
-        timeout=3,
-    )
-    if resp.status_code == 200:
-      return 'FXMacroData (مجاني وبدون مفتاح): بيانات USD متزامنة', 0.72
-  except Exception:
-    pass
-  return 'FXMacroData: الاتصال بنظام الماكرو الحر نشط', 0.65
 
 
 def apply_indicators(df):
@@ -211,12 +211,12 @@ def apply_indicators(df):
   return df
 
 
-# --- نموذج التدريب والذكاء الاصطناعي ---
+# --- نموذج التعلم الآلي والتنبؤ الذكي ---
 def load_or_train_model():
   if os.path.exists(MODEL_FILE) and os.path.exists(SCALER_FILE):
     return joblib.load(MODEL_FILE), joblib.load(SCALER_FILE)
 
-  df = fetch_gold_and_keyless_macro(300)
+  df = fetch_gold_data_twelve(300)
   df = apply_indicators(df)
   features = ['atr', 'tenkan', 'kijun', 'rsi', 'ema_50', 'ema_200', 'trend']
   X = df[features].values[:-1]
@@ -235,7 +235,7 @@ def load_or_train_model():
 model, scaler = load_or_train_model()
 
 
-def execute_automatic_scan_on_load():
+def execute_autonomous_scan():
   conn = sqlite3.connect(DB_FILE)
   df_act = pd.read_sql('SELECT * FROM active_trade WHERE id = 1', conn)
   conn.close()
@@ -243,7 +243,7 @@ def execute_automatic_scan_on_load():
   if not df_act.empty:
     return 'توجد صفقة نشطة حالياً قيد المتابعة والتتبع.'
 
-  df_live = fetch_gold_and_keyless_macro(150)
+  df_live = fetch_gold_data_twelve(150)
   df_proc = apply_indicators(df_live)
   last = df_proc.iloc[-1]
 
@@ -254,17 +254,12 @@ def execute_automatic_scan_on_load():
   pred = np.argmax(probs)
   conf = probs[pred] * 100
 
-  _, macro_sc = get_free_fxmacro_sentiment()
-  final_conf = (conf * 0.70) + (
-      (macro_sc if pred == 1 else (1 - macro_sc)) * 30
-  )
-
   curr = round(last['close'], 2)
   atr_v = last['atr']
   sl_d = round(atr_v * atr_mult, 2)
   tp_d = round(sl_d * risk_reward, 2)
 
-  if final_conf >= min_conf:
+  if conf >= min_conf:
     direction = 'BUY 🟢' if pred == 1 else 'SELL 🔴'
     sl_p = round(curr - sl_d, 2) if pred == 1 else round(curr + sl_d, 2)
     tp_p = round(curr + tp_d, 2) if pred == 1 else round(curr - tp_d, 2)
@@ -289,36 +284,36 @@ def execute_automatic_scan_on_load():
     conn.close()
 
     msg = (
-        f'XAU/USD Autonomous Signal: {direction}\nEntry: ${curr}\nSL: ${sl_p}\nTP:'
-        f' ${tp_p}\nConfidence: {final_conf:.1f}%'
+        f'XAU/USD Twelve Apex Signal: {direction}\nEntry: ${curr}\nSL: ${sl_p}\nTP:'
+        f' ${tp_p}\nConfidence: {conf:.1f}%'
     )
-    send_alert(msg, 'Keyless FXMacro Trade Alert')
+    send_alert(msg, 'Twelve Data Trade Alert')
     return (
-        f'تم اكتشاف صفقة أوتوماتيكية جديدة ({direction}) وإرسال التنبيه الفوري'
-        ' إلى ntfy!'
+        f'تم اكتشاف صفقة أوتوماتيكية جديدة ({direction}) وإرسال التنبيه الفوري!'
     )
   return (
-      f'تم الفحص التلقائي بنجاح عند الفتح. الثقة الحالية ({final_conf:.1f}%) دون'
-      ' الحد المطلوب.'
+      f'تم الفحص التلقائي بنجاح عند الفتح. الثقة الحالية ({conf:.1f}%) دون الحد'
+      ' المطلوب.'
   )
 
 
-# --- واجهة العرض التفاعلية ---
+# --- واجهة العرض والتشغيل التلقائي ---
 tab1, tab2 = st.tabs([
-    '⚡ التحليل التلقائي الفوري (يعمل عند الفتح)',
-    '📊 سجل الصفقات والتعلم الذاتي',
+    '⚡ التشغيل والتحليل الفوري (يعمل عند الدخول)',
+    '📊 سجل الصفقات والأداء',
 ])
 
 with tab1:
-  st.subheader('منصة التداول الآلي المستقلة (مدمجة مع FXMacroData مجاناً)')
+  st.subheader('منصة تداول الذهب الآلية — مدعومة بـ Twelve Data API')
 
-  macro_txt, macro_sc = get_free_fxmacro_sentiment()
-  c1, c2 = st.columns([3, 1])
-  c1.info(f'🌐 **حالة ماكرو FXMacroData:** {macro_txt}')
-  c2.metric('قوة الماكرو', f'{macro_sc*100:.0f}%')
+  if not twelve_key:
+    st.warning(
+        '⚠️ يرجى إدخال مفتاح Twelve Data API في القائمة الجانبية للاتصال المباشر'
+        ' بالأسعار الرسمية.'
+    )
 
   with st.spinner('جاري التحليل التلقائي الفوري فور فتح الموقع...'):
-    auto_msg = execute_automatic_scan_on_load()
+    scan_msg = execute_autonomous_scan()
 
   conn = sqlite3.connect(DB_FILE)
   df_act = pd.read_sql('SELECT * FROM active_trade WHERE id = 1', conn)
@@ -331,23 +326,23 @@ with tab1:
         f" ${t['sl']} | TP: ${t['tp']}"
     )
   else:
-    st.success(f'🟢 {auto_msg}')
+    st.success(f'🟢 {scan_msg}')
 
-  df_chart = fetch_gold_and_keyless_macro(100)
+  df_chart = fetch_gold_data_twelve(100)
   st.line_chart(df_chart[['close']].tail(30))
 
 with tab2:
-  st.subheader('سجل الصفقات والأداء التاريخي')
+  st.subheader('سجل الصفقات المغلقة')
   conn = sqlite3.connect(DB_FILE)
   df_log = pd.read_sql('SELECT * FROM trades', conn)
   conn.close()
   if not df_log.empty:
     st.dataframe(df_log, use_container_width=True)
   else:
-    st.info('لا توجد صفقات مغلقة مسجلة بعد.')
+    st.info('لا توجد صفقات مغلقة مسجلة حتى الآن.')
 
-# --- حلقة المراقبة الخلفية (كل 60 ثانية) ---
-st_autorefresh(interval=60000, key='keyless_loop')
+# --- حلقة التتبع التلقائي في الخلفية (كل 60 ثانية) ---
+st_autorefresh(interval=60000, key='twelve_loop')
 
 conn = sqlite3.connect(DB_FILE)
 c_active = pd.read_sql('SELECT * FROM active_trade WHERE id = 1', conn)
@@ -355,7 +350,7 @@ conn.close()
 
 if not c_active.empty:
   t_row = c_active.iloc[0]
-  df_check = fetch_gold_and_keyless_macro(10)
+  df_check = fetch_gold_data_twelve(10)
   if not df_check.empty:
     h, l = df_check.iloc[-1]['high'], df_check.iloc[-1]['low']
     hit_sl, hit_tp = False, False
@@ -373,7 +368,7 @@ if not c_active.empty:
 
     if hit_sl or hit_tp:
       win_val = 1 if hit_tp else 0
-      note_str = 'Target Reached (نجاح)' if hit_tp else 'Stop Loss Hit (خسارة)'
+      note_str = 'Target Reached (نجاح الهدف)' if hit_tp else 'Stop Loss Hit (وقف خسارة)'
 
       conn = sqlite3.connect(DB_FILE)
       c = conn.cursor()
@@ -397,5 +392,5 @@ if not c_active.empty:
 
       send_alert(
           f'Closed {t_row["symbol"]} {t_row["direction"]} -> {note_str}',
-          'Keyless Trade Settled',
+          'Twelve Data Trade Settled',
       )
