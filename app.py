@@ -11,9 +11,9 @@ import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 import yfinance as yf
 
-# --- إعدادات الصفحة والواجهة المؤسسية ---
+# --- إعدادات الصفحة ---
 st.set_page_config(
-    page_title="XAU/USD Deep Autonomous AI",
+    page_title="XAU/USD Deep AI Engine",
     layout="wide",
     page_icon="🧠",
 )
@@ -25,8 +25,10 @@ st.markdown(
     html, body, [class*="css"] { font-family: 'Cairo', sans-serif !important; }
     .stApp { background-color: #07090e; color: #f3f4f6; }
     section[data-testid="stSidebar"] { background-color: #0f172a; border-right: 1px solid #1e293b; }
-    .ai-level-container { background: linear-gradient(90deg, #1e3a8a 0%, #0f172a 100%); padding: 20px; border-radius: 15px; text-align: center; border: 1px solid #3b82f6; box-shadow: 0 0 20px rgba(59, 130, 246, 0.3); }
-    .ai-level-text { font-size: 2.5rem; font-weight: 900; color: #fbbf24; margin: 0; }
+    .ai-level-card { background: linear-gradient(135deg, #1e3a8a 0%, #0f172a 100%); padding: 30px; border-radius: 20px; text-align: center; border: 1px solid #3b82f6; box-shadow: 0 0 25px rgba(59, 130, 246, 0.4); margin-bottom: 20px;}
+    .ai-level-title { font-size: 1.2rem; color: #93c5fd; font-weight: 700; margin-bottom: 10px; }
+    .ai-level-value { font-size: 4rem; font-weight: 900; color: #fbbf24; line-height: 1; }
+    .ai-level-sub { font-size: 1rem; color: #64748b; margin-top: 10px; }
 </style>
 """,
     unsafe_allow_html=True,
@@ -37,86 +39,82 @@ MODEL_FILE = 'xau_deep_mlp.pkl'
 SCALER_FILE = 'xau_deep_scaler.pkl'
 
 
-# --- قواعد البيانات وتخزين مستوى الخبرة ---
+# --- قواعد البيانات وتخزين الخبرة ---
 def init_db():
-  conn = sqlite3.connect(DB_FILE)
-  c = conn.cursor()
-  c.execute("""CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)""")
-  c.execute("""CREATE TABLE IF NOT EXISTS trades (id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT, symbol TEXT, direction TEXT, entry REAL, sl REAL, tp REAL, win INTEGER, note TEXT)""")
-  c.execute("""CREATE TABLE IF NOT EXISTS active_trade (id INTEGER PRIMARY KEY, symbol TEXT, direction TEXT, entry REAL, sl REAL, tp REAL, peak REAL, time TEXT)""")
-  conn.commit()
-  conn.close()
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("""CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS trades (id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT, symbol TEXT, direction TEXT, entry REAL, sl REAL, tp REAL, win INTEGER, note TEXT)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS active_trade (id INTEGER PRIMARY KEY, symbol TEXT, direction TEXT, entry REAL, sl REAL, tp REAL, peak REAL, time TEXT)""")
+    conn.commit()
+    conn.close()
 
 init_db()
 
 def save_setting(key, val):
-  conn = sqlite3.connect(DB_FILE)
-  c = conn.cursor()
-  c.execute('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', (key, str(val)))
-  conn.commit()
-  conn.close()
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', (key, str(val)))
+    conn.commit()
+    conn.close()
 
 def load_setting(key, default=''):
-  conn = sqlite3.connect(DB_FILE)
-  c = conn.cursor()
-  c.execute('SELECT value FROM settings WHERE key = ?', (key,))
-  row = c.fetchone()
-  conn.close()
-  return row[0] if row else default
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('SELECT value FROM settings WHERE key = ?', (key,))
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else default
 
 def get_successful_trades_count():
-  conn = sqlite3.connect(DB_FILE)
-  c = conn.cursor()
-  c.execute('SELECT COUNT(*) FROM trades WHERE win = 1')
-  count = c.fetchone()[0]
-  conn.close()
-  return count
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('SELECT COUNT(*) FROM trades WHERE win = 1')
+    count = c.fetchone()[0]
+    conn.close()
+    return count
 
-# --- القائمة الجانبية (الإعدادات) ---
+# --- القائمة الجانبية ---
 st.sidebar.header('⚙️ إعدادات الذكاء الاصطناعي')
-twelve_key = st.sidebar.text_input('مفتاح Twelve Data API (للتنفيذ اللحظي)', type='password', value=load_setting('twelve_key', ''))
+twelve_key = st.sidebar.text_input('مفتاح Twelve Data API', type='password', value=load_setting('twelve_key', ''))
 save_setting('twelve_key', twelve_key)
 
-ntfy_channel = st.sidebar.text_input('قناة Ntfy للتنبيهات الفورية', value=load_setting('ntfy', 'xau_deep_channel'))
+ntfy_channel = st.sidebar.text_input('قناة Ntfy للتنبيهات', value=load_setting('ntfy', 'xau_deep_channel'))
 save_setting('ntfy', ntfy_channel)
 
 if not twelve_key:
-  conn = sqlite3.connect(DB_FILE)
-  c = conn.cursor()
-  c.execute('DELETE FROM active_trade')
-  conn.commit()
-  conn.close()
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('DELETE FROM active_trade')
+    conn.commit()
+    conn.close()
 
 st.sidebar.markdown('---')
 st.sidebar.header('🎯 إدارة المخاطر')
-atr_mult = st.sidebar.slider('معامل وقف الخسارة ATR', 1.0, 3.0, 1.5, 0.1)
+atr_mult = st.sidebar.slider('معامل الوقف ATR', 1.0, 3.0, 1.5, 0.1)
 risk_reward = st.sidebar.slider('نسبة العائد (R:R)', 1.5, 4.0, 2.0, 0.5)
 min_conf = st.sidebar.slider('أدنى ثقة مطلوبة (%)', 60, 95, 75, 1)
 
+def send_alert(msg, title='🧠 Deep AI Alert'):
+    if ntfy_channel:
+        ch = ntfy_channel.strip().split('/')[-1]
+        try:
+            requests.post(
+                f'https://ntfy.sh/{ch}',
+                data=msg.encode('utf-8'),
+                headers={'Title': title, 'Priority': 'high'},
+                timeout=4,
+            )
+        except Exception:
+            pass
 
-def send_alert(msg, title='🧠 XAU/USD Deep AI Alert'):
-  if ntfy_channel:
-    ch = ntfy_channel.strip().split('/')[-1]
-    try:
-      requests.post(
-          f'https://ntfy.sh/{ch}',
-          data=msg.encode('utf-8'),
-          headers={'Title': title, 'Priority': 'high'},
-          timeout=4,
-      )
-    except Exception:
-      pass
-
-# --- مصادر البيانات والتحليل المزدوج (فني + أساسي) ---
-# 1. المصدر الخلفي (YFinance) للتدريب الماكرو (الدولار والذهب)
-@st.cache_data(ttl=3600)
+# --- مصادر البيانات والتحليل المزدوج ---
+# 1. التدريب الخلفي باستخدام YFinance (الذهب + الدولار)
+@st.cache_data(ttl=86400) # تحديث بيانات التدريب يومياً فقط لتخفيف الضغط
 def fetch_background_training_data():
     try:
-        # جلب بيانات الذهب
-        gold = yf.download("GC=F", period="60d", interval="1h", progress=False)
-        # جلب بيانات مؤشر الدولار (التحليل الأساسي)
-        dxy = yf.download("DX-Y.NYB", period="60d", interval="1h", progress=False)
-        
+        gold = yf.download("GC=F", period="1y", interval="1d", progress=False)
+        dxy = yf.download("DX-Y.NYB", period="1y", interval="1d", progress=False)
         if gold.empty or dxy.empty:
             return pd.DataFrame()
 
@@ -124,136 +122,242 @@ def fetch_background_training_data():
         df['close'] = gold['Close'].squeeze()
         df['high'] = gold['High'].squeeze()
         df['low'] = gold['Low'].squeeze()
-        
-        # مؤشر الدولار كمقوم أساسي
         df['dxy_close'] = dxy['Close'].squeeze()
         
-        # ملء الفراغات الناتجة عن اختلاف أوقات التداول
         df.ffill(inplace=True)
         df.dropna(inplace=True)
         return df.reset_index(drop=True)
     except Exception:
         return pd.DataFrame()
 
-# 2. المصدر الحي (Twelve Data) لتنفيذ الصفقات
-def fetch_live_execution_data_twelve(limit=100):
-  if not twelve_key:
+# 2. البيانات اللحظية من Twelve Data (الذهب فقط للتنفيذ الدقيق)
+def fetch_live_data_twelve(limit=100):
+    if not twelve_key:
+        return pd.DataFrame()
+    try:
+        url = f'https://api.twelvedata.com/time_series?symbol=XAU/USD&interval=1h&outputsize={limit}&apikey={twelve_key}'
+        res = requests.get(url, timeout=6).json()
+        if 'values' in res:
+            df = pd.DataFrame(res['values'])[['open', 'high', 'low', 'close']].astype(float)
+            return df.iloc[::-1].reset_index(drop=True)
+    except Exception:
+        pass
     return pd.DataFrame()
-  try:
-    url_xau = f'https://api.twelvedata.com/time_series?symbol=XAU/USD&interval=1h&outputsize={limit}&apikey={twelve_key}'
-    url_dxy = f'https://api.twelvedata.com/time_series?symbol=DXY&interval=1h&outputsize={limit}&apikey={twelve_key}'
+
+def apply_deep_indicators(df, is_training=False):
+    if df is None or df.empty or len(df) < 52:
+        return pd.DataFrame()
     
-    res_xau = requests.get(url_xau, timeout=6).json()
-    res_dxy = requests.get(url_dxy, timeout=6).json()
+    tr = pd.concat([df['high'] - df['low'], np.abs(df['high'] - df['close'].shift()), np.abs(df['low'] - df['close'].shift())], axis=1).max(axis=1)
+    df['atr'] = tr.rolling(14).mean()
+    df['ema_50'] = df['close'].ewm(span=50, adjust=False).mean()
+    df['ema_200'] = df['close'].ewm(span=200, adjust=False).mean()
     
-    if 'values' in res_xau and 'values' in res_dxy:
-        df_xau = pd.DataFrame(res_xau['values'])[::-1].reset_index(drop=True)
-        df_dxy = pd.DataFrame(res_dxy['values'])[::-1].reset_index(drop=True)
+    delta = df['close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+    rs = gain / (loss + 1e-6)
+    df['rsi'] = 100 - (100 / (1 + rs))
+
+    # إضافة تأثير الدولار إذا كنا في مرحلة التدريب
+    if is_training and 'dxy_close' in df.columns:
+        df['dxy_roc'] = df['dxy_close'].pct_change(periods=14) * 100
+    else:
+        df['dxy_roc'] = 0.0 # قيمة محايدة أثناء التنفيذ الحي لعدم استهلاك API اضافي
+
+    df.dropna(inplace=True)
+    return df
+
+# --- محرك التعلم العميق (Deep Learning Engine) ---
+def train_deep_model():
+    if os.path.exists(MODEL_FILE) and os.path.exists(SCALER_FILE):
+        return joblib.load(MODEL_FILE), joblib.load(SCALER_FILE)
+
+    df_train = fetch_background_training_data()
+    if df_train.empty:
+        model = MLPClassifier(hidden_layer_sizes=(100, 50), max_iter=500, random_state=42)
+        scaler = StandardScaler()
+        return model, scaler
+
+    df_train = apply_deep_indicators(df_train, is_training=True)
+    features = ['atr', 'ema_50', 'ema_200', 'rsi', 'dxy_roc']
+    
+    if df_train.empty or len(df_train) < 50:
+        model = MLPClassifier(hidden_layer_sizes=(100, 50), max_iter=500, random_state=42)
+        scaler = StandardScaler()
+        return model, scaler
+
+    X = df_train[features].values[:-1]
+    y = np.where(df_train['close'].shift(-1) > df_train['close'], 1, 0)[:-1]
+
+    scaler = StandardScaler()
+    X_sc = scaler.fit_transform(X)
+    
+    # شبكة عصبية عميقة تتعلم العلاقات المعقدة بين الدولار والذهب والمؤشرات الفنية
+    model = MLPClassifier(hidden_layer_sizes=(100, 50), activation='relu', solver='adam', max_iter=1000, random_state=42)
+    model.fit(X_sc, y)
+
+    joblib.dump(model, MODEL_FILE)
+    joblib.dump(scaler, SCALER_FILE)
+    return model, scaler
+
+model, scaler = train_deep_model()
+
+def execute_autonomous_scan():
+    if not twelve_key:
+        return 'النظام متوقف: يرجى إدخال مفتاح Twelve Data API.'
+
+    conn = sqlite3.connect(DB_FILE)
+    df_act = pd.read_sql('SELECT * FROM active_trade WHERE id = 1', conn)
+    conn.close()
+
+    if not df_act.empty:
+        return 'الذكاء الاصطناعي يراقب الصفقة النشطة حالياً.'
+
+    df_live = fetch_live_data_twelve(150)
+    if df_live.empty or len(df_live) < 52:
+        return 'لا توجد صفقة: جاري جمع بيانات السوق الحية.'
+
+    df_proc = apply_deep_indicators(df_live, is_training=False)
+    if df_proc.empty:
+        return 'لا توجد صفقة: الشروط الفنية لم تكتمل بعد.'
+
+    last = df_proc.iloc[-1]
+    feat = ['atr', 'ema_50', 'ema_200', 'rsi', 'dxy_roc']
+
+    try:
+        x_in = scaler.transform(last[feat].values.reshape(1, -1))
+        probs = model.predict_proba(x_in)[0]
+        pred = np.argmax(probs)
+        conf = probs[pred] * 100
+    except Exception:
+        return 'الشبكة العصبية قيد التهيئة.'
+
+    curr = round(last['close'], 2)
+    atr_v = last['atr']
+    sl_d = round(atr_v * atr_mult, 2)
+    tp_d = round(sl_d * risk_reward, 2)
+
+    if conf >= min_conf:
+        direction = 'BUY 🟢' if pred == 1 else 'SELL 🔴'
+        sl_p = round(curr - sl_d, 2) if pred == 1 else round(curr + sl_d, 2)
+        tp_p = round(curr + tp_d, 2) if pred == 1 else round(curr - tp_d, 2)
+
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute('DELETE FROM active_trade')
+        c.execute('INSERT INTO active_trade (id, symbol, direction, entry, sl, tp, peak, time) VALUES (1, ?, ?, ?, ?, ?, ?, ?)',
+                  ('XAU/USD', direction, curr, sl_p, tp_p, curr, str(datetime.now(timezone.utc).strftime('%H:%M:%S'))))
+        conn.commit()
+        conn.close()
+
+        send_alert(f'🧠 AI Trade Executed: {direction}\nEntry: ${curr}\nSL: ${sl_p}\nTP: ${tp_p}\nAI Confidence: {conf:.1f}%')
+        return f'تم اتخاذ قرار ({direction}) بثقة {conf:.1f}% وتم إرسال التنبيه.'
+
+    return f'لا توجد صفقة: ثقة الذكاء الاصطناعي الحالية ({conf:.1f}%) أقل من المطلوب ({min_conf}%).'
+
+
+# --- واجهة المستخدم (التركيز على مستوى الذكاء الاصطناعي فقط) ---
+st.title("🧠 نظام التداول العميق — XAU/USD")
+
+# حساب مستوى الذكاء الاصطناعي (AI Level = عدد الصفقات الناجحة)
+success_count = get_successful_trades_count()
+ai_level = max(1, int(success_count * 1.5)) # معادلة بسيطة لتطور المستوى
+
+st.markdown(f"""
+<div class="ai-level-card">
+    <div class="ai-level-title">AI EVOLUTION LEVEL</div>
+    <div class="ai-level-value">Lvl. {ai_level}</div>
+    <div class="ai-level-sub">Successful Trades: {success_count} | Deep Neural Network Active</div>
+</div>
+""", unsafe_allow_html=True)
+
+tab1, tab2 = st.tabs(['⚡ حالة الذكاء الاصطناعي', '📊 سجل الخبرات المكتسبة (الصفقات)'])
+
+with tab1:
+    if not twelve_key:
+        st.warning('⚠️ النظام نائم: أدخل مفتاح Twelve Data API لإيقاظ الشبكة العصبية وربطها بالسوق.')
+
+    with st.spinner('الشبكة العصبية تحلل البيانات...'):
+        scan_msg = execute_autonomous_scan()
+
+    conn = sqlite3.connect(DB_FILE)
+    df_act = pd.read_sql('SELECT * FROM active_trade WHERE id = 1', conn)
+    conn.close()
+
+    if not df_act.empty and twelve_key:
+        t = df_act.iloc[0]
+        st.warning(f"🔒 **الشبكة العصبية تدير صفقة حالياً:** {t['direction']} | الدخول: ${t['entry']} | SL: ${t['sl']} | TP: ${t['tp']}")
+    else:
+        st.info(f'🔍 {scan_msg}')
+
+with tab2:
+    conn = sqlite3.connect(DB_FILE)
+    df_log = pd.read_sql('SELECT * FROM trades ORDER BY id DESC', conn)
+    conn.close()
+    if not df_log.empty:
+        st.dataframe(df_log, use_container_width=True)
+    else:
+        st.info('لا توجد صفقات مغلقة مسجلة حتى الآن. الشبكة العصبية بانتظار أول نجاح.')
+
+# --- المراقبة التلقائية (كل 60 ثانية) ---
+st_autorefresh(interval=60000, key='deep_ai_loop')
+
+if twelve_key:
+    conn = sqlite3.connect(DB_FILE)
+    c_active = pd.read_sql('SELECT * FROM active_trade WHERE id = 1', conn)
+    conn.close()
+
+    if not c_active.empty:
+        t_row = c_active.iloc[0]
+        df_check = fetch_live_data_twelve(50)
         
-        df = pd.DataFrame()
-        df['close'] = df_xau['close'].astype(float)
-        df['high'] = df_xau['high'].astype(float)
-        df['low'] = df_xau['low'].astype(float)
-        df['dxy_close'] = df_dxy['close'].astype(float)
-        return df
-  except Exception:
-    pass
-  return pd.DataFrame()
+        if not df_check.empty and len(df_check) >= 52:
+            df_analyzed = apply_deep_indicators(df_check, is_training=False)
+            
+            if not df_analyzed.empty:
+                last_row = df_analyzed.iloc[-1]
+                feat_list = ['atr', 'ema_50', 'ema_200', 'rsi', 'dxy_roc']
+                
+                try:
+                    x_current = scaler.transform(last_row[feat_list].values.reshape(1, -1))
+                    current_probs = model.predict_proba(x_current)[0]
+                    curr_pred = np.argmax(current_probs)
+                    curr_conf = current_probs[curr_pred] * 100
 
-def apply_deep_indicators(df):
-  if df is None or df.empty or len(df) < 52:
-    return pd.DataFrame()
-  
-  # التحليل الفني للذهب
-  tr = pd.concat([df['high'] - df['low'], np.abs(df['high'] - df['close'].shift()), np.abs(df['low'] - df['close'].shift())], axis=1).max(axis=1)
-  df['atr'] = tr.rolling(14).mean()
-  df['ema_50'] = df['close'].ewm(span=50, adjust=False).mean()
-  df['ema_200'] = df['close'].ewm(span=200, adjust=False).mean()
-  df['rsi'] = 100 - (100 / (1 + (df['close'].diff().clip(lower=0).rolling(14).mean() / ((-df['close'].diff().clip(upper=0)).rolling(14).mean() + 1e-6))))
-  
-  # التحليل الأساسي/الماكرو (قوة وتأثير الدولار)
-  # حساب ارتباط الذهب بالدولار وتغيراته (علاقة عكسية عادة)
-  df['dxy_roc'] = df['dxy_close'].pct_change(periods=14) * 100 # زخم الدولار
-  df['macro_divergence'] = df['close'].pct_change() - df['dxy_close'].pct_change()
+                    is_buy_trade = 'BUY' in t_row['direction']
+                    reversal_detected = False
 
-  df.dropna(inplace=True)
-  return df
+                    if is_buy_trade and curr_pred == 0 and curr_conf >= (min_conf - 5):
+                        reversal_detected = True
+                    elif not is_buy_trade and curr_pred == 1 and curr_conf >= (min_conf - 5):
+                        reversal_detected = True
 
+                    if reversal_detected:
+                        send_alert(f'⚠️ تنبيه من الشبكة العصبية: رصد انعكاس للسوق ضد الصفقة ({t_row["direction"]}) بقوة ({curr_conf:.1f}%).', '🚨 AI Reversal Warning')
+                except Exception:
+                    pass
 
-# --- محرك الشبكة العصبية العميقة للتدريب والتطور ---
-def train_deep_neural_network():
-  # بناء أو تحميل العقل الذكي
-  if os.path.exists(MODEL_FILE) and os.path.exists(SCALER_FILE):
-    model = joblib.load(MODEL_FILE)
-    scaler = joblib.load(SCALER_FILE)
-  else:
-    # شبكةلتصميم هذا النظام الذي يدمج التحليلين الفني والأساسي ويفصل بين حركة الذهب والدولار قبل دراسة تأثيرهما المشترك، يجب بناء معمارية برمجية تعتمد على خوادمك الخاصة (Backend) لتشغيل الشبكات العصبية في الخلفية بشكل مستمر، حيث أن دوري كنموذج ذكاء اصطناعي هو تزويدك بالهيكلة والأكواد اللازمة لتدريب هذه النماذج وتشغيلها، وليس استضافة العمليات الحية.
+                h, l = last_row['high'], last_row['low']
+                hit_sl, hit_tp = False, False
 
-إليك الخطة المعمارية والبرمجية لتنفيذ هذا النظام:
+                if is_buy_trade:
+                    if l <= t_row['sl']: hit_sl = True
+                    elif h >= t_row['tp']: hit_tp = True
+                else:
+                    if h >= t_row['sl']: hit_sl = True
+                    elif l <= t_row['tp']: hit_tp = True
 
-**1. معمارية الشبكات العصبية (الخلفية والتدريب)**
-لتحقيق تحليل منفصل ثم دمج التأثير على زوج (XAU/USD)، تحتاج إلى بناء 3 نماذج ذكاء اصطناعي تعمل بالتوازي باستخدام مكتبات مثل TensorFlow أو PyTorch:
-*   **الشبكة الأولى (محلل الدولار):** تتدرب حصرياً على بيانات مؤشر الدولار (DXY) والأخبار الاقتصادية الأمريكية.
-*   **الشبكة الثانية (محلل الذهب):** تتدرب حصرياً على عقود الذهب (XAU)، معدلات التضخم العالمية، والطلب على الملاذ الآمن.
-*   **الشبكة الثالثة (النموذج المدمج - Meta Model):** تأخذ المخرجات (التوقعات ونسب الثقة) من الشبكتين الأولى والثانية كـ "مدخلات جديدة"، وتربطها بالبيانات التاريخية لزوج XAU/USD لتوقع الاتجاه النهائي.
+                if hit_sl or hit_tp:
+                    win_val = 1 if hit_tp else 0
+                    note_str = 'AI Target Reached (تم التعلم بنجاح)' if hit_tp else 'AI Stop Loss Hit (خطأ وتم الاستيعاب)'
 
-**2. دمج التحليل الفني والأساسي**
-تتطلب الشبكات العصبية تحويل جميع البيانات إلى أرقام لتتمكن من معالجتها:
-*   **التحليل الفني:** يتم جلب أسعار الافتتاح، الإغلاق، الحجم (OHLCV) والمؤشرات (RSI, MACD) عبر مفتاح **Twelve Data API**.
-*   **التحليل الأساسي:** يتم جلب الأخبار الاقتصادية عبر واجهات برمجية أخرى (مثل Finnhub أو Alpha Vantage). يتم تمرير هذه الأخبار عبر نموذج تحليل المشاعر (Sentiment Analysis) مثل `FinBERT` لتحويل الخبر إلى درجة رقمية (مثلاً: +1 إيجابي جداً للدولار، -1 سلبي)، وتُدمج هذه الدرجات مع البيانات الفنية.
+                    conn = sqlite3.connect(DB_FILE)
+                    c = conn.cursor()
+                    c.execute('INSERT INTO trades (date, symbol, direction, entry, sl, tp, win, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                              (str(datetime.now(timezone.utc).date()), t_row['symbol'], t_row['direction'], t_row['entry'], t_row['sl'], t_row['tp'], win_val, note_str))
+                    c.execute('DELETE FROM active_trade')
+                    conn.commit()
+                    conn.close()
 
-**3. واجهة المستخدم المبسطة (Frontend)**
-بناءً على طلبك، ستكون الواجهة الأمامية خالية من التعقيدات والمخططات البيانية (Charts)، وتحتوي فقط على:
-*   **مؤشر مستوى الذكاء (AI Evolution Level):** خوارزمية بسيطة تحسب المستوى بناءً على الصفقات الناجحة. 
-    *   المعادلة المقترحة: `المستوى = (إجمالي الصفقات الناجحة × معدل الربح) / 100`.
-    *   كلما زادت الصفقات الناجحة، يرتفع شريط التقدم (Progress Bar) ويعرض المستوى الحالي (مثلاً: Level 42).
-*   **سجل الإشعارات:** قائمة بالقرارات التي اتخذها النظام مسبقاً لمتابعة الأداء.
-
-**4. منطق الإشعارات وتتبع الصفقات**
-يتم برمجة الخلفية (Backend) لتقييم السوق كل فترة زمنية (مثلاً كل 15 دقيقة):
-*   إذا أعطى "النموذج المدمج" نسبة ثقة تتجاوز 80% في اتجاه معين لزوج XAU/USD، يقوم النظام بتسجيل الصفقة افتراضياً وتتبعها عبر بيانات Twelve Data.
-*   يتم إرسال الإشعار فوراً إلى الواجهة عبر (WebSockets) أو إلى تطبيقات خارجية (مثل Telegram) متضمناً: نوع الصفقة (بيع/شراء)، والسبب باختصار (مثلاً: ضعف الدولار الأساسي مع تشبع بيعي فني للذهب).
-*   عند إغلاق الصفقة الافتراضية، يتحقق النظام من النتيجة. إذا كانت ناجحة، يتم تحديث "مستوى تطور الذكاء" في قاعدة البيانات وعكسه فوراً على الواجهة.
-
-**5. الهيكل البرمجي الأساسي (بايثون - للخوادم)**
-إليك المخطط البرمجي لآلية جمع البيانات وتغذية النماذج في الخلفية:
-
-```python
-import requests
-from transformers import pipeline
-# افتراض وجود نماذجك المدربة مسبقاً
-# from my_models import GoldModel, USDModel, CombinedModel 
-
-TWELVE_DATA_API_KEY = "YOUR_TWELVE_KEY"
-sentiment_analyzer = pipeline("text-classification", model="ProsusAI/finbert")
-
-def get_technical_data(symbol):
-    url = f"[https://api.twelvedata.com/time_series?symbol=](https://api.twelvedata.com/time_series?symbol=){symbol}&interval=1h&apikey={TWELVE_DATA_API_KEY}"
-    response = requests.get(url).json()
-    return response['values']
-
-def get_fundamental_score(news_headlines):
-    # تحويل الأخبار إلى درجات رقمية
-    scores = sentiment_analyzer(news_headlines)
-    # تجميع الدرجات لإنتاج رقم يمثل الحالة الأساسية
-    return aggregate_scores(scores)
-
-def analyze_market():
-    # 1. جلب البيانات
-    usd_tech = get_technical_data("DXY")
-    gold_tech = get_technical_data("XAU/USD")
-    
-    usd_fund = get_fundamental_score(get_usd_news())
-    gold_fund = get_fundamental_score(get_gold_news())
-    
-    # 2. التحليل الفردي
-    usd_prediction = USDModel.predict(usd_tech, usd_fund)
-    gold_prediction = GoldModel.predict(gold_tech, gold_fund)
-    
-    # 3. التحليل المدمج
-    final_trade_signal = CombinedModel.predict(usd_prediction, gold_prediction, gold_tech)
-    
-    # 4. إرسال الإشعار وتحديث الواجهة إذا كانت الثقة عالية
-    if final_trade_signal.confidence > 0.80:
-        send_notification(final_trade_signal)
-        track_trade_for_ai_level(final_trade_signal)
+                    send_alert(f'Closed {t_row["symbol"]} {t_row["direction"]} -> {note_str}', '🧠 AI Trade Settled')
