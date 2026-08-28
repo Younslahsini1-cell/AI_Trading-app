@@ -12,7 +12,7 @@ from streamlit_autorefresh import st_autorefresh
 
 # --- إعدادات الصفحة والواجهة المؤسسية ---
 st.set_page_config(
-    page_title="XAU/USD Twelve Data Autonomous Engine",
+    page_title="XAU/USD Continuous Autonomous Engine",
     layout="wide",
     page_icon="🥇",
 )
@@ -31,15 +31,15 @@ st.markdown(
 )
 
 st.title(
-    "🥇 نظام XAU/USD الذاتي — مدعوم حصرياً بـ Twelve Data API ومحرك التحليل"
+    "🥇 نظام XAU/USD الذاتي المستمر — تحليل دائم ومراقبة لحظية حتى أثناء الصفقات"
 )
 
-DB_FILE = 'xau_twelve_apex.db'
-MODEL_FILE = 'xau_twelve_model.pkl'
-SCALER_FILE = 'xau_twelve_scaler.pkl'
+DB_FILE = 'xau_continuous.db'
+MODEL_FILE = 'xau_continuous_model.pkl'
+SCALER_FILE = 'xau_continuous_scaler.pkl'
 
 
-# --- قاعدة البيانات الدائمة والتخزين الذكي ---
+# --- قاعدة البيانات والدعم ---
 def init_db():
   conn = sqlite3.connect(DB_FILE)
   c = conn.cursor()
@@ -93,7 +93,7 @@ save_setting('twelve_key', twelve_key)
 
 ntfy_channel = st.sidebar.text_input(
     'قناة Ntfy للتنبيهات الفورية',
-    value=load_setting('ntfy', 'xau_twelve_channel'),
+    value=load_setting('ntfy', 'xau_continuous_channel'),
 )
 save_setting('ntfy', ntfy_channel)
 
@@ -107,7 +107,7 @@ risk_reward = st.sidebar.slider('نسبة العائد للمخاطرة (R:R)', 
 min_conf = st.sidebar.slider('أدنى نسبة ثقة مطلوبة (%)', 60, 95, 65, 1)
 
 
-def send_alert(msg, title='XAU/USD Twelve Apex'):
+def send_alert(msg, title='XAU/USD Continuous Apex'):
   if ntfy_channel:
     ch = ntfy_channel.strip().split('/')[-1]
     try:
@@ -121,7 +121,7 @@ def send_alert(msg, title='XAU/USD Twelve Apex'):
       pass
 
 
-# --- جلب البيانات عبر Twelve Data API مع بديل احتياطي ذكي ---
+# --- جلب البيانات عبر Twelve Data API مع بديل احتياطي ---
 def fetch_gold_data_twelve(limit=200):
   if twelve_key:
     try:
@@ -135,7 +135,6 @@ def fetch_gold_data_twelve(limit=200):
     except Exception:
       pass
 
-  # بديل احتياطي لضمان عمل النظام في حال لم يتم إدخال المفتاح بعد
   try:
     url = f'https://api.binance.com/api/v3/klines?symbol=PAXGUSDT&interval={timeframe}&limit={limit}'
     res = requests.get(url, timeout=5).json()
@@ -211,7 +210,7 @@ def apply_indicators(df):
   return df
 
 
-# --- نموذج التعلم الآلي والتنبؤ الذكي ---
+# --- نموذج التعلم الآلي الذكي ---
 def load_or_train_model():
   if os.path.exists(MODEL_FILE) and os.path.exists(SCALER_FILE):
     return joblib.load(MODEL_FILE), joblib.load(SCALER_FILE)
@@ -241,7 +240,9 @@ def execute_autonomous_scan():
   conn.close()
 
   if not df_act.empty:
-    return 'توجد صفقة نشطة حالياً قيد المتابعة والتتبع.'
+    return (
+        'توجد صفقة نشطة حالياً (النظام يتابع التحليل الذكي والانعكاسات بالخلفية).'
+    )
 
   df_live = fetch_gold_data_twelve(150)
   df_proc = apply_indicators(df_live)
@@ -284,27 +285,26 @@ def execute_autonomous_scan():
     conn.close()
 
     msg = (
-        f'XAU/USD Twelve Apex Signal: {direction}\nEntry: ${curr}\nSL: ${sl_p}\nTP:'
-        f' ${tp_p}\nConfidence: {conf:.1f}%'
+        f'XAU/USD Continuous Signal: {direction}\nEntry: ${curr}\nSL:'
+        f' ${sl_p}\nTP: ${tp_p}\nConfidence: {conf:.1f}%'
     )
     send_alert(msg, 'Twelve Data Trade Alert')
     return (
         f'تم اكتشاف صفقة أوتوماتيكية جديدة ({direction}) وإرسال التنبيه الفوري!'
     )
   return (
-      f'تم الفحص التلقائي بنجاح عند الفتح. الثقة الحالية ({conf:.1f}%) دون الحد'
-      ' المطلوب.'
+      f'التحليل التلقائي نشط. الثقة الحالية ({conf:.1f}%) بانتظار فرصة أقوى.'
   )
 
 
 # --- واجهة العرض والتشغيل التلقائي ---
 tab1, tab2 = st.tabs([
-    '⚡ التشغيل والتحليل الفوري (يعمل عند الدخول)',
+    '⚡ التشغيل والتحليل والتحمّل الذاتي',
     '📊 سجل الصفقات والأداء',
 ])
 
 with tab1:
-  st.subheader('منصة تداول الذهب الآلية — مدعومة بـ Twelve Data API')
+  st.subheader('منصة تداول الذهب الآلية — تحليل مستمر بدون توقف')
 
   if not twelve_key:
     st.warning(
@@ -312,7 +312,7 @@ with tab1:
         ' بالأسعار الرسمية.'
     )
 
-  with st.spinner('جاري التحليل التلقائي الفوري فور فتح الموقع...'):
+  with st.spinner('جاري تشغيل التحليل الفوري وتفقد السوق...'):
     scan_msg = execute_autonomous_scan()
 
   conn = sqlite3.connect(DB_FILE)
@@ -322,8 +322,8 @@ with tab1:
   if not df_act.empty:
     t = df_act.iloc[0]
     st.warning(
-        f"🔒 **صفقة نشطة حالياً:** {t['direction']} | الدخول: ${t['entry']} | SL:"
-        f" ${t['sl']} | TP: ${t['tp']}"
+        f"🔒 **صفقة نشطة قيد المراقبة اللحظية:** {t['direction']} | الدخول:"
+        f" ${t['entry']} | SL: ${t['sl']} | TP: ${t['tp']}"
     )
   else:
     st.success(f'🟢 {scan_msg}')
@@ -341,8 +341,8 @@ with tab2:
   else:
     st.info('لا توجد صفقات مغلقة مسجلة حتى الآن.')
 
-# --- حلقة التتبع التلقائي في الخلفية (كل 60 ثانية) ---
-st_autorefresh(interval=60000, key='twelve_loop')
+# --- المراقبة التلقائية المستمرة (كل 60 ثانية) لمعالجة الأهداف والانعكاسات ---
+st_autorefresh(interval=60000, key='continuous_loop')
 
 conn = sqlite3.connect(DB_FILE)
 c_active = pd.read_sql('SELECT * FROM active_trade WHERE id = 1', conn)
@@ -350,12 +350,39 @@ conn.close()
 
 if not c_active.empty:
   t_row = c_active.iloc[0]
-  df_check = fetch_gold_data_twelve(10)
+  df_check = fetch_gold_data_twelve(50)
   if not df_check.empty:
-    h, l = df_check.iloc[-1]['high'], df_check.iloc[-1]['low']
+    df_analyzed = apply_indicators(df_check)
+    last_row = df_analyzed.iloc[-1]
+
+    # تشغيل نموذج الذكاء الاصطناعي لفحص وجود انعكاس أو صفقة معاكسة أثناء الصفقة النشطة
+    feat_list = ['atr', 'tenkan', 'kijun', 'rsi', 'ema_50', 'ema_200', 'trend']
+    x_current = scaler.transform(last_row[feat_list].values.reshape(1, -1))
+    current_probs = model.predict_proba(x_current)[0]
+    curr_pred = np.argmax(current_probs)
+    curr_conf = current_probs[curr_pred] * 100
+
+    # فحص إشارة الانعكاس المعاكسة أثناء نشاط الصفقة
+    is_buy_trade = 'BUY' in t_row['direction']
+    reversal_detected = False
+
+    if is_buy_trade and curr_pred == 0 and curr_conf >= (min_conf - 5):
+      reversal_detected = True  # الصفقة شراء والنموذج يكتشف انعكاس قوي للبيع
+    elif not is_buy_trade and curr_pred == 1 and curr_conf >= (min_conf - 5):
+      reversal_detected = True  # الصفقة بيع والنموذج يكتشف انعكاس قوي للشراء
+
+    if reversal_detected:
+      rev_dir = 'SELL 🔴' if is_buy_trade else 'BUY 🟢'
+      send_alert(
+          f'⚠️ تحذير انعكاس السوق! الصفقة النشطة ({t_row["direction"]}) تتعرض'
+          f' لضغط معاكس بقوة ({curr_conf:.1f}%). يرجى الحذر أو إغلاق الصفقة.',
+          '🚨 Reversal / Counter-Signal Warning',
+      )
+
+    h, l = last_row['high'], last_row['low']
     hit_sl, hit_tp = False, False
 
-    if 'BUY' in t_row['direction']:
+    if is_buy_trade:
       if l <= t_row['sl']:
         hit_sl = True
       elif h >= t_row['tp']:
@@ -368,7 +395,11 @@ if not c_active.empty:
 
     if hit_sl or hit_tp:
       win_val = 1 if hit_tp else 0
-      note_str = 'Target Reached (نجاح الهدف)' if hit_tp else 'Stop Loss Hit (وقف خسارة)'
+      note_str = (
+          'Target Reached (نجاح الهدف)'
+          if hit_tp
+          else 'Stop Loss Hit (وقف خسارة)'
+      )
 
       conn = sqlite3.connect(DB_FILE)
       c = conn.cursor()
