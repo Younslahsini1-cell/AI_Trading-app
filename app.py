@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date
 import json
 import os
 import joblib
@@ -9,15 +9,6 @@ from sklearn.neural_network import MLPClassifier
 from sklearn.preprocessing import StandardScaler
 import streamlit as st
 
-# محاولة استيراد yfinance بأمان
-try:
-  import yfinance as yf
-
-  YFINANCE_AVAILABLE = True
-except ImportError:
-  YFINANCE_AVAILABLE = False
-
-# --- إعدادات الصفحة والتصميم الاحترافي ---
 st.set_page_config(
     page_title="منصة التداول الكمّي التطورية الذكية",
     layout="wide",
@@ -43,9 +34,8 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.title("🧠 منصة التداول التطوري الذاتي (خفيفة الموارد)")
+st.title("🧠 منصة التداول التطوري الذاتي (مع Twelve Data)")
 
-# مسارات الذاكرة
 MODEL_FILE = 'light_evo_model.pkl'
 SCALER_FILE = 'light_evo_scaler.pkl'
 HISTORY_FILE = 'light_evo_history.csv'
@@ -60,16 +50,41 @@ def load_settings():
         return json.load(f)
     except:
       pass
-  return {'ntfy': ''}
+  return {'ntfy': '', 'twelve_key': ''}
 
 
-def save_settings(ntfy):
+def save_settings(ntfy, twelve_key):
   with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
-    json.dump({'ntfy': ntfy}, f)
+    json.dump({'ntfy': ntfy, 'twelve_key': twelve_key}, f)
 
 
 if 'settings' not in st.session_state:
   st.session_state.settings = load_settings()
+
+st.sidebar.header('🔔 إعدادات التنبيهات والمنصات')
+ntfy_topic = st.sidebar.text_input(
+    'اسم قناة Ntfy',
+    value=st.session_state.settings.get('ntfy', ''),
+    placeholder='مثال: my_trading_channel',
+)
+twelve_api_key = st.sidebar.text_input(
+    'مفتاح Twelve Data API',
+    type='password',
+    value=st.session_state.settings.get('twelve_key', ''),
+)
+save_settings(ntfy_topic, twelve_api_key)
+
+st.sidebar.markdown('---')
+st.sidebar.header('⚙️ إعدادات النموذج')
+interval = st.sidebar.selectbox(
+    'الإطار الزمني للرصد', ['5min', '15min', '1h', '1day'], index=0
+)
+rr_ratio = st.sidebar.slider(
+    'نسبة العائد للمخاطرة (TP/SL)', 1.0, 5.0, 2.0, 0.5
+)
+confidence_threshold = st.sidebar.slider(
+    'حد الثقة الأدنى للتنفيذ (%)', 50, 90, 60, 1
+)
 
 
 def send_ntfy_alert(topic, message, title='Smart Trading Signal'):
@@ -89,36 +104,12 @@ def send_ntfy_alert(topic, message, title='Smart Trading Signal'):
   return False
 
 
-# --- القائمة الجانبية ---
-st.sidebar.header('🔔 إعدادات التنبيهات (Ntfy)')
-ntfy_topic = st.sidebar.text_input(
-    'اسم قناة Ntfy',
-    value=st.session_state.settings.get('ntfy', ''),
-    placeholder='مثال: my_trading_channel',
-)
-save_settings(ntfy_topic)
-
-st.sidebar.markdown('---')
-st.sidebar.header('⚙️ إعدادات النموذج الخفيف')
-interval = st.sidebar.selectbox(
-    'الإطار الزمني للرصد', ['5min', '15min', '1h', '1day'], index=0
-)
-rr_ratio = st.sidebar.slider(
-    'نسبة العائد للمخاطرة (TP/SL)', 1.0, 5.0, 2.0, 0.5
-)
-confidence_threshold = st.sidebar.slider(
-    'حد الثقة الأدنى للتنفيذ (%)', 50, 90, 60, 1
-)
-
-
-# --- إدارة الذاكرة الخفيفة ---
 def load_permanent_memory():
   if os.path.exists(MODEL_FILE) and os.path.exists(SCALER_FILE):
     model = joblib.load(MODEL_FILE)
     scaler = joblib.load(SCALER_FILE)
     is_trained = True
   else:
-    # شبكة عصبية خفيفة جداً لا تستهلك المعالج
     model = MLPClassifier(
         hidden_layer_sizes=(32, 16),
         activation='relu',
@@ -168,44 +159,65 @@ def prepare_data(df):
   return X[:-1], Y[:-1], features
 
 
-def get_market_data(symbol, interval, outputsize=200):
-  clean_symbol = symbol.upper().strip()
-  if 'BTC' in clean_symbol or 'ETH' in clean_symbol or 'XAU' in clean_symbol:
+def get_market_data(symbol, interval, outputsize=100):
+  clean_symbol = symbol.upper().strip().split()[0]
+  if 'XAU' in clean_symbol:
+    t_sym = 'XAU/USD'
+  elif 'BTC' in clean_symbol:
+    t_sym = 'BTC/USD'
+  else:
+    t_sym = clean_symbol.replace('/', '')
+
+  tf_map = {'5min': '5min', '15min': '15min', '1h': '1h', '1day': '1day'}
+  t_interval = tf_map.get(interval, '5min')
+
+  if twelve_api_key:
     try:
-      binance_sym = (
-          clean_symbol.replace('/', '')
-          .replace('-', '')
-          .replace('XAU/USD', 'PAXGUSDT')
-      )
-      if 'USDT' not in binance_sym:
-        binance_sym += 'USDT'
-      url = f'https://api.binance.com/api/v3/klines?symbol={binance_sym}&interval=5m&limit={outputsize}'
-      res = requests.get(url, timeout=4).json()
-      if isinstance(res, list) and len(res) > 0:
-        df = pd.DataFrame(
-            res,
-            columns=[
-                'open_time',
-                'open',
-                'high',
-                'low',
-                'close',
-                'volume',
-                'close_time',
-                'qav',
-                'num_trades',
-                'taker_base_vol',
-                'taker_quote_vol',
-                'ignore',
-            ],
-        )
+      url = f'https://api.twelvedata.com/time_series?symbol={t_sym}&interval={t_interval}&outputsize={outputsize}&apikey={twelve_api_key}'
+      res = requests.get(url, timeout=5).json()
+      if 'values' in res:
+        df = pd.DataFrame(res['values'])
         cols = ['open', 'high', 'low', 'close']
         df[cols] = df[cols].astype(float)
-        return df[cols].reset_index(drop=True)
+        df = df.iloc[::-1].reset_index(drop=True)
+        return df[cols]
     except:
       pass
 
-  # بيانات بديلة تركيبية خفيفة جداً
+  try:
+    binance_sym = (
+        clean_symbol.replace('/', '').replace('-', '') + 'USDT'
+        if 'USDT' not in clean_symbol
+        else clean_symbol
+    )
+    if 'XAU' in clean_symbol:
+      binance_sym = 'PAXGUSDT'
+    b_url = f'https://api.binance.com/api/v3/klines?symbol={binance_sym}&interval={t_interval}&limit={outputsize}'
+    b_res = requests.get(b_url, timeout=4).json()
+    if isinstance(b_res, list) and len(b_res) > 0:
+      df = pd.DataFrame(
+          b_res,
+          columns=[
+              'open_time',
+              'open',
+              'high',
+              'low',
+              'close',
+              'volume',
+              'close_time',
+              'qav',
+              'num_trades',
+              'taker_base_vol',
+              'taker_quote_vol',
+              'ignore',
+          ],
+      )
+      cols = ['open', 'high', 'low', 'close']
+      df[cols] = df[cols].astype(float)
+      return df[cols].reset_index(drop=True)
+  except:
+    pass
+
   close = np.cumsum(np.random.randn(outputsize) * 0.5) + 2600
   return pd.DataFrame({
       'open': close - 1,
@@ -216,7 +228,7 @@ def get_market_data(symbol, interval, outputsize=200):
 
 
 def run_light_training():
-  df_t = get_market_data('BTC/USD', interval, 150)
+  df_t = get_market_data('BTC/USD', interval, 100)
   proc = evolutionary_feature_engineering(df_t)
   X, Y, _ = prepare_data(proc)
   if len(X) > 5:
@@ -234,7 +246,6 @@ def run_light_training():
 if not st.session_state.is_trained:
   run_light_training()
 
-# --- التبويبات الرئيسية ---
 tab1, tab2, tab3 = st.tabs(
     ['🚀 لوحة الأسواق والتحليل', '📊 سجل الأخطاء والتعلم', '🔄 مسح خلفي خفيف']
 )
@@ -266,7 +277,7 @@ with tab1:
 
   if st.button('فحص السوق وإعطاء القرار', use_container_width=True):
     with st.spinner('جاري تحليل السعر وخوارزميات التعلم...'):
-      live_df = get_market_data(clean_market, interval, 150)
+      live_df = get_market_data(clean_market, interval, 100)
       processed = evolutionary_feature_engineering(live_df)
       features = ['return', 'volatility', 'body', 'momentum_5', 'ma_ratio']
 
@@ -300,8 +311,7 @@ with tab1:
             else round(current_price + sl_dist, 2)
         )
 
-        # تسجيل الصفقة
-        win_status = 1 if np.random.rand() > 0.3 else 0  # محاكاة خفيفة للنتيجة
+        win_status = 1 if np.random.rand() > 0.3 else 0
         new_log = pd.DataFrame([{
             'Date': str(date.today()),
             'Symbol': clean_market,
