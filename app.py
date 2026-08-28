@@ -121,53 +121,26 @@ def send_alert(msg, title='XAU/USD Continuous Apex'):
       pass
 
 
-# --- جلب البيانات عبر Twelve Data API مع بديل احتياطي ---
+# --- جلب البيانات عبر Twelve Data API حصرياً بدون بيانات عشوائية ---
 def fetch_gold_data_twelve(limit=200):
-  if twelve_key:
-    try:
-      url = f'https://api.twelvedata.com/time_series?symbol=XAU/USD&interval={timeframe}&outputsize={limit}&apikey={twelve_key}'
-      res = requests.get(url, timeout=6).json()
-      if 'values' in res:
-        df = pd.DataFrame(res['values'])[['open', 'high', 'low', 'close']].astype(
-            float
-        )
-        return df.iloc[::-1].reset_index(drop=True)
-    except Exception:
-      pass
-
+  if not twelve_key:
+    return pd.DataFrame()
   try:
-    url = f'https://api.binance.com/api/v3/klines?symbol=PAXGUSDT&interval={timeframe}&limit={limit}'
-    res = requests.get(url, timeout=5).json()
-    if isinstance(res, list) and len(res) > 0:
-      df = pd.DataFrame(res, columns=[
-          't',
-          'open',
-          'high',
-          'low',
-          'close',
-          'v',
-          'ct',
-          'q',
-          'n',
-          'tb',
-          'tq',
-          'i',
-      ])[['open', 'high', 'low', 'close']].astype(float)
-      return df.reset_index(drop=True)
+    url = f'https://api.twelvedata.com/time_series?symbol=XAU/USD&interval={timeframe}&outputsize={limit}&apikey={twelve_key}'
+    res = requests.get(url, timeout=6).json()
+    if 'values' in res:
+      df = pd.DataFrame(res['values'])[['open', 'high', 'low', 'close']].astype(
+          float
+      )
+      return df.iloc[::-1].reset_index(drop=True)
   except Exception:
     pass
-
-  np.random.seed(42)
-  close = 2650.0 + np.cumsum(np.random.randn(limit) * 2.0)
-  return pd.DataFrame({
-      'open': close - 1.0,
-      'high': close + 3.0,
-      'low': close - 3.0,
-      'close': close,
-  })
+  return pd.DataFrame()
 
 
 def apply_indicators(df):
+  if df is None or df.empty or len(df) < 52:
+    return pd.DataFrame()
   tr = pd.concat([
       df['high'] - df['low'],
       np.abs(df['high'] - df['close'].shift()),
@@ -216,6 +189,12 @@ def load_or_train_model():
     return joblib.load(MODEL_FILE), joblib.load(SCALER_FILE)
 
   df = fetch_gold_data_twelve(300)
+  if df.empty or len(df) < 100:
+    # نموذج افتراضي احترافي في حال عدم توفر المفتاح مؤقتاً لتجنب انهيار التطبيق
+    scaler = StandardScaler()
+    model = RandomForestClassifier(n_estimators=100, max_depth=6, random_state=42)
+    return model, scaler
+
   df = apply_indicators(df)
   features = ['atr', 'tenkan', 'kijun', 'rsi', 'ema_50', 'ema_200', 'trend']
   X = df[features].values[:-1]
@@ -244,16 +223,29 @@ def execute_autonomous_scan():
         'توجد صفقة نشطة حالياً (النظام يتابع التحليل الذكي والانعكاسات بالخلفية).'
     )
 
+  if not twelve_key:
+    return 'لا توجد صفقة: يرجى إدخال مفتاح Twelve Data API في القائمة الجانبية لتجنب أي بيانات عشوائية.'
+
   df_live = fetch_gold_data_twelve(150)
+  if df_live.empty or len(df_live) < 52:
+    return 'لا توجد صفقة: بيانات السوق غير كافية أو جاري الاتصال.'
+
   df_proc = apply_indicators(df_live)
+  if df_proc.empty:
+    return (
+        'لا توجد صفقة: لم تتحقق الشروط الفنية الكافية بعد بناءً على المؤشرات.'
+    )
+
   last = df_proc.iloc[-1]
 
   feat = ['atr', 'tenkan', 'kijun', 'rsi', 'ema_50', 'ema_200', 'trend']
-  x_in = scaler.transform(last[feat].values.reshape(1, -1))
-
-  probs = model.predict_proba(x_in)[0]
-  pred = np.argmax(probs)
-  conf = probs[pred] * 100
+  try:
+    x_in = scaler.transform(last[feat].values.reshape(1, -1))
+    probs = model.predict_proba(x_in)[0]
+    pred = np.argmax(probs)
+    conf = probs[pred] * 100
+  except Exception:
+    return 'لا توجد صفقة: النموذج بانتظار اكتمال التدريب والبيانات الحية.'
 
   curr = round(last['close'], 2)
   atr_v = last['atr']
@@ -293,7 +285,8 @@ def execute_autonomous_scan():
         f'تم اكتشاف صفقة أوتوماتيكية جديدة ({direction}) وإرسال التنبيه الفوري!'
     )
   return (
-      f'التحليل التلقائي نشط. الثقة الحالية ({conf:.1f}%) بانتظار فرصة أقوى.'
+      f'لا توجد صفقة: التحليل المستمر نشط، الثقة الحالية ({conf:.1f}%) أقل من'
+      f' الحد المطلوب ({min_conf}%).'
   )
 
 
@@ -308,8 +301,8 @@ with tab1:
 
   if not twelve_key:
     st.warning(
-        '⚠️ يرجى إدخال مفتاح Twelve Data API في القائمة الجانبية للاتصال المباشر'
-        ' بالأسعار الرسمية.'
+        '⚠️ يرجى إدخال مفتاح Twelve Data API في القائمة الجانبية للبدء بالتحليل'
+        ' الحقيقي ومنع أي صفقات افتراضية.'
     )
 
   with st.spinner('جاري تشغيل التحليل الفوري وتفقد السوق...'):
@@ -326,10 +319,16 @@ with tab1:
         f" ${t['entry']} | SL: ${t['sl']} | TP: ${t['tp']}"
     )
   else:
-    st.success(f'🟢 {scan_msg}')
+    st.info(f'🔍 {scan_msg}')
 
   df_chart = fetch_gold_data_twelve(100)
-  st.line_chart(df_chart[['close']].tail(30))
+  if not df_chart.empty:
+    st.line_chart(df_chart[['close']].tail(30))
+  else:
+    st.info(
+        'الرجاء إدخال مفتاح Twelve Data API لعرض الرسم البياني الحي لأسعار'
+        ' الذهب.'
+    )
 
 with tab2:
   st.subheader('سجل الصفقات المغلقة')
@@ -348,80 +347,84 @@ conn = sqlite3.connect(DB_FILE)
 c_active = pd.read_sql('SELECT * FROM active_trade WHERE id = 1', conn)
 conn.close()
 
-if not c_active.empty:
+if not c_active.empty and twelve_key:
   t_row = c_active.iloc[0]
   df_check = fetch_gold_data_twelve(50)
-  if not df_check.empty:
+  if not df_check.empty and len(df_check) >= 52:
     df_analyzed = apply_indicators(df_check)
-    last_row = df_analyzed.iloc[-1]
+    if not df_analyzed.empty:
+      last_row = df_analyzed.iloc[-1]
 
-    # تشغيل نموذج الذكاء الاصطناعي لفحص وجود انعكاس أو صفقة معاكسة أثناء الصفقة النشطة
-    feat_list = ['atr', 'tenkan', 'kijun', 'rsi', 'ema_50', 'ema_200', 'trend']
-    x_current = scaler.transform(last_row[feat_list].values.reshape(1, -1))
-    current_probs = model.predict_proba(x_current)[0]
-    curr_pred = np.argmax(current_probs)
-    curr_conf = current_probs[curr_pred] * 100
+      feat_list = ['atr', 'tenkan', 'kijun', 'rsi', 'ema_50', 'ema_200', 'trend']
+      try:
+        x_current = scaler.transform(last_row[feat_list].values.reshape(1, -1))
+        current_probs = model.predict_proba(x_current)[0]
+        curr_pred = np.argmax(current_probs)
+        curr_conf = current_probs[curr_pred] * 100
 
-    # فحص إشارة الانعكاس المعاكسة أثناء نشاط الصفقة
-    is_buy_trade = 'BUY' in t_row['direction']
-    reversal_detected = False
+        is_buy_trade = 'BUY' in t_row['direction']
+        reversal_detected = False
 
-    if is_buy_trade and curr_pred == 0 and curr_conf >= (min_conf - 5):
-      reversal_detected = True  # الصفقة شراء والنموذج يكتشف انعكاس قوي للبيع
-    elif not is_buy_trade and curr_pred == 1 and curr_conf >= (min_conf - 5):
-      reversal_detected = True  # الصفقة بيع والنموذج يكتشف انعكاس قوي للشراء
+        if is_buy_trade and curr_pred == 0 and curr_conf >= (min_conf - 5):
+          reversal_detected = True
+        elif not is_buy_trade and curr_pred == 1 and curr_conf >= (
+            min_conf - 5
+        ):
+          reversal_detected = True
 
-    if reversal_detected:
-      rev_dir = 'SELL 🔴' if is_buy_trade else 'BUY 🟢'
-      send_alert(
-          f'⚠️ تحذير انعكاس السوق! الصفقة النشطة ({t_row["direction"]}) تتعرض'
-          f' لضغط معاكس بقوة ({curr_conf:.1f}%). يرجى الحذر أو إغلاق الصفقة.',
-          '🚨 Reversal / Counter-Signal Warning',
-      )
+        if reversal_detected:
+          send_alert(
+              f'⚠️ تحذير انعكاس السوق! الصفقة النشطة ({t_row["direction"]})'
+              f' تتعرض لضغط معاكس بقوة ({curr_conf:.1f}%). يرجى الحذر أو إغلاق'
+              ' الصفقة.',
+              '🚨 Reversal / Counter-Signal Warning',
+          )
+      except Exception:
+        pass
 
-    h, l = last_row['high'], last_row['low']
-    hit_sl, hit_tp = False, False
+      h, l = last_row['high'], last_row['low']
+      hit_sl, hit_tp = False, False
 
-    if is_buy_trade:
-      if l <= t_row['sl']:
-        hit_sl = True
-      elif h >= t_row['tp']:
-        hit_tp = True
-    else:
-      if h >= t_row['sl']:
-        hit_sl = True
-      elif l <= t_row['tp']:
-        hit_tp = True
+      if is_buy_trade:
+        if l <= t_row['sl']:
+          hit_sl = True
+        elif h >= t_row['tp']:
+          hit_tp = True
+      else:
+        if h >= t_row['sl']:
+          hit_sl = True
+        elif l <= t_row['tp']:
+          hit_tp = True
 
-    if hit_sl or hit_tp:
-      win_val = 1 if hit_tp else 0
-      note_str = (
-          'Target Reached (نجاح الهدف)'
-          if hit_tp
-          else 'Stop Loss Hit (وقف خسارة)'
-      )
+      if hit_sl or hit_tp:
+        win_val = 1 if hit_tp else 0
+        note_str = (
+            'Target Reached (نجاح الهدف)'
+            if hit_tp
+            else 'Stop Loss Hit (وقف خسارة)'
+        )
 
-      conn = sqlite3.connect(DB_FILE)
-      c = conn.cursor()
-      c.execute(
-          'INSERT INTO trades (date, symbol, direction, entry, sl, tp, win, note)'
-          ' VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-          (
-              str(datetime.now(timezone.utc).date()),
-              t_row['symbol'],
-              t_row['direction'],
-              t_row['entry'],
-              t_row['sl'],
-              t_row['tp'],
-              win_val,
-              note_str,
-          ),
-      )
-      c.execute('DELETE FROM active_trade')
-      conn.commit()
-      conn.close()
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute(
+            'INSERT INTO trades (date, symbol, direction, entry, sl, tp, win,'
+            ' note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            (
+                str(datetime.now(timezone.utc).date()),
+                t_row['symbol'],
+                t_row['direction'],
+                t_row['entry'],
+                t_row['sl'],
+                t_row['tp'],
+                win_val,
+                note_str,
+            ),
+        )
+        c.execute('DELETE FROM active_trade')
+        conn.commit()
+        conn.close()
 
-      send_alert(
-          f'Closed {t_row["symbol"]} {t_row["direction"]} -> {note_str}',
-          'Twelve Data Trade Settled',
-      )
+        send_alert(
+            f'Closed {t_row["symbol"]} {t_row["direction"]} -> {note_str}',
+            'Twelve Data Trade Settled',
+        )
