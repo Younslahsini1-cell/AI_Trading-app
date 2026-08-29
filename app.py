@@ -4,14 +4,14 @@ XAU/USD Deep AI Engine — نسخة مُصلَّحة + مطوَّرة
 هذا الملف نسخة معدّلة من التطبيق الأصلي. كل تعديل جوهري مُعلَّم بتعليق
 يبدأ بـ "# FIX:" حتى يسهل عليك مقارنته بالنسخة القديمة.
 
-أهم التغييرات الوظيفية (ملخّص، وموجود أيضا في ردّي في المحادثة):
+أهم التغييرات الوظيفية (ملخّص، وموجود أيضاً في ردّي في المحادثة):
  1) توحيد مصدر واختيار الفريم الزمني للتدريب والتنفيذ الحي (Twelve Data
     بالساعة لكليهما) بدل تدريب يومي (yfinance) وتنفيذ بالساعة.
  2) حذف ميزة dxy_roc المزيّفة (كانت=0 دائماً وقت التشغيل) بدل الإبقاء
     عليها ميزة وهمية.
  3) تعلّم حقيقي من نتائج الصفقات المغلقة عبر partial_fit بدل نموذج مجمّد.
  4) استدعاء واحد فقط لبيانات Twelve Data الحيّة لكل دورة تحديث بدل اثنين.
- 5) إضافة طبقة "رأي ثان" من Claude API (اختياري) قبل فتح أي صفقة.
+ 5) إضافة طبقة "رأي ثانٍ" من Groq API (مجاني، اختياري) قبل فتح أي صفقة.
  6) اسم ملفات النموذج تغيّر (v2) عمداً حتى لا يتم تحميل نموذج قديم
     غير متوافق أبعاد الميزات معه.
 """
@@ -125,19 +125,20 @@ ntfy_channel = st.sidebar.text_input('قناة Ntfy للتنبيهات', value=l
 save_setting('ntfy', ntfy_channel)
 
 st.sidebar.markdown('---')
-st.sidebar.header('🧠 الرأي الثاني (Claude API)')
-# FIX: طبقة جديدة كاملة — استدعاء اختياري لـ Claude كمراجع قبل فتح أي صفقة
-use_claude = st.sidebar.checkbox('تفعيل مراجعة Claude قبل فتح الصفقة', value=(load_setting('use_claude', '1') == '1'))
+st.sidebar.header('🧠 الرأي الثاني (Groq — مجاني)')
+# FIX: تحويل طبقة "الرأي الثاني" من Anthropic API (مدفوع، لا يوجد له
+# باقة مجانية) إلى Groq (مجاني بالكامل، بدون بطاقة ائتمان)
+use_claude = st.sidebar.checkbox('تفعيل مراجعة Groq قبل فتح الصفقة', value=(load_setting('use_claude', '1') == '1'))
 save_setting('use_claude', '1' if use_claude else '0')
 
-anthropic_key = st.sidebar.text_input('مفتاح Anthropic API', type='password', value=load_setting('anthropic_key', ''))
-save_setting('anthropic_key', anthropic_key)
+groq_key = st.sidebar.text_input('مفتاح Groq API', type='password', value=load_setting('groq_key', ''))
+save_setting('groq_key', groq_key)
 
-anthropic_model = st.sidebar.text_input('اسم النموذج', value=load_setting('anthropic_model', 'claude-sonnet-5'))
-save_setting('anthropic_model', anthropic_model)
-st.sidebar.caption('راجع docs.claude.com للتأكد من اسم النموذج المتاح حالياً في حسابك.')
+groq_model = st.sidebar.text_input('اسم النموذج', value=load_setting('groq_model', 'llama-3.3-70b-versatile'))
+save_setting('groq_model', groq_model)
+st.sidebar.caption('راجع console.groq.com/docs/models للتأكد من اسم النموذج المتاح حالياً مجاناً.')
 
-min_claude_conf = st.sidebar.slider('أدنى ثقة مطلوبة من Claude (%)', 40, 95, 60, 1)
+min_claude_conf = st.sidebar.slider('أدنى ثقة مطلوبة من Groq (%)', 40, 95, 60, 1)
 
 if not twelve_key:
     conn = sqlite3.connect(DB_FILE)
@@ -238,13 +239,13 @@ def train_deep_model(api_key):
 
 model, scaler = train_deep_model(twelve_key)
 
-# --- الرأي الثاني: Claude API ---
+# --- الرأي الثاني: Groq API (مجاني، متوافق مع تنسيق OpenAI) ---
 def get_claude_review(direction, last_row, mlp_conf, api_key, model_name):
     """
-    FIX: طبقة جديدة. تُستدعى فقط عندما تجاوزت ثقة الشبكة العصبية الحد
-    الأدنى، حتى لا نستهلك استدعاءات Claude API بلا داعٍ. عند أي فشل
-    (مفتاح ناقص، شبكة، تحليل JSON) ترجع None ويستمر القرار بالاعتماد
-    على الشبكة العصبية وحدها بدل تعطيل التطبيق بالكامل.
+    FIX: طبقة "الرأي الثاني" أصبحت تستدعي Groq بدل Anthropic (Groq مجاني
+    بالكامل بدون بطاقة ائتمان). تُستدعى فقط عندما تجاوزت ثقة الشبكة
+    العصبية الحد الأدنى. عند أي فشل (مفتاح ناقص، شبكة، تحليل JSON) تُرجع
+    None ويستمر القرار بالاعتماد على الشبكة العصبية وحدها.
     """
     if not api_key:
         return None
@@ -258,21 +259,21 @@ def get_claude_review(direction, last_row, mlp_conf, api_key, model_name):
             '{"agree": true, "confidence": 0, "reason": "..."}'
         )
         resp = requests.post(
-            "https://api.anthropic.com/v1/messages",
+            "https://api.groq.com/openai/v1/chat/completions",
             headers={
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
+                "Authorization": f"Bearer {api_key}",
                 "content-type": "application/json",
             },
             json={
                 "model": model_name,
-                "max_tokens": 300,
+                "max_completion_tokens": 300,
                 "messages": [{"role": "user", "content": prompt}],
+                "response_format": {"type": "json_object"},
             },
             timeout=15,
         )
         data = resp.json()
-        text = "".join(b.get("text", "") for b in data.get("content", []))
+        text = data["choices"][0]["message"]["content"]
         cleaned = text.replace("```json", "").replace("```", "").strip()
         parsed = json.loads(cleaned)
         return {
@@ -320,10 +321,10 @@ def execute_autonomous_scan(df_live_processed):
 
     claude_result = None
     if use_claude:
-        claude_result = get_claude_review(direction, last, conf, anthropic_key, anthropic_model)
+        claude_result = get_claude_review(direction, last, conf, groq_key, groq_model)
         if claude_result is not None:
             if not claude_result['agree'] or claude_result['confidence'] < min_claude_conf:
-                note = (f"الشبكة العصبية اقترحت {direction} بثقة {conf:.1f}%، لكن مراجعة Claude لم توافق "
+                note = (f"الشبكة العصبية اقترحت {direction} بثقة {conf:.1f}%، لكن مراجعة Groq لم توافق "
                         f"(ثقته: {claude_result['confidence']:.0f}%) — تم تجاهل الإشارة تحفظاً.")
                 return note, claude_result
 
@@ -343,7 +344,7 @@ def execute_autonomous_scan(df_live_processed):
 
     claude_line = ''
     if claude_result is not None:
-        claude_line = f"\nمراجعة Claude: موافق ({claude_result['confidence']:.0f}%) — {claude_result['reason']}"
+        claude_line = f"\nمراجعة Groq: موافق ({claude_result['confidence']:.0f}%) — {claude_result['reason']}"
     send_alert(f'🧠 AI Trade Executed: {direction}\nEntry: ${curr}\nSL: ${sl_p}\nTP: ${tp_p}\nAI Confidence: {conf:.1f}%{claude_line}')
     return f'تم اتخاذ قرار ({direction}) بثقة {conf:.1f}% وتم إرسال التنبيه.', claude_result
 
@@ -389,7 +390,7 @@ with tab1:
     if claude_info is not None:
         agree_txt = '✅ موافق' if claude_info['agree'] else '❌ غير موافق'
         st.markdown(f"""<div class="claude-note">
-            <b>🧠 رأي Claude:</b> {agree_txt} — ثقة {claude_info['confidence']:.0f}%<br>{claude_info['reason']}
+            <b>🧠 رأي Groq:</b> {agree_txt} — ثقة {claude_info['confidence']:.0f}%<br>{claude_info['reason']}
         </div>""", unsafe_allow_html=True)
 
 with tab2:
