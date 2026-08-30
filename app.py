@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 import json
 import os
 import sqlite3
+import threading
 
 import joblib
 import numpy as np
@@ -60,6 +61,9 @@ DB_FILE = 'xau_deep_ai.db'
 # مدرَّب على شكل مدخلات مختلف وسيفشل أو يعطي نتائج خاطئة بصمت.
 MODEL_FILE = 'xau_deep_mlp_v2.pkl'
 SCALER_FILE = 'xau_deep_scaler_v2.pkl'
+# FIX: قفل ملفي بسيط يمنع بدء أكثر من عملية تدريب خلفية واحدة في نفس
+# الوقت (لو فتح أكثر من زائر/بينغ الصفحة أثناء التدريب الأول)
+TRAINING_LOCK_FILE = 'training.lock'
 FEATURES = ['atr', 'ema_50', 'ema_200', 'rsi']  # FIX: dxy_roc حُذفت نهائياً
 
 
@@ -158,7 +162,7 @@ st.sidebar.markdown('---')
 # للأبد بلا وسيلة لإجبار تدريب جديد على بيانات سوق أحدث سوى حذف الملفات
 # يدوياً من السيرفر. الآن زر واحد يفعل ذلك ويعيد تشغيل الصفحة.
 if st.sidebar.button('🔄 إعادة تدريب النموذج من الصفر'):
-    for f in (MODEL_FILE, SCALER_FILE):
+    for f in (MODEL_FILE, SCALER_FILE, TRAINING_LOCK_FILE):
         if os.path.exists(f):
             os.remove(f)
     st.cache_data.clear()
@@ -228,30 +232,48 @@ def apply_deep_indicators(df):
     return df
 
 # --- محرك التعلم (Neural Net) ---
+def _background_train_and_save(api_key):
+    """
+    FIX: تطوير جديد. سابقاً كان أول تحميل للصفحة (بلا نموذج محفوظ) يُجبر
+    المستخدم/الزائر على انتظار جلب 5000 شمعة وتدريب MLPClassifier كاملاً
+    قبل أن تُعرض الصفحة إطلاقاً. لو كانت خدمة خارجية (مثل UptimeRobot)
+    تفتح الموقع كل 5 دقائق، فقد تنتهي مهلة الطلب (timeout) قبل اكتمال
+    التدريب وتفشل الزيارة بالكامل. الآن يعمل التدريب في Thread منفصل في
+    الخلفية، وتُعرض الصفحة فوراً بنموذج مؤقت ريثما يجهز النموذج الحقيقي.
+    """
+    try:
+        df_train = fetch_training_data_twelve(api_key)
+        df_train = apply_deep_indicators(df_train)
+        if not df_train.empty and len(df_train) >= 100:
+            X = df_train[FEATURES].values[:-1]
+            y = np.where(df_train['close'].shift(-1) > df_train['close'], 1, 0)[:-1]
+            new_scaler = StandardScaler()
+            X_sc = new_scaler.fit_transform(X)
+            new_model = MLPClassifier(hidden_layer_sizes=(100, 50), activation='relu', solver='adam', max_iter=1000, random_state=42)
+            new_model.fit(X_sc, y)
+            joblib.dump(new_model, MODEL_FILE)
+            joblib.dump(new_scaler, SCALER_FILE)
+    except Exception:
+        pass
+    finally:
+        if os.path.exists(TRAINING_LOCK_FILE):
+            try:
+                os.remove(TRAINING_LOCK_FILE)
+            except Exception:
+                pass
+
 def train_deep_model(api_key):
     if os.path.exists(MODEL_FILE) and os.path.exists(SCALER_FILE):
         return joblib.load(MODEL_FILE), joblib.load(SCALER_FILE)
 
-    df_train = fetch_training_data_twelve(api_key)
-    df_train = apply_deep_indicators(df_train)
+    if api_key and not os.path.exists(TRAINING_LOCK_FILE):
+        open(TRAINING_LOCK_FILE, 'w').close()
+        threading.Thread(target=_background_train_and_save, args=(api_key,), daemon=True).start()
 
-    if df_train.empty or len(df_train) < 100:
-        model = MLPClassifier(hidden_layer_sizes=(100, 50), max_iter=500, random_state=42)
-        scaler = StandardScaler()
-        return model, scaler
-
-    X = df_train[FEATURES].values[:-1]
-    y = np.where(df_train['close'].shift(-1) > df_train['close'], 1, 0)[:-1]
-
-    scaler = StandardScaler()
-    X_sc = scaler.fit_transform(X)
-
-    model = MLPClassifier(hidden_layer_sizes=(100, 50), activation='relu', solver='adam', max_iter=1000, random_state=42)
-    model.fit(X_sc, y)
-
-    joblib.dump(model, MODEL_FILE)
-    joblib.dump(scaler, SCALER_FILE)
-    return model, scaler
+    # نموذج مؤقت غير مدرَّب — execute_autonomous_scan يتعامل مع فشل
+    # predict_proba عليه بهدوء (رسالة "قيد التهيئة") إلى أن يجهز النموذج
+    # الحقيقي المحفوظ من الخيط الخلفي، فتُحمَّل تلقائياً بالزيارة التالية.
+    return MLPClassifier(hidden_layer_sizes=(100, 50), max_iter=500, random_state=42), StandardScaler()
 
 model, scaler = train_deep_model(twelve_key)
 
@@ -394,6 +416,11 @@ tab1, tab2 = st.tabs(['⚡ حالة الذكاء الاصطناعي', '📊 سج
 with tab1:
     if not twelve_key:
         st.warning('⚠️ النظام نائم: أدخل مفتاح Twelve Data API لإيقاظ الشبكة العصبية وربطها بالسوق.')
+
+    # FIX: تطوير جديد — إشعار واضح أن التدريب الأول يجري في الخلفية،
+    # بدل شاشة صامتة لا تفسّر لماذا لا توجد صفقات بعد.
+    if os.path.exists(TRAINING_LOCK_FILE):
+        st.info('🧠 النموذج يتدرب حالياً في الخلفية على بيانات تاريخية (أول مرة فقط) — قد يستغرق ذلك دقيقة أو دقيقتين، وستُعرض القرارات تلقائياً بمجرد الجاهزية.')
 
     with st.spinner('الشبكة العصبية تحلل البيانات...'):
         scan_msg, claude_info = execute_autonomous_scan(df_live_processed)
