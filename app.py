@@ -1,74 +1,279 @@
-# XAU/USD Deep AI Engine v3.0
-# ICT / SMC + Multi-Timeframe Quant + ML Meta-Labeling + Groq
-#
-# IMPORTANT:
-# This system is research software. Backtest and validate before live trading.
+"""
+XAU/USD Deep AI Engine — النسخة المدمجة والمصححة
+=================================================
+ICT / Smart Money + Deep Neural Network + Groq Second Opinion
+
+المكونات:
+1) Twelve Data كمصدر بيانات موحد.
+2) تدريب Neural Network على بيانات XAU/USD H1.
+3) تعلم من نتائج الصفقات المغلقة.
+4) Groq كرأي ثانٍ اختياري.
+5) ICT / Smart Money Concepts:
+   - Market Structure
+   - BOS / CHoCH
+   - Order Blocks
+   - Fair Value Gaps
+   - Liquidity / BSL / SSL
+   - Liquidity Sweeps
+   - Session Analysis
+   - Asian Session
+   - Fibonacci Extensions
+   - OTE
+   - Displacement
+   - Volatility & Risk
+   - Score Breakdown
+6) واجهة تعرض:
+   - حالة وجود صفقة
+   - اتجاه الصفقة
+   - ثقة AI قبل Groq
+   - نتيجة Groq
+   - ثقة Groq
+   - الحالة النهائية
+7) Ntfy Alerts.
+8) SQLite.
+9) Background Training.
+10) حماية من التدريب المتكرر.
+11) منع أخطاء النموذج غير الجاهز.
+"""
 
 from datetime import datetime, timezone
 import json
 import os
 import sqlite3
-import time
+import threading
+import traceback
 
 import joblib
 import numpy as np
 import pandas as pd
 import requests
 import streamlit as st
-from sklearn.ensemble import HistGradientBoostingClassifier
+
+from streamlit_autorefresh import st_autorefresh
+
+from sklearn.neural_network import MLPClassifier
 from sklearn.preprocessing import StandardScaler
 
 
 # ============================================================
-# PAGE
+# إعدادات الصفحة
 # ============================================================
 
 st.set_page_config(
-    page_title="XAU/USD Deep AI Engine v3",
+    page_title="XAU/USD Deep AI Engine",
     layout="wide",
     page_icon="🧠",
 )
 
+
+# ============================================================
+# CSS
+# ============================================================
+
 st.markdown(
     """
 <style>
-html, body, [class*="css"] {
-    font-family: Arial, sans-serif;
-}
 
-.stApp {
-    background:#07090e;
-    color:#f3f4f6;
-}
+    @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700;900&display=swap');
 
-section[data-testid="stSidebar"] {
-    background:#0f172a;
-}
+    html, body, [class*="css"] {
+        font-family: 'Cairo', sans-serif !important;
+    }
 
-.card {
-    background:linear-gradient(135deg,#172554,#0f172a);
-    padding:18px;
-    border-radius:16px;
-    border:1px solid #334155;
-    margin-bottom:12px;
-}
+    .stApp {
+        background-color: #07090e;
+        color: #f3f4f6;
+    }
 
-.good {
-    color:#22c55e;
-}
+    section[data-testid="stSidebar"] {
+        background-color: #0f172a;
+        border-right: 1px solid #1e293b;
+    }
 
-.bad {
-    color:#ef4444;
-}
+    .ai-level-card {
+        background: linear-gradient(
+            135deg,
+            #1e3a8a 0%,
+            #0f172a 100%
+        );
 
-.neutral {
-    color:#94a3b8;
-}
+        padding: 30px;
+        border-radius: 20px;
+        text-align: center;
+        border: 1px solid #3b82f6;
 
-.small {
-    font-size:.85rem;
-    color:#94a3b8;
-}
+        box-shadow:
+            0 0 25px rgba(59, 130, 246, 0.4);
+
+        margin-bottom: 20px;
+    }
+
+    .ai-level-title {
+        font-size: 1.2rem;
+        color: #93c5fd;
+        font-weight: 700;
+        margin-bottom: 10px;
+    }
+
+    .ai-level-value {
+        font-size: 4rem;
+        font-weight: 900;
+        color: #fbbf24;
+        line-height: 1;
+    }
+
+    .ai-level-sub {
+        font-size: 1rem;
+        color: #64748b;
+        margin-top: 10px;
+    }
+
+    .claude-note {
+        background: #111827;
+        border: 1px solid #374151;
+        border-radius: 12px;
+        padding: 14px;
+        margin-top: 10px;
+    }
+
+    .groq-note {
+        background: #111827;
+        border: 1px solid #374151;
+        border-radius: 12px;
+        padding: 14px;
+        margin-top: 10px;
+    }
+
+    .trade-status-card {
+        background: linear-gradient(
+            135deg,
+            #111827 0%,
+            #0f172a 100%
+        );
+
+        border: 1px solid #334155;
+        border-radius: 18px;
+        padding: 22px;
+        margin-bottom: 20px;
+        text-align: center;
+    }
+
+    .trade-status-title {
+        font-size: 1rem;
+        color: #94a3b8;
+        font-weight: 700;
+    }
+
+    .trade-status-value {
+        font-size: 2.3rem;
+        font-weight: 900;
+        margin-top: 8px;
+    }
+
+    .trade-buy {
+        color: #22c55e;
+    }
+
+    .trade-sell {
+        color: #ef4444;
+    }
+
+    .trade-neutral {
+        color: #94a3b8;
+    }
+
+    .confidence-card {
+        background: #0f172a;
+        border: 1px solid #1e293b;
+        border-radius: 14px;
+        padding: 18px;
+        text-align: center;
+    }
+
+    .confidence-title {
+        color: #94a3b8;
+        font-size: 0.85rem;
+    }
+
+    .confidence-value {
+        color: #fbbf24;
+        font-size: 2rem;
+        font-weight: 900;
+    }
+
+    .ict-card {
+        background: linear-gradient(
+            135deg,
+            #1e293b 0%,
+            #0f172a 100%
+        );
+
+        padding: 20px;
+        border-radius: 16px;
+        text-align: center;
+        border: 1px solid #334155;
+        margin-bottom: 14px;
+        height: 100%;
+    }
+
+    .ict-title {
+        font-size: 0.85rem;
+        color: #93c5fd;
+        font-weight: 700;
+        letter-spacing: 1px;
+        margin-bottom: 8px;
+        text-transform: uppercase;
+    }
+
+    .ict-value {
+        font-size: 1.8rem;
+        font-weight: 900;
+        color: #fbbf24;
+        line-height: 1.1;
+    }
+
+    .ict-sub {
+        font-size: 0.85rem;
+        color: #64748b;
+        margin-top: 6px;
+    }
+
+    .ict-bullish {
+        color: #22c55e !important;
+    }
+
+    .ict-bearish {
+        color: #ef4444 !important;
+    }
+
+    .ict-neutral {
+        color: #94a3b8 !important;
+    }
+
+    .ict-row {
+        background: #0f172a;
+        border: 1px solid #1e293b;
+        border-radius: 10px;
+        padding: 10px 14px;
+        margin-bottom: 8px;
+    }
+
+    .ict-badge-yes {
+        background: #7f1d1d;
+        color: #fecaca;
+        padding: 4px 12px;
+        border-radius: 999px;
+        font-weight: 700;
+    }
+
+    .ict-badge-no {
+        background: #14532d;
+        color: #bbf7d0;
+        padding: 4px 12px;
+        border-radius: 999px;
+        font-weight: 700;
+    }
+
 </style>
 """,
     unsafe_allow_html=True,
@@ -76,56 +281,47 @@ section[data-testid="stSidebar"] {
 
 
 # ============================================================
-# CONFIG
+# الملفات والثوابت
 # ============================================================
 
-DB_FILE = "xau_deep_ai_v3.db"
+DB_FILE = "xau_deep_ai.db"
 
-MODEL_FILE = "xau_deep_meta_model_v3.pkl"
-SCALER_FILE = "xau_deep_meta_scaler_v3.pkl"
+MODEL_FILE = "xau_deep_mlp_v2.pkl"
+SCALER_FILE = "xau_deep_scaler_v2.pkl"
 
-SYMBOL = "XAU/USD"
+TRAINING_LOCK_FILE = "training.lock"
 
 FEATURES = [
-    "direction_num",
-    "ict_conf",
-    "ict_buy",
-    "ict_sell",
-    "h4_bias",
-    "h1_bias",
-    "m15_trend",
-    "m5_trend",
+    "atr",
+    "ema_50",
+    "ema_200",
     "rsi",
-    "mom3",
-    "mom6",
-    "range_rel",
-    "body_ratio",
-    "volatility_pct",
-    "sweep",
-    "ote_inside",
-    "premium_discount",
-    "fvg_present",
-    "ob_present",
-    "displacement_present",
 ]
 
 
 # ============================================================
-# DATABASE
+# أدوات قاعدة البيانات
 # ============================================================
 
-def get_db():
-    return sqlite3.connect(DB_FILE, timeout=20)
+def get_db_connection():
+    """
+    فتح اتصال SQLite مع timeout مناسب.
+    """
+    return sqlite3.connect(
+        DB_FILE,
+        timeout=15,
+        check_same_thread=False,
+    )
 
 
 def init_db():
 
-    con = get_db()
-    c = con.cursor()
+    conn = get_db_connection()
+    c = conn.cursor()
 
     c.execute(
         """
-        CREATE TABLE IF NOT EXISTS settings(
+        CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
             value TEXT
         )
@@ -134,7 +330,7 @@ def init_db():
 
     c.execute(
         """
-        CREATE TABLE IF NOT EXISTS trades(
+        CREATE TABLE IF NOT EXISTS trades (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             date TEXT,
             symbol TEXT,
@@ -142,36 +338,21 @@ def init_db():
             entry REAL,
             sl REAL,
             tp REAL,
-            result REAL,
             win INTEGER,
-            setup TEXT,
-            confidence REAL,
-            ml_confidence REAL,
-            groq_confidence REAL,
             note TEXT,
-            features TEXT
+            claude_conf REAL,
+            claude_note TEXT,
+            groq_conf REAL,
+            groq_note TEXT,
+            ai_conf_before_groq REAL,
+            ai_conf_after_groq REAL
         )
         """
     )
 
     c.execute(
         """
-        CREATE TABLE IF NOT EXISTS candidates(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            time TEXT,
-            direction TEXT,
-            setup TEXT,
-            score REAL,
-            ml_confidence REAL,
-            accepted INTEGER,
-            snapshot TEXT
-        )
-        """
-    )
-
-    c.execute(
-        """
-        CREATE TABLE IF NOT EXISTS active_trade(
+        CREATE TABLE IF NOT EXISTS active_trade (
             id INTEGER PRIMARY KEY,
             symbol TEXT,
             direction TEXT,
@@ -179,65 +360,114 @@ def init_db():
             sl REAL,
             tp REAL,
             time TEXT,
-            setup TEXT,
-            confidence REAL,
-            ml_confidence REAL,
-            groq_confidence REAL,
             features TEXT,
-            snapshot TEXT
+            ai_conf REAL,
+            groq_conf REAL,
+            groq_note TEXT
         )
         """
     )
 
-    con.commit()
-    con.close()
+    conn.commit()
+
+    # --------------------------------------------------------
+    # ترحيل قواعد البيانات القديمة
+    # --------------------------------------------------------
+
+    migrations = [
+        "ALTER TABLE trades ADD COLUMN claude_conf REAL",
+        "ALTER TABLE trades ADD COLUMN claude_note TEXT",
+        "ALTER TABLE trades ADD COLUMN groq_conf REAL",
+        "ALTER TABLE trades ADD COLUMN groq_note TEXT",
+        "ALTER TABLE trades ADD COLUMN ai_conf_before_groq REAL",
+        "ALTER TABLE trades ADD COLUMN ai_conf_after_groq REAL",
+
+        "ALTER TABLE active_trade ADD COLUMN features TEXT",
+        "ALTER TABLE active_trade ADD COLUMN ai_conf REAL",
+        "ALTER TABLE active_trade ADD COLUMN groq_conf REAL",
+        "ALTER TABLE active_trade ADD COLUMN groq_note TEXT",
+    ]
+
+    for stmt in migrations:
+        try:
+            c.execute(stmt)
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
+
+    conn.close()
 
 
 init_db()
 
 
-def save_setting(key, value):
+# ============================================================
+# Settings
+# ============================================================
 
-    con = get_db()
+def save_setting(key, val):
 
-    con.execute(
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    c.execute(
         """
-        INSERT OR REPLACE INTO settings(key,value)
-        VALUES(?,?)
+        INSERT OR REPLACE INTO settings
+        (key, value)
+        VALUES (?, ?)
         """,
-        (key, str(value)),
+        (
+            key,
+            str(val),
+        ),
     )
 
-    con.commit()
-    con.close()
+    conn.commit()
+    conn.close()
 
 
 def load_setting(key, default=""):
 
-    con = get_db()
+    conn = get_db_connection()
+    c = conn.cursor()
 
-    row = con.execute(
-        """
-        SELECT value
-        FROM settings
-        WHERE key=?
-        """,
+    c.execute(
+        "SELECT value FROM settings WHERE key = ?",
         (key,),
-    ).fetchone()
+    )
 
-    con.close()
+    row = c.fetchone()
+
+    conn.close()
 
     return row[0] if row else default
 
 
+def get_successful_trades_count():
+
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    c.execute(
+        "SELECT COUNT(*) FROM trades WHERE win = 1"
+    )
+
+    count = c.fetchone()[0]
+
+    conn.close()
+
+    return count
+
+
 # ============================================================
-# SIDEBAR
+# Sidebar
 # ============================================================
 
-st.sidebar.header("⚙️ Data / AI")
+st.sidebar.header("⚙️ إعدادات الذكاء الاصطناعي")
+
 
 twelve_key = st.sidebar.text_input(
-    "Twelve Data API",
+    "مفتاح Twelve Data API",
     type="password",
     value=load_setting("twelve_key", ""),
 )
@@ -246,7 +476,7 @@ save_setting("twelve_key", twelve_key)
 
 
 ntfy_channel = st.sidebar.text_input(
-    "Ntfy Channel",
+    "قناة Ntfy للتنبيهات",
     value=load_setting(
         "ntfy",
         "xau_deep_channel",
@@ -256,16 +486,27 @@ ntfy_channel = st.sidebar.text_input(
 save_setting("ntfy", ntfy_channel)
 
 
-# ------------------------------------------------------------
-# GROQ
-# ------------------------------------------------------------
+# ============================================================
+# Groq
+# ============================================================
 
 st.sidebar.markdown("---")
-st.sidebar.header("🧠 Groq Risk Reviewer")
+
+st.sidebar.header("🧠 الرأي الثاني (Groq)")
+
 
 use_groq = st.sidebar.checkbox(
-    "تفعيل مراجعة Groq",
-    value=load_setting("use_groq", "1") == "1",
+    "تفعيل مراجعة Groq قبل فتح الصفقة",
+    value=(
+        load_setting(
+            "use_groq",
+            load_setting(
+                "use_claude",
+                "1",
+            ),
+        )
+        == "1"
+    ),
 )
 
 save_setting(
@@ -275,200 +516,183 @@ save_setting(
 
 
 groq_key = st.sidebar.text_input(
-    "Groq API Key",
+    "مفتاح Groq API",
     type="password",
-    value=load_setting("groq_key", ""),
-)
-
-save_setting("groq_key", groq_key)
-
-
-groq_model = st.sidebar.text_input(
-    "Groq Model",
     value=load_setting(
-        "groq_model",
-        "openai/gpt-oss-20b",
+        "groq_key",
+        "",
     ),
 )
 
-save_setting("groq_model", groq_model)
+save_setting(
+    "groq_key",
+    groq_key,
+)
 
 
-groq_min = st.sidebar.slider(
-    "Minimum Groq confidence %",
+groq_model = st.sidebar.text_input(
+    "اسم نموذج Groq",
+    value=load_setting(
+        "groq_model",
+        "llama-3.3-70b-versatile",
+    ),
+)
+
+save_setting(
+    "groq_model",
+    groq_model,
+)
+
+
+st.sidebar.caption(
+    "تأكد من اسم النموذج المتاح حالياً في Groq Console."
+)
+
+
+min_groq_conf = st.sidebar.slider(
+    "أدنى ثقة مطلوبة من Groq (%)",
     40,
     95,
     60,
+    1,
 )
 
 
-# ------------------------------------------------------------
-# AI
-# ------------------------------------------------------------
-
-ml_min = st.sidebar.slider(
-    "Minimum ML confidence %",
-    50,
-    95,
-    65,
-)
-
-candidate_min = st.sidebar.slider(
-    "Minimum ICT / Quant score",
-    40,
-    100,
-    68,
-)
-
-
-# ------------------------------------------------------------
-# ICT
-# ------------------------------------------------------------
+# ============================================================
+# إدارة المخاطر
+# ============================================================
 
 st.sidebar.markdown("---")
-st.sidebar.header("🧭 ICT / SMC")
 
-swing = st.sidebar.slider(
-    "Swing sensitivity",
+st.sidebar.header("🎯 إدارة المخاطر")
+
+
+atr_mult = st.sidebar.slider(
+    "معامل الوقف ATR",
+    1.0,
+    3.0,
+    1.5,
+    0.1,
+)
+
+
+risk_reward = st.sidebar.slider(
+    "نسبة العائد (R:R)",
+    1.5,
+    4.0,
+    2.0,
+    0.5,
+)
+
+
+min_conf = st.sidebar.slider(
+    "أدنى ثقة مطلوبة من الشبكة العصبية (%)",
+    60,
+    95,
+    75,
+    1,
+)
+
+
+# ============================================================
+# ICT Settings
+# ============================================================
+
+st.sidebar.markdown("---")
+
+st.sidebar.header(
+    "🧭 إعدادات لوحة ICT / Smart Money"
+)
+
+
+show_ict_tab = st.sidebar.checkbox(
+    "إظهار تبويب ICT / Smart Money",
+    value=True,
+)
+
+
+swing_lookback = st.sidebar.slider(
+    "حساسية القمم/القيعان (Swing Lookback)",
     2,
     8,
     3,
+    1,
 )
 
-disp_mult = st.sidebar.slider(
-    "Displacement × ATR",
+
+ob_displacement_mult = st.sidebar.slider(
+    "معامل قوة الاندفاع (Order Block)",
     0.8,
     2.5,
     1.2,
     0.1,
 )
 
-fvg_min_atr = st.sidebar.slider(
-    "Minimum FVG × ATR",
-    0.0,
-    1.0,
-    0.05,
-    0.05,
-)
 
-ob_lookback = st.sidebar.slider(
-    "Order Block lookback",
-    20,
-    120,
-    60,
-)
-
-liquidity_lookback = st.sidebar.slider(
-    "Liquidity lookback",
-    20,
-    150,
-    80,
-)
-
-
-# ------------------------------------------------------------
-# RISK
-# ------------------------------------------------------------
-
-st.sidebar.markdown("---")
-st.sidebar.header("🎯 Risk Management")
-
-atr_sl = st.sidebar.slider(
-    "SL ATR multiplier",
-    0.8,
-    3.0,
-    1.3,
-    0.1,
-)
-
-rr = st.sidebar.slider(
-    "Reward / Risk",
-    1.2,
-    5.0,
-    2.0,
-    0.1,
-)
-
-risk_percent = st.sidebar.slider(
-    "Risk % per trade",
-    0.1,
-    2.0,
-    0.5,
-    0.1,
-)
-
-max_daily_losses = st.sidebar.slider(
-    "Maximum daily losses",
-    1,
-    5,
-    2,
-)
-
-max_daily_loss = st.sidebar.slider(
-    "Maximum daily loss %",
-    0.5,
-    5.0,
-    1.5,
-    0.5,
-)
-
-one_position = st.sidebar.checkbox(
-    "One position at a time",
-    True,
-)
-
-
-# ------------------------------------------------------------
-# SESSION
-# ------------------------------------------------------------
-
-st.sidebar.markdown("---")
-st.sidebar.header("🕒 Trading Sessions — UTC")
-
-session_start = st.sidebar.slider(
-    "Session start",
-    0,
-    23,
-    7,
-)
-
-session_end = st.sidebar.slider(
-    "Session end",
-    0,
-    23,
-    20,
-)
-
-avoid_friday = st.sidebar.checkbox(
-    "Avoid late Friday",
-    True,
+st.sidebar.caption(
+    "لوحة ICT تحليلية للقراءة فقط."
 )
 
 
 # ============================================================
-# ALERTS
+# إعادة التدريب
+# ============================================================
+
+st.sidebar.markdown("---")
+
+
+if st.sidebar.button(
+    "🔄 إعادة تدريب النموذج من الصفر"
+):
+
+    for file_path in (
+        MODEL_FILE,
+        SCALER_FILE,
+        TRAINING_LOCK_FILE,
+    ):
+
+        if os.path.exists(file_path):
+
+            try:
+                os.remove(file_path)
+            except OSError:
+                pass
+
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+
+    st.rerun()
+
+
+# ============================================================
+# Ntfy
 # ============================================================
 
 def send_alert(
-    message,
-    title="🧠 XAU Deep AI",
+    msg,
+    title="🧠 Deep AI Alert",
 ):
 
     if not ntfy_channel:
         return
 
+    ch = ntfy_channel.strip().split("/")[-1]
+
+    if not ch:
+        return
+
     try:
 
-        channel = ntfy_channel.strip().split("/")[-1]
-
         requests.post(
-            f"https://ntfy.sh/{channel}",
-            data=message.encode("utf-8"),
+            f"https://ntfy.sh/{ch}",
+            data=msg.encode("utf-8"),
             headers={
                 "Title": title,
                 "Priority": "high",
             },
-            timeout=5,
+            timeout=4,
         )
 
     except Exception:
@@ -476,15 +700,14 @@ def send_alert(
 
 
 # ============================================================
-# TWELVE DATA
+# Twelve Data
 # ============================================================
 
-@st.cache_data(ttl=240)
-def fetch_twelve_data(
+def fetch_twelve_series(
     api_key,
-    symbol,
-    interval,
-    outputsize=500,
+    symbol="XAU/USD",
+    interval="1h",
+    outputsize=150,
 ):
 
     if not api_key:
@@ -492,260 +715,1267 @@ def fetch_twelve_data(
 
     try:
 
-        response = requests.get(
-            "https://api.twelvedata.com/time_series",
-            params={
-                "symbol": symbol,
-                "interval": interval,
-                "outputsize": outputsize,
-                "apikey": api_key,
-            },
-            timeout=10,
+        url = (
+            "https://api.twelvedata.com/time_series"
+            f"?symbol={symbol}"
+            f"&interval={interval}"
+            f"&outputsize={outputsize}"
+            f"&apikey={api_key}"
         )
 
-        data = response.json()
+        response = requests.get(
+            url,
+            timeout=8,
+        )
 
-        if "values" not in data:
+        response.raise_for_status()
 
-            st.session_state["td_error"] = data.get(
+        result = response.json()
+
+        if "values" not in result:
+
+            st.session_state[
+                "last_twelve_error"
+            ] = result.get(
                 "message",
-                "Twelve Data error",
+                "استجابة غير متوقعة من Twelve Data.",
             )
 
             return pd.DataFrame()
 
-        df = pd.DataFrame(data["values"])
+        values = result["values"]
 
-        df = df[
-            [
-                "datetime",
-                "open",
-                "high",
-                "low",
-                "close",
-            ]
-        ].copy()
+        if not values:
+            return pd.DataFrame()
 
-        df["datetime"] = pd.to_datetime(
-            df["datetime"],
-            errors="coerce",
-            utc=True,
-        )
-
-        for column in [
+        required_columns = [
             "open",
             "high",
             "low",
             "close",
-        ]:
+        ]
 
-            df[column] = pd.to_numeric(
-                df[column],
-                errors="coerce",
-            )
+        df = pd.DataFrame(values)
+
+        if not all(
+            col in df.columns
+            for col in required_columns
+        ):
+            st.session_state[
+                "last_twelve_error"
+            ] = "بيانات Twelve Data لا تحتوي الأعمدة المطلوبة."
+
+            return pd.DataFrame()
+
+        df = df[
+            required_columns
+        ].astype(float)
 
         df = (
-            df.dropna()
-            .sort_values("datetime")
-            .drop_duplicates("datetime")
+            df.iloc[::-1]
             .reset_index(drop=True)
         )
 
+        st.session_state[
+            "last_twelve_error"
+        ] = None
+
         return df
 
-    except Exception as e:
+    except Exception as exc:
 
-        st.session_state["td_error"] = str(e)
+        st.session_state[
+            "last_twelve_error"
+        ] = f"تعذّر الاتصال بـ Twelve Data: {exc}"
 
         return pd.DataFrame()
 
 
 # ============================================================
-# QUANT INDICATORS
+# Training Data
 # ============================================================
 
-def add_indicators(df):
+@st.cache_data(ttl=86400)
+def fetch_training_data_twelve(api_key):
 
-    if df.empty:
-        return df
+    return fetch_twelve_series(
+        api_key,
+        symbol="XAU/USD",
+        interval="1h",
+        outputsize=5000,
+    )
 
-    x = df.copy()
+
+# ============================================================
+# Deep Indicators
+# ============================================================
+
+def apply_deep_indicators(df):
+
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    if len(df) < 210:
+        return pd.DataFrame()
+
+    df = df.copy()
 
     tr = pd.concat(
         [
-            x.high - x.low,
-            (x.high - x.close.shift()).abs(),
-            (x.low - x.close.shift()).abs(),
+            df["high"] - df["low"],
+            (
+                df["high"]
+                - df["close"].shift()
+            ).abs(),
+            (
+                df["low"]
+                - df["close"].shift()
+            ).abs(),
         ],
         axis=1,
     ).max(axis=1)
 
-    x["atr"] = tr.rolling(14).mean()
+    df["atr"] = (
+        tr
+        .rolling(14)
+        .mean()
+    )
 
-    x["ema20"] = x.close.ewm(
-        span=20,
-        adjust=False,
-    ).mean()
+    df["ema_50"] = (
+        df["close"]
+        .ewm(
+            span=50,
+            adjust=False,
+        )
+        .mean()
+    )
 
-    x["ema50"] = x.close.ewm(
-        span=50,
-        adjust=False,
-    ).mean()
+    df["ema_200"] = (
+        df["close"]
+        .ewm(
+            span=200,
+            adjust=False,
+        )
+        .mean()
+    )
 
-    x["ema200"] = x.close.ewm(
-        span=200,
-        adjust=False,
-    ).mean()
-
-    delta = x.close.diff()
+    delta = df["close"].diff()
 
     gain = (
-        delta.clip(lower=0)
+        delta.where(
+            delta > 0,
+            0,
+        )
         .rolling(14)
         .mean()
     )
 
     loss = (
-        -delta.clip(upper=0)
+        -delta.where(
+            delta < 0,
+            0,
+        )
         .rolling(14)
         .mean()
     )
 
-    rs = gain / (loss + 1e-9)
+    rs = gain / (
+        loss + 1e-6
+    )
 
-    x["rsi"] = (
+    df["rsi"] = (
         100
-        - 100 / (1 + rs)
+        - (
+            100
+            / (1 + rs)
+        )
     )
 
-    x["mom3"] = (
-        x.close.pct_change(3)
-        * 100
+    df.replace(
+        [np.inf, -np.inf],
+        np.nan,
+        inplace=True,
     )
 
-    x["mom6"] = (
-        x.close.pct_change(6)
-        * 100
+    df.dropna(
+        inplace=True
     )
 
-    x["range"] = x.high - x.low
-
-    x["body"] = (
-        x.close - x.open
-    ).abs()
-
-    x["body_ratio"] = (
-        x.body
-        / (x.range + 1e-9)
+    return df.reset_index(
+        drop=True
     )
 
-    x["range_rel"] = (
-        x.range
-        / (x.atr + 1e-9)
+
+# ============================================================
+# Model Validation
+# ============================================================
+
+def model_is_ready(model_obj, scaler_obj):
+
+    if model_obj is None:
+        return False
+
+    if scaler_obj is None:
+        return False
+
+    if not hasattr(
+        scaler_obj,
+        "mean_",
+    ):
+        return False
+
+    if not hasattr(
+        model_obj,
+        "classes_",
+    ):
+        return False
+
+    try:
+
+        if len(
+            getattr(
+                model_obj,
+                "classes_",
+                [],
+            )
+        ) < 2:
+            return False
+
+    except Exception:
+        return False
+
+    return True
+
+
+# ============================================================
+# Background Training
+# ============================================================
+
+def _background_train_and_save(
+    api_key
+):
+
+    try:
+
+        df_train = (
+            fetch_training_data_twelve(
+                api_key
+            )
+        )
+
+        df_train = (
+            apply_deep_indicators(
+                df_train
+            )
+        )
+
+        if (
+            df_train.empty
+            or len(df_train) < 100
+        ):
+            return
+
+        X = (
+            df_train[
+                FEATURES
+            ]
+            .values[:-1]
+        )
+
+        future_close = (
+            df_train[
+                "close"
+            ]
+            .shift(-1)
+        )
+
+        y = np.where(
+            future_close
+            > df_train["close"],
+            1,
+            0,
+        )[:-1]
+
+        if (
+            len(X) < 100
+            or len(y) < 100
+        ):
+            return
+
+        if len(
+            np.unique(y)
+        ) < 2:
+            return
+
+        new_scaler = (
+            StandardScaler()
+        )
+
+        X_scaled = (
+            new_scaler.fit_transform(
+                X
+            )
+        )
+
+        new_model = (
+            MLPClassifier(
+                hidden_layer_sizes=(
+                    100,
+                    50,
+                ),
+                activation="relu",
+                solver="adam",
+                max_iter=1000,
+                random_state=42,
+            )
+        )
+
+        new_model.fit(
+            X_scaled,
+            y,
+        )
+
+        if not model_is_ready(
+            new_model,
+            new_scaler,
+        ):
+            return
+
+        joblib.dump(
+            new_model,
+            MODEL_FILE,
+        )
+
+        joblib.dump(
+            new_scaler,
+            SCALER_FILE,
+        )
+
+    except Exception:
+        pass
+
+    finally:
+
+        if os.path.exists(
+            TRAINING_LOCK_FILE
+        ):
+
+            try:
+                os.remove(
+                    TRAINING_LOCK_FILE
+                )
+            except OSError:
+                pass
+
+
+# ============================================================
+# Train / Load Model
+# ============================================================
+
+def train_deep_model(
+    api_key
+):
+
+    if (
+        os.path.exists(
+            MODEL_FILE
+        )
+        and os.path.exists(
+            SCALER_FILE
+        )
+    ):
+
+        try:
+
+            loaded_model = (
+                joblib.load(
+                    MODEL_FILE
+                )
+            )
+
+            loaded_scaler = (
+                joblib.load(
+                    SCALER_FILE
+                )
+            )
+
+            if model_is_ready(
+                loaded_model,
+                loaded_scaler,
+            ):
+
+                return (
+                    loaded_model,
+                    loaded_scaler,
+                )
+
+        except Exception:
+            pass
+
+    if (
+        api_key
+        and not os.path.exists(
+            TRAINING_LOCK_FILE
+        )
+    ):
+
+        try:
+
+            with open(
+                TRAINING_LOCK_FILE,
+                "x",
+            ) as file:
+
+                file.write(
+                    str(
+                        datetime.now(
+                            timezone.utc
+                        )
+                    )
+                )
+
+            thread = threading.Thread(
+                target=(
+                    _background_train_and_save
+                ),
+                args=(api_key,),
+                daemon=True,
+            )
+
+            thread.start()
+
+        except FileExistsError:
+            pass
+
+        except Exception:
+            pass
+
+    return (
+        None,
+        None,
     )
 
-    x["volatility_pct"] = (
-        x.atr.rolling(100)
-        .rank(pct=True)
-        * 100
+
+model, scaler = train_deep_model(
+    twelve_key
+)
+
+
+# ============================================================
+# Groq Review
+# ============================================================
+
+def get_groq_review(
+    direction,
+    last_row,
+    ai_conf,
+    api_key,
+    model_name,
+):
+
+    if not api_key:
+        return None
+
+    try:
+
+        prompt = (
+            "أنت محلل فني مساعد لصفقة محتملة "
+            "على XAU/USD. "
+            f"الاتجاه المقترح من نموذج الذكاء الاصطناعي: "
+            f"{direction}. "
+            f"ثقة النموذج الأساسية: "
+            f"{ai_conf:.1f}%. "
+            f"ATR={last_row['atr']:.2f}, "
+            f"EMA50={last_row['ema_50']:.2f}, "
+            f"EMA200={last_row['ema_200']:.2f}, "
+            f"RSI={last_row['rsi']:.1f}, "
+            f"السعر={last_row['close']:.2f}. "
+            "قم بمراجعة الاتجاه بشكل مستقل. "
+            "لا تفترض أن النموذج الأساسي صحيح. "
+            "أجب فقط JSON صالح بدون Markdown "
+            "وبهذا الشكل: "
+            '{"agree": true, '
+            '"confidence": 0, '
+            '"reason": "..."}'
+        )
+
+        response = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={
+                "Authorization": (
+                    f"Bearer {api_key}"
+                ),
+                "Content-Type": (
+                    "application/json"
+                ),
+            },
+            json={
+                "model": model_name,
+                "max_completion_tokens": 300,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": prompt,
+                    }
+                ],
+                "response_format": {
+                    "type": "json_object"
+                },
+            },
+            timeout=15,
+        )
+
+        response.raise_for_status()
+
+        data = response.json()
+
+        choices = data.get(
+            "choices",
+            [],
+        )
+
+        if not choices:
+            return None
+
+        message = choices[0].get(
+            "message",
+            {},
+        )
+
+        text = message.get(
+            "content",
+            "",
+        )
+
+        if not text:
+            return None
+
+        cleaned = (
+            text
+            .replace(
+                "```json",
+                "",
+            )
+            .replace(
+                "```",
+                "",
+            )
+            .strip()
+        )
+
+        parsed = json.loads(
+            cleaned
+        )
+
+        agree = bool(
+            parsed.get(
+                "agree",
+                False,
+            )
+        )
+
+        confidence = float(
+            parsed.get(
+                "confidence",
+                0,
+            )
+        )
+
+        confidence = max(
+            0,
+            min(
+                100,
+                confidence,
+            ),
+        )
+
+        reason = str(
+            parsed.get(
+                "reason",
+                "",
+            )
+        )
+
+        return {
+            "agree": agree,
+            "confidence": confidence,
+            "reason": reason,
+        }
+
+    except Exception:
+        return None
+
+
+# ============================================================
+# AI Scanner
+# ============================================================
+
+def ai_scanner(
+    df_live_processed
+):
+
+    result = {
+        "trade_exists": False,
+        "direction": None,
+        "ai_conf_before_groq": 0.0,
+        "groq_called": False,
+        "groq_available": False,
+        "groq_agree": None,
+        "groq_conf": None,
+        "groq_reason": "",
+        "final_confidence": 0.0,
+        "status": "",
+    }
+
+    if not twelve_key:
+
+        result["status"] = (
+            "النظام متوقف: يرجى إدخال "
+            "مفتاح Twelve Data API."
+        )
+
+        return (
+            result["status"],
+            result,
+        )
+
+    conn = get_db_connection()
+
+    try:
+
+        df_act = pd.read_sql(
+            """
+            SELECT *
+            FROM active_trade
+            WHERE id = 1
+            """,
+            conn,
+        )
+
+    finally:
+
+        conn.close()
+
+    if not df_act.empty:
+
+        active = df_act.iloc[0]
+
+        result[
+            "trade_exists"
+        ] = True
+
+        result[
+            "direction"
+        ] = active["direction"]
+
+        result[
+            "ai_conf_before_groq"
+        ] = float(
+            active.get(
+                "ai_conf",
+                0,
+            )
+            or 0
+        )
+
+        groq_conf = active.get(
+            "groq_conf",
+            None,
+        )
+
+        if pd.notna(
+            groq_conf
+        ):
+            result[
+                "groq_conf"
+            ] = float(
+                groq_conf
+            )
+
+        result[
+            "groq_reason"
+        ] = str(
+            active.get(
+                "groq_note",
+                "",
+            )
+            or ""
+        )
+
+        result[
+            "final_confidence"
+        ] = (
+            result[
+                "groq_conf"
+            ]
+            if result[
+                "groq_conf"
+            ] is not None
+            else result[
+                "ai_conf_before_groq"
+            ]
+        )
+
+        result["status"] = (
+            "الذكاء الاصطناعي يدير "
+            "صفقة نشطة حالياً."
+        )
+
+        return (
+            result["status"],
+            result,
+        )
+
+    if (
+        df_live_processed is None
+        or df_live_processed.empty
+    ):
+
+        result["status"] = (
+            "لا توجد صفقة: بيانات السوق "
+            "غير كافية."
+        )
+
+        return (
+            result["status"],
+            result,
+        )
+
+    if not model_is_ready(
+        model,
+        scaler,
+    ):
+
+        result["status"] = (
+            "الشبكة العصبية قيد "
+            "التهيئة والتدريب."
+        )
+
+        return (
+            result["status"],
+            result,
+        )
+
+    last = (
+        df_live_processed.iloc[-1]
+    )
+
+    try:
+
+        feature_values = (
+            last[
+                FEATURES
+            ]
+            .astype(float)
+            .values
+            .reshape(
+                1,
+                -1,
+            )
+        )
+
+        x_input = (
+            scaler.transform(
+                feature_values
+            )
+        )
+
+        probabilities = (
+            model.predict_proba(
+                x_input
+            )[0]
+        )
+
+        pred = int(
+            np.argmax(
+                probabilities
+            )
+        )
+
+        ai_conf = float(
+            probabilities[pred]
+            * 100
+        )
+
+    except Exception as exc:
+
+        result["status"] = (
+            "تعذر تنفيذ تنبؤ الشبكة "
+            f"العصبية: {exc}"
+        )
+
+        return (
+            result["status"],
+            result,
+        )
+
+    result[
+        "ai_conf_before_groq"
+    ] = ai_conf
+
+    if ai_conf < min_conf:
+
+        result["status"] = (
+            f"لا توجد صفقة: ثقة AI "
+            f"({ai_conf:.1f}%) أقل من "
+            f"المطلوب ({min_conf}%)."
+        )
+
+        return (
+            result["status"],
+            result,
+        )
+
+    direction = (
+        "BUY 🟢"
+        if pred == 1
+        else "SELL 🔴"
+    )
+
+    result[
+        "direction"
+    ] = direction
+
+    # --------------------------------------------------------
+    # Groq
+    # --------------------------------------------------------
+
+    groq_result = None
+
+    if use_groq:
+
+        result[
+            "groq_called"
+        ] = True
+
+        groq_result = (
+            get_groq_review(
+                direction,
+                last,
+                ai_conf,
+                groq_key,
+                groq_model,
+            )
+        )
+
+        if groq_result is not None:
+
+            result[
+                "groq_available"
+            ] = True
+
+            result[
+                "groq_agree"
+            ] = groq_result[
+                "agree"
+            ]
+
+            result[
+                "groq_conf"
+            ] = groq_result[
+                "confidence"
+            ]
+
+            result[
+                "groq_reason"
+            ] = groq_result[
+                "reason"
+            ]
+
+            # ------------------------------------------------
+            # Groq رفض
+            # ------------------------------------------------
+
+            if (
+                not groq_result[
+                    "agree"
+                ]
+                or groq_result[
+                    "confidence"
+                ] < min_groq_conf
+            ):
+
+                result[
+                    "final_confidence"
+                ] = min(
+                    ai_conf,
+                    groq_result[
+                        "confidence"
+                    ],
+                )
+
+                result["status"] = (
+                    "🟡 إشارة AI موجودة، "
+                    "لكن Groq لم يعتمد الصفقة."
+                )
+
+                return (
+                    result["status"],
+                    result,
+                )
+
+            # ------------------------------------------------
+            # Groq وافق
+            # ------------------------------------------------
+
+            result[
+                "final_confidence"
+            ] = round(
+                (
+                    ai_conf
+                    + groq_result[
+                        "confidence"
+                    ]
+                )
+                / 2,
+                1,
+            )
+
+        else:
+
+            # ------------------------------------------------
+            # Groq لم يستجب
+            # ------------------------------------------------
+
+            result[
+                "groq_available"
+            ] = False
+
+            result[
+                "final_confidence"
+            ] = ai_conf
+
+            result["status"] = (
+                "🟠 AI أعطى إشارة، "
+                "لكن Groq لم يستجب. "
+                "تم منع فتح الصفقة تحفظاً."
+            )
+
+            return (
+                result["status"],
+                result,
+            )
+
+    else:
+
+        result[
+            "final_confidence"
+        ] = ai_conf
+
+    # --------------------------------------------------------
+    # حساب SL / TP
+    # --------------------------------------------------------
+
+    curr = round(
+        float(last["close"]),
+        2,
+    )
+
+    atr_value = float(
+        last["atr"]
+    )
+
+    if (
+        not np.isfinite(
+            atr_value
+        )
+        or atr_value <= 0
+    ):
+
+        result["status"] = (
+            "لا توجد صفقة: قيمة ATR "
+            "غير صالحة."
+        )
+
+        return (
+            result["status"],
+            result,
+        )
+
+    sl_distance = round(
+        atr_value * atr_mult,
+        2,
+    )
+
+    tp_distance = round(
+        sl_distance
+        * risk_reward,
+        2,
+    )
+
+    if pred == 1:
+
+        sl_price = round(
+            curr - sl_distance,
+            2,
+        )
+
+        tp_price = round(
+            curr + tp_distance,
+            2,
+        )
+
+    else:
+
+        sl_price = round(
+            curr + sl_distance,
+            2,
+        )
+
+        tp_price = round(
+            curr - tp_distance,
+            2,
+        )
+
+    # --------------------------------------------------------
+    # تخزين الصفقة
+    # --------------------------------------------------------
+
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    try:
+
+        c.execute(
+            "DELETE FROM active_trade"
+        )
+
+        c.execute(
+            """
+            INSERT INTO active_trade
+            (
+                id,
+                symbol,
+                direction,
+                entry,
+                sl,
+                tp,
+                time,
+                features,
+                ai_conf,
+                groq_conf,
+                groq_note
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                1,
+                "XAU/USD",
+                direction,
+                curr,
+                sl_price,
+                tp_price,
+                datetime.now(
+                    timezone.utc
+                ).strftime(
+                    "%H:%M:%S"
+                ),
+                json.dumps(
+                    last[
+                        FEATURES
+                    ].to_dict()
+                ),
+                ai_conf,
+                (
+                    result[
+                        "groq_conf"
+                    ]
+                    if result[
+                        "groq_conf"
+                    ] is not None
+                    else None
+                ),
+                result[
+                    "groq_reason"
+                ],
+            ),
+        )
+
+        conn.commit()
+
+    finally:
+
+        conn.close()
+
+    # --------------------------------------------------------
+    # Alert
+    # --------------------------------------------------------
+
+    groq_line = ""
+
+    if result[
+        "groq_available"
+    ]:
+
+        groq_line = (
+            f"\nGroq: "
+            f"{result['groq_conf']:.1f}%"
+        )
+
+    send_alert(
+        (
+            f"🧠 AI Trade Executed\n"
+            f"Direction: {direction}\n"
+            f"Entry: ${curr}\n"
+            f"SL: ${sl_price}\n"
+            f"TP: ${tp_price}\n"
+            f"AI Before Groq: "
+            f"{ai_conf:.1f}%"
+            f"{groq_line}\n"
+            f"Final Confidence: "
+            f"{result['final_confidence']:.1f}%"
+        )
+    )
+
+    result[
+        "trade_exists"
+    ] = True
+
+    result[
+        "status"
+    ] = (
+        f"🟢 تم إطلاق الصفقة "
+        f"({direction}) — "
+        f"ثقة AI قبل Groq: "
+        f"{ai_conf:.1f}% — "
+        f"الثقة النهائية: "
+        f"{result['final_confidence']:.1f}%"
     )
 
     return (
-        x.dropna()
-        .reset_index(drop=True)
+        result["status"],
+        result,
     )
 
 
-def closed_candles(df):
-
-    if len(df) <= 2:
-        return df.copy()
-
-    return df.iloc[:-1].copy()
-
-
 # ============================================================
-# SWING STRUCTURE
+# ICT — Swing Points
 # ============================================================
 
-def find_swings(df, n=3):
-
-    highs = []
-    lows = []
-
-    h = df.high.values
-    l = df.low.values
-
-    for i in range(
-        n,
-        len(df) - n,
-    ):
-
-        if (
-            h[i]
-            >= h[i - n:i + n + 1].max()
-        ):
-
-            highs.append(
-                (
-                    i,
-                    float(h[i]),
-                )
-            )
-
-        if (
-            l[i]
-            <= l[i - n:i + n + 1].min()
-        ):
-
-            lows.append(
-                (
-                    i,
-                    float(l[i]),
-                )
-            )
-
-    return highs, lows
-
-
-# ============================================================
-# MARKET STRUCTURE
-# ============================================================
-
-def analyze_structure(
+def find_swing_points(
     df,
-    n=3,
+    lookback=3,
 ):
 
-    highs, lows = find_swings(
-        df,
-        n,
+    if (
+        df is None
+        or df.empty
+    ):
+        return [], []
+
+    highs = (
+        df["high"]
+        .astype(float)
+        .values
     )
+
+    lows = (
+        df["low"]
+        .astype(float)
+        .values
+    )
+
+    n = len(df)
+
+    swing_highs = []
+    swing_lows = []
+
+    for i in range(
+        lookback,
+        n - lookback,
+    ):
+
+        high_window = highs[
+            i - lookback:
+            i + lookback + 1
+        ]
+
+        low_window = lows[
+            i - lookback:
+            i + lookback + 1
+        ]
+
+        if highs[i] == np.max(
+            high_window
+        ):
+
+            swing_highs.append(
+                (
+                    i,
+                    float(
+                        highs[i]
+                    ),
+                )
+            )
+
+        if lows[i] == np.min(
+            low_window
+        ):
+
+            swing_lows.append(
+                (
+                    i,
+                    float(
+                        lows[i]
+                    ),
+                )
+            )
+
+    return (
+        swing_highs,
+        swing_lows,
+    )
+
+
+# ============================================================
+# ICT — Market Structure
+# ============================================================
+
+def analyze_market_structure(
+    swing_highs,
+    swing_lows,
+):
 
     events = (
         [
-            (i, "H", p)
-            for i, p in highs
+            (
+                i,
+                "high",
+                p,
+            )
+            for i, p
+            in swing_highs
         ]
         +
         [
-            (i, "L", p)
-            for i, p in lows
+            (
+                i,
+                "low",
+                p,
+            )
+            for i, p
+            in swing_lows
         ]
     )
 
-    events.sort()
+    events.sort(
+        key=lambda x: x[0]
+    )
 
-    bias = "NEUTRAL"
+    structure_breaks = []
+
+    trend = None
 
     last_high = None
     last_low = None
 
-    breaks = []
+    for (
+        i,
+        kind,
+        price,
+    ) in events:
 
-    for i, kind, price in events:
-
-        if kind == "H":
+        if kind == "high":
 
             if (
                 last_high is not None
@@ -754,20 +1984,23 @@ def analyze_structure(
 
                 label = (
                     "BOS"
-                    if bias == "BULLISH"
+                    if trend
+                    == "bullish"
                     else "CHoCH"
                 )
 
-                breaks.append(
+                structure_breaks.append(
                     {
                         "type": label,
                         "direction": "BULLISH",
-                        "price": price,
-                        "index": i,
+                        "price": round(
+                            price,
+                            2,
+                        ),
                     }
                 )
 
-                bias = "BULLISH"
+                trend = "bullish"
 
             last_high = price
 
@@ -780,2523 +2013,2934 @@ def analyze_structure(
 
                 label = (
                     "BOS"
-                    if bias == "BEARISH"
+                    if trend
+                    == "bearish"
                     else "CHoCH"
                 )
 
-                breaks.append(
+                structure_breaks.append(
                     {
                         "type": label,
                         "direction": "BEARISH",
-                        "price": price,
-                        "index": i,
+                        "price": round(
+                            price,
+                            2,
+                        ),
                     }
                 )
 
-                bias = "BEARISH"
+                trend = "bearish"
 
             last_low = price
 
-    return {
-        "bias": bias,
-        "highs": highs,
-        "lows": lows,
-        "breaks": breaks[-10:],
-    }
-
-
-# ============================================================
-# DISPLACEMENT
-# ============================================================
-
-def detect_displacement(
-    df,
-    multiplier=1.2,
-):
-
-    results = []
-
-    start = max(
-        0,
-        len(df) - 20,
+    current_bias = (
+        structure_breaks[-1][
+            "direction"
+        ]
+        if structure_breaks
+        else "NEUTRAL"
     )
 
-    for i in range(
-        start,
-        len(df),
-    ):
-
-        row = df.iloc[i]
-
-        if row.atr <= 0:
-            continue
-
-        body = row.close - row.open
-
-        if (
-            abs(body)
-            > multiplier * row.atr
-            and row.body_ratio >= 0.65
-        ):
-
-            results.append(
-                {
-                    "index": i,
-                    "direction": (
-                        "BULLISH"
-                        if body > 0
-                        else "BEARISH"
-                    ),
-                    "strength": round(
-                        abs(body)
-                        / row.atr,
-                        2,
-                    ),
-                }
-            )
-
-    return results
+    return (
+        current_bias,
+        structure_breaks[-8:],
+    )
 
 
 # ============================================================
-# FAIR VALUE GAPS
-# ============================================================
-
-def detect_fvg(
-    df,
-    minimum_atr=0.05,
-):
-
-    bullish = []
-    bearish = []
-
-    for i in range(
-        2,
-        len(df),
-    ):
-
-        first = df.iloc[i - 2]
-        middle = df.iloc[i - 1]
-        third = df.iloc[i]
-
-        atr = middle.atr
-
-        if atr <= 0:
-            continue
-
-        # Bullish FVG
-        if first.high < third.low:
-
-            size = (
-                third.low
-                - first.high
-            )
-
-            if size >= minimum_atr * atr:
-
-                bullish.append(
-                    {
-                        "index": i,
-                        "bottom": float(first.high),
-                        "top": float(third.low),
-                        "size": float(size),
-                    }
-                )
-
-        # Bearish FVG
-        if first.low > third.high:
-
-            size = (
-                first.low
-                - third.high
-            )
-
-            if size >= minimum_atr * atr:
-
-                bearish.append(
-                    {
-                        "index": i,
-                        "bottom": float(third.high),
-                        "top": float(first.low),
-                        "size": float(size),
-                    }
-                )
-
-    return bullish[-5:], bearish[-5:]
-
-
-# ============================================================
-# ORDER BLOCKS
+# ICT — Order Blocks
 # ============================================================
 
 def detect_order_blocks(
     df,
-    lookback=60,
-    displacement_multiplier=1.2,
+    lookback=40,
+    displacement_atr_mult=1.2,
 ):
 
-    start = max(
-        1,
-        len(df) - lookback,
+    if (
+        df is None
+        or df.empty
+        or "atr" not in df.columns
+        or len(df) < 5
+    ):
+        return None, None
+
+    recent = (
+        df.iloc[
+            -lookback:
+        ]
+        .reset_index(
+            drop=True
+        )
     )
 
-    bullish = []
-    bearish = []
+    bullish_ob = None
+    bearish_ob = None
 
     for i in range(
-        start,
-        len(df),
+        1,
+        len(recent),
     ):
 
-        row = df.iloc[i]
-
-        if row.atr <= 0:
-            continue
-
-        body = row.close - row.open
+        atr_value = float(
+            recent[
+                "atr"
+            ].iloc[i]
+        )
 
         if (
+            not np.isfinite(
+                atr_value
+            )
+            or atr_value <= 0
+        ):
+            continue
+
+        body = (
+            recent[
+                "close"
+            ].iloc[i]
+            -
+            recent[
+                "open"
+            ].iloc[i]
+        )
+
+        is_displacement = (
             abs(body)
-            <= displacement_multiplier
-            * row.atr
-        ):
+            >
+            displacement_atr_mult
+            * atr_value
+        )
 
-            continue
+        previous = (
+            recent.iloc[i - 1]
+        )
 
-        previous = df.iloc[i - 1]
-
-        # Bullish displacement after bearish candle
         if (
-            body > 0
-            and previous.close
-            < previous.open
+            is_displacement
+            and body > 0
+            and previous[
+                "close"
+            ]
+            < previous[
+                "open"
+            ]
         ):
 
-            bullish.append(
-                {
-                    "index": i - 1,
-                    "top": float(previous.open),
-                    "bottom": float(previous.low),
-                    "strength": round(
-                        abs(body)
-                        / row.atr,
-                        2,
+            bullish_ob = {
+                "top": round(
+                    float(
+                        previous[
+                            "open"
+                        ]
                     ),
-                }
-            )
+                    2,
+                ),
+                "bottom": round(
+                    float(
+                        previous[
+                            "low"
+                        ]
+                    ),
+                    2,
+                ),
+                "bias": "BULLISH",
+                "strength": round(
+                    min(
+                        (
+                            abs(body)
+                            / atr_value
+                        )
+                        * 100,
+                        999,
+                    ),
+                    1,
+                ),
+            }
 
-        # Bearish displacement after bullish candle
-        if (
-            body < 0
-            and previous.close
-            > previous.open
+        elif (
+            is_displacement
+            and body < 0
+            and previous[
+                "close"
+            ]
+            > previous[
+                "open"
+            ]
         ):
 
-            bearish.append(
-                {
-                    "index": i - 1,
-                    "top": float(previous.high),
-                    "bottom": float(previous.open),
-                    "strength": round(
-                        abs(body)
-                        / row.atr,
-                        2,
+            bearish_ob = {
+                "top": round(
+                    float(
+                        previous[
+                            "high"
+                        ]
                     ),
-                }
-            )
+                    2,
+                ),
+                "bottom": round(
+                    float(
+                        previous[
+                            "open"
+                        ]
+                    ),
+                    2,
+                ),
+                "bias": "BEARISH",
+                "strength": round(
+                    min(
+                        (
+                            abs(body)
+                            / atr_value
+                        )
+                        * 100,
+                        999,
+                    ),
+                    1,
+                ),
+            }
 
     return (
-        bullish[-1] if bullish else None,
-        bearish[-1] if bearish else None,
+        bullish_ob,
+        bearish_ob,
     )
 
 
 # ============================================================
-# LIQUIDITY
+# ICT — FVG
 # ============================================================
 
-def detect_liquidity(
+def detect_fvg(
     df,
-    structure,
+    lookback=60,
 ):
 
-    highs = structure["highs"][-8:]
-    lows = structure["lows"][-8:]
+    if (
+        df is None
+        or df.empty
+        or len(df) < 3
+    ):
+        return None, None
 
-    if not highs or not lows:
-        return {}
-
-    bsl = max(
-        price
-        for _, price in highs
+    recent = (
+        df.iloc[
+            -lookback:
+        ]
+        .reset_index(
+            drop=True
+        )
     )
 
-    ssl = min(
-        price
-        for _, price in lows
+    bullish_fvg = None
+    bearish_fvg = None
+
+    for i in range(
+        2,
+        len(recent),
+    ):
+
+        c1 = recent.iloc[
+            i - 2
+        ]
+
+        c3 = recent.iloc[
+            i
+        ]
+
+        if (
+            c1["high"]
+            <
+            c3["low"]
+        ):
+
+            bullish_fvg = {
+                "top": round(
+                    float(
+                        c3["low"]
+                    ),
+                    2,
+                ),
+                "bottom": round(
+                    float(
+                        c1["high"]
+                    ),
+                    2,
+                ),
+                "bias": "BULLISH",
+            }
+
+        if (
+            c1["low"]
+            >
+            c3["high"]
+        ):
+
+            bearish_fvg = {
+                "top": round(
+                    float(
+                        c1["low"]
+                    ),
+                    2,
+                ),
+                "bottom": round(
+                    float(
+                        c3["high"]
+                    ),
+                    2,
+                ),
+                "bias": "BEARISH",
+            }
+
+    return (
+        bullish_fvg,
+        bearish_fvg,
+    )
+
+
+# ============================================================
+# ICT — Liquidity
+# ============================================================
+
+def detect_liquidity_and_manipulation(
+    df,
+    swing_highs,
+    swing_lows,
+):
+
+    if (
+        not swing_highs
+        or not swing_lows
+        or df is None
+        or df.empty
+    ):
+
+        return (
+            None,
+            None,
+            False,
+            "",
+        )
+
+    bsl_price = max(
+        p
+        for _, p
+        in swing_highs[-5:]
+    )
+
+    ssl_price = min(
+        p
+        for _, p
+        in swing_lows[-5:]
     )
 
     last = df.iloc[-1]
 
-    sweep = None
+    manipulation = False
+    note = ""
 
     if (
-        last.high > bsl
-        and last.close < bsl
+        last["high"]
+        > bsl_price
+        and last["close"]
+        < bsl_price
     ):
 
-        sweep = "BSL_SWEEP"
+        manipulation = True
+        note = (
+            "BSL swept — احتمال انعكاس."
+        )
 
     elif (
-        last.low < ssl
-        and last.close > ssl
+        last["low"]
+        < ssl_price
+        and last["close"]
+        > ssl_price
     ):
 
-        sweep = "SSL_SWEEP"
+        manipulation = True
+        note = (
+            "SSL swept — احتمال انعكاس."
+        )
 
-    return {
-        "bsl": float(bsl),
-        "ssl": float(ssl),
-        "sweep": sweep,
-    }
+    return (
+        round(
+            bsl_price,
+            2,
+        ),
+        round(
+            ssl_price,
+            2,
+        ),
+        manipulation,
+        note,
+    )
 
 
 # ============================================================
-# PREMIUM / DISCOUNT
+# ICT — Session
 # ============================================================
 
-def calculate_premium_discount(
-    structure,
-    current_price,
+def session_analyzer(
+    df,
+    session_len=24,
 ):
 
     if (
-        not structure["highs"]
-        or not structure["lows"]
+        df is None
+        or df.empty
+        or len(df) < 5
     ):
+        return None
 
-        return {}
+    window = df.iloc[
+        -min(
+            session_len,
+            len(df),
+        ):
+    ]
 
-    high = structure["highs"][-1][1]
-    low = structure["lows"][-1][1]
+    session_high = float(
+        window["high"].max()
+    )
 
-    top = max(high, low)
-    bottom = min(high, low)
+    session_low = float(
+        window["low"].min()
+    )
 
-    equilibrium = (
-        top + bottom
-    ) / 2
+    session_range = (
+        session_high
+        - session_low
+    )
 
-    zone = (
-        "PREMIUM"
-        if current_price > equilibrium
-        else "DISCOUNT"
+    net_change = (
+        float(
+            window["close"].iloc[-1]
+        )
+        -
+        float(
+            window["open"].iloc[0]
+        )
+    )
+
+    if net_change < 0:
+        bias = "BEARISH"
+    elif net_change > 0:
+        bias = "BULLISH"
+    else:
+        bias = "NEUTRAL"
+
+    main_score = round(
+        min(
+            abs(net_change)
+            / (
+                session_range
+                + 1e-6
+            )
+            * 100,
+            100,
+        ),
+        1,
     )
 
     return {
-        "high": top,
-        "low": bottom,
-        "equilibrium": equilibrium,
-        "zone": zone,
+        "bias": bias,
+        "main_score": main_score,
+        "range": round(
+            session_range,
+            2,
+        ),
+        "high": round(
+            session_high,
+            2,
+        ),
+        "low": round(
+            session_low,
+            2,
+        ),
     }
+
+
+# ============================================================
+# Asian Session
+# ============================================================
+
+def compute_asian_session_levels(
+    df
+):
+
+    if (
+        df is None
+        or df.empty
+        or len(df) < 24
+    ):
+        return None
+
+    window = df.iloc[-24:]
+
+    return {
+        "asian_high": round(
+            float(
+                window["high"].max()
+            ),
+            2,
+        ),
+        "asian_low": round(
+            float(
+                window["low"].min()
+            ),
+            2,
+        ),
+    }
+
+
+# ============================================================
+# Fibonacci
+# ============================================================
+
+def compute_fibonacci_extension(
+    swing_low,
+    swing_high,
+    direction,
+):
+
+    diff = (
+        swing_high
+        - swing_low
+    )
+
+    if diff <= 0:
+        return {}
+
+    ratios = [
+        (
+            1.0,
+            "100% EXTENSION",
+        ),
+        (
+            1.27,
+            "127% EXTENSION",
+        ),
+        (
+            1.618,
+            "161.8% EXTENSION",
+        ),
+        (
+            2.0,
+            "200% EXTENSION",
+        ),
+        (
+            2.618,
+            "261.8% EXTENSION",
+        ),
+    ]
+
+    levels = {}
+
+    for ratio, label in ratios:
+
+        if direction == "BULLISH":
+
+            levels[label] = round(
+                swing_high
+                + diff
+                * (ratio - 1),
+                2,
+            )
+
+        else:
+
+            levels[label] = round(
+                swing_low
+                - diff
+                * (ratio - 1),
+                2,
+            )
+
+    levels[
+        "EQUILIBRIUM TARGET"
+    ] = round(
+        (
+            swing_high
+            + swing_low
+        )
+        / 2,
+        2,
+    )
+
+    return levels
 
 
 # ============================================================
 # OTE
 # ============================================================
 
-def calculate_ote(
-    structure,
+def compute_ote_zone(
+    swing_low,
+    swing_high,
+    direction,
     current_price,
-    bias,
 ):
 
-    if (
-        not structure["highs"]
-        or not structure["lows"]
-    ):
+    diff = (
+        swing_high
+        - swing_low
+    )
 
+    if diff <= 0:
         return None
 
-    high = structure["highs"][-1][1]
-    low = structure["lows"][-1][1]
+    if direction == "BULLISH":
 
-    difference = high - low
+        top = (
+            swing_high
+            - diff * 0.618
+        )
 
-    if difference <= 0:
-        return None
-
-    if bias == "BULLISH":
-
-        a = high - difference * 0.79
-        b = high - difference * 0.618
-
-    elif bias == "BEARISH":
-
-        a = low + difference * 0.618
-        b = low + difference * 0.79
+        bottom = (
+            swing_high
+            - diff * 0.79
+        )
 
     else:
 
-        return None
+        top = (
+            swing_low
+            + diff * 0.79
+        )
 
-    bottom = min(a, b)
-    top = max(a, b)
+        bottom = (
+            swing_low
+            + diff * 0.618
+        )
 
-    return {
-        "bottom": bottom,
-        "top": top,
-        "inside": (
-            bottom
-            <= current_price
-            <= top
-        ),
-    }
-
-
-# ============================================================
-# BREAKER BLOCKS
-# ============================================================
-
-def detect_breakers(df):
-
-    bullish_ob, bearish_ob = detect_order_blocks(
-        df,
-        60,
-        1.0,
+    lo = min(
+        top,
+        bottom,
     )
 
-    last = df.iloc[-1]
+    hi = max(
+        top,
+        bottom,
+    )
 
-    breakers = []
-
-    if (
-        bullish_ob
-        and last.close
-        < bullish_ob["bottom"]
-    ):
-
-        breakers.append(
-            {
-                "type": "BEARISH_BREAKER",
-                "top": bullish_ob["top"],
-                "bottom": bullish_ob["bottom"],
-            }
-        )
-
-    if (
-        bearish_ob
-        and last.close
-        > bearish_ob["top"]
-    ):
-
-        breakers.append(
-            {
-                "type": "BULLISH_BREAKER",
-                "top": bearish_ob["top"],
-                "bottom": bearish_ob["bottom"],
-            }
-        )
-
-    return breakers[-2:]
-
-
-# ============================================================
-# SESSION ANALYSIS
-# ============================================================
-
-def analyze_sessions(df):
-
-    if df.empty:
-        return {}
-
-    x = df.copy()
-
-    x["hour"] = x.datetime.dt.hour
-
-    sessions = {
-        "ASIA": (0, 7),
-        "LONDON": (7, 13),
-        "NEW_YORK": (13, 20),
+    return {
+        "top": round(
+            hi,
+            2,
+        ),
+        "bottom": round(
+            lo,
+            2,
+        ),
+        "inside": (
+            lo
+            <= current_price
+            <= hi
+        ),
+        "direction": direction,
     }
 
-    result = {}
 
-    for name, (
-        start,
-        end,
-    ) in sessions.items():
+# ============================================================
+# Volatility
+# ============================================================
 
-        window = x[
-            (x.hour >= start)
-            & (x.hour < end)
-        ].tail(24)
+def compute_volatility_risk(
+    df
+):
 
-        if window.empty:
-            continue
+    if (
+        df is None
+        or df.empty
+        or "atr" not in df.columns
+    ):
 
-        result[name] = {
-            "high": float(
-                window.high.max()
-            ),
-            "low": float(
-                window.low.min()
-            ),
-            "range": float(
-                window.high.max()
-                - window.low.min()
-            ),
-        }
+        return (
+            "N/A",
+            0,
+            0.0,
+        )
 
-    return result
+    atr_series = (
+        df["atr"]
+        .dropna()
+    )
+
+    if atr_series.empty:
+        return (
+            "N/A",
+            0,
+            0.0,
+        )
+
+    current_atr = float(
+        atr_series.iloc[-1]
+    )
+
+    percentile = (
+        atr_series
+        < current_atr
+    ).mean() * 100
+
+    if percentile >= 90:
+
+        label = "CRISIS"
+        score = 90
+
+    elif percentile >= 65:
+
+        label = "HIGH"
+        score = 70
+
+    elif percentile >= 35:
+
+        label = "MEDIUM"
+        score = 50
+
+    else:
+
+        label = "LOW"
+        score = 25
+
+    return (
+        label,
+        score,
+        round(
+            current_atr,
+            2,
+        ),
+    )
 
 
 # ============================================================
-# COMPLETE ICT ENGINE
+# Displacement
+# ============================================================
+
+def detect_recent_displacement(
+    df,
+    lookback=10,
+    atr_mult=1.3,
+):
+
+    if (
+        df is None
+        or df.empty
+    ):
+        return []
+
+    recent = df.iloc[
+        -lookback:
+    ]
+
+    results = []
+
+    for _, row in recent.iterrows():
+
+        atr_value = row.get(
+            "atr",
+            np.nan,
+        )
+
+        if (
+            pd.isna(
+                atr_value
+            )
+            or atr_value <= 0
+        ):
+            continue
+
+        body = (
+            row["close"]
+            - row["open"]
+        )
+
+        candle_range = (
+            row["high"]
+            - row["low"]
+        )
+
+        body_pct = round(
+            abs(body)
+            / (
+                candle_range
+                + 1e-6
+            )
+            * 100,
+            1,
+        )
+
+        if (
+            abs(body)
+            > atr_mult
+            * atr_value
+        ):
+
+            results.append(
+                {
+                    "bias": (
+                        "BULLISH"
+                        if body > 0
+                        else "BEARISH"
+                    ),
+                    "body_pct": body_pct,
+                }
+            )
+
+    return results[-3:]
+
+
+# ============================================================
+# ICT Engine
 # ============================================================
 
 def run_ict_engine(
-    df,
+    df_processed,
     swing_lookback=3,
-    displacement_multiplier=1.2,
-    minimum_fvg_atr=0.05,
-    ob_lookback=60,
+    ob_mult=1.2,
 ):
 
-    if len(df) < 80:
+    if (
+        df_processed is None
+        or df_processed.empty
+        or len(df_processed)
+        < max(
+            30,
+            swing_lookback * 6,
+        )
+    ):
         return None
 
-    x = closed_candles(df)
-
-    structure_data = analyze_structure(
-        x,
-        swing_lookback,
+    swing_highs, swing_lows = (
+        find_swing_points(
+            df_processed,
+            lookback=swing_lookback,
+        )
     )
 
-    current_price = float(
-        x.close.iloc[-1]
+    bias, structure_breaks = (
+        analyze_market_structure(
+            swing_highs,
+            swing_lows,
+        )
     )
 
-    bullish_fvg, bearish_fvg = detect_fvg(
-        x,
-        minimum_fvg_atr,
+    bull_ob, bear_ob = (
+        detect_order_blocks(
+            df_processed,
+            displacement_atr_mult=ob_mult,
+        )
     )
 
-    bullish_ob, bearish_ob = detect_order_blocks(
-        x,
-        ob_lookback,
-        displacement_multiplier,
+    bull_fvg, bear_fvg = (
+        detect_fvg(
+            df_processed
+        )
     )
 
-    liquidity = detect_liquidity(
-        x,
-        structure_data,
+    (
+        bsl,
+        ssl,
+        manipulation,
+        manip_note,
+    ) = detect_liquidity_and_manipulation(
+        df_processed,
+        swing_highs,
+        swing_lows,
     )
 
-    displacement_data = detect_displacement(
-        x,
-        displacement_multiplier,
+    session_info = (
+        session_analyzer(
+            df_processed
+        )
     )
 
-    premium_discount = calculate_premium_discount(
-        structure_data,
-        current_price,
+    asian_levels = (
+        compute_asian_session_levels(
+            df_processed
+        )
     )
 
-    ote = calculate_ote(
-        structure_data,
-        current_price,
-        structure_data["bias"],
+    (
+        vol_label,
+        vol_score,
+        atr_value,
+    ) = compute_volatility_risk(
+        df_processed
     )
 
-    breakers = detect_breakers(x)
+    displacements = (
+        detect_recent_displacement(
+            df_processed
+        )
+    )
 
-    sessions = analyze_sessions(x)
+    current_price = round(
+        float(
+            df_processed[
+                "close"
+            ].iloc[-1]
+        ),
+        2,
+    )
 
-    buy_score = 0
-    sell_score = 0
+    fib_levels = {}
+    ote = None
 
-    # --------------------------------------------------------
-    # Structure
-    # --------------------------------------------------------
-
-    if structure_data["bias"] == "BULLISH":
-        buy_score += 25
-
-    elif structure_data["bias"] == "BEARISH":
-        sell_score += 25
-
-    # --------------------------------------------------------
-    # Liquidity
-    # --------------------------------------------------------
-
-    if liquidity.get("sweep") == "SSL_SWEEP":
-        buy_score += 25
-
-    elif liquidity.get("sweep") == "BSL_SWEEP":
-        sell_score += 25
-
-    # --------------------------------------------------------
-    # Order Blocks
-    # --------------------------------------------------------
-
-    if bullish_ob:
-        buy_score += 15
-
-    if bearish_ob:
-        sell_score += 15
-
-    # --------------------------------------------------------
-    # FVG
-    # --------------------------------------------------------
-
-    if bullish_fvg:
-        buy_score += 10
-
-    if bearish_fvg:
-        sell_score += 10
-
-    # --------------------------------------------------------
-    # Displacement
-    # --------------------------------------------------------
-
-    if any(
-        x["direction"] == "BULLISH"
-        for x in displacement_data[-3:]
+    if (
+        swing_highs
+        and swing_lows
     ):
 
-        buy_score += 10
+        last_low_idx, last_low_price = (
+            swing_lows[-1]
+        )
 
-    if any(
-        x["direction"] == "BEARISH"
-        for x in displacement_data[-3:]
+        last_high_idx, last_high_price = (
+            swing_highs[-1]
+        )
+
+        if (
+            last_low_idx
+            > last_high_idx
+        ):
+
+            leg_direction = (
+                "BULLISH"
+            )
+
+        else:
+
+            leg_direction = (
+                "BEARISH"
+            )
+
+        lo_price = min(
+            last_low_price,
+            last_high_price,
+        )
+
+        hi_price = max(
+            last_low_price,
+            last_high_price,
+        )
+
+        fib_levels = (
+            compute_fibonacci_extension(
+                lo_price,
+                hi_price,
+                leg_direction,
+            )
+        )
+
+        ote = (
+            compute_ote_zone(
+                lo_price,
+                hi_price,
+                leg_direction,
+                current_price,
+            )
+        )
+
+    # --------------------------------------------------------
+    # Score Breakdown
+    # --------------------------------------------------------
+
+    matching_breaks = [
+        brk
+        for brk
+        in structure_breaks
+        if brk["direction"]
+        == bias
+    ]
+
+    if bias != "NEUTRAL":
+
+        structure_score = min(
+            100,
+            25
+            + len(
+                matching_breaks
+            )
+            * 25,
+        )
+
+    else:
+
+        structure_score = 50
+
+    liquidity_score = (
+        80
+        if manipulation
+        else 40
+    )
+
+    if bias == "BULLISH":
+
+        order_block_score = (
+            bull_ob["strength"]
+            if bull_ob
+            else 30
+        )
+
+        fvg_score = (
+            70
+            if bull_fvg
+            else 35
+        )
+
+    elif bias == "BEARISH":
+
+        order_block_score = (
+            bear_ob["strength"]
+            if bear_ob
+            else 30
+        )
+
+        fvg_score = (
+            70
+            if bear_fvg
+            else 35
+        )
+
+    else:
+
+        order_block_score = 40
+        fvg_score = 40
+
+    order_block_score = min(
+        100,
+        order_block_score,
+    )
+
+    confidence = round(
+        np.mean(
+            [
+                structure_score,
+                liquidity_score,
+                order_block_score,
+                fvg_score,
+            ]
+        ),
+        1,
+    )
+
+    return {
+        "bias": bias,
+        "structure_breaks": structure_breaks,
+
+        "bull_ob": bull_ob,
+        "bear_ob": bear_ob,
+
+        "bull_fvg": bull_fvg,
+        "bear_fvg": bear_fvg,
+
+        "bsl": bsl,
+        "ssl": ssl,
+
+        "manipulation": manipulation,
+        "manip_note": manip_note,
+
+        "session": session_info,
+        "asian_levels": asian_levels,
+
+        "vol_label": vol_label,
+        "vol_score": vol_score,
+        "atr": atr_value,
+
+        "displacements": displacements,
+
+        "fib_levels": fib_levels,
+        "ote": ote,
+
+        "current_price": current_price,
+
+        "scores": {
+            "structure": round(
+                structure_score,
+                1,
+            ),
+            "liquidity": round(
+                liquidity_score,
+                1,
+            ),
+            "order_block": round(
+                order_block_score,
+                1,
+            ),
+            "fvg": round(
+                fvg_score,
+                1,
+            ),
+        },
+
+        "confidence": confidence,
+    }
+
+
+# ============================================================
+# واجهة المستخدم
+# ============================================================
+
+st.title(
+    "🧠 نظام التداول العميق — XAU/USD"
+)
+
+
+success_count = (
+    get_successful_trades_count()
+)
+
+
+ai_level = max(
+    1,
+    int(
+        success_count * 1.5
+    ),
+)
+
+
+st.markdown(
+    f"""
+<div class="ai-level-card">
+
+    <div class="ai-level-title">
+        AI EVOLUTION LEVEL
+    </div>
+
+    <div class="ai-level-value">
+        Lvl. {ai_level}
+    </div>
+
+    <div class="ai-level-sub">
+        Successful Trades:
+        {success_count}
+        |
+        Deep Neural Network Active
+    </div>
+
+</div>
+""",
+    unsafe_allow_html=True,
+)
+
+
+# ============================================================
+# Live Data — استدعاء واحد
+# ============================================================
+
+df_live_raw = (
+    fetch_twelve_series(
+        twelve_key,
+        symbol="XAU/USD",
+        interval="1h",
+        outputsize=220,
+    )
+    if twelve_key
+    else pd.DataFrame()
+)
+
+
+df_live_processed = (
+    apply_deep_indicators(
+        df_live_raw
+    )
+)
+
+
+# ============================================================
+# ICT
+# ============================================================
+
+ict_data = (
+    run_ict_engine(
+        df_live_processed,
+        swing_lookback=swing_lookback,
+        ob_mult=ob_displacement_mult,
+    )
+    if not df_live_processed.empty
+    else None
+)
+
+
+# ============================================================
+# AI Scan
+# ============================================================
+
+scan_msg, ai_result = (
+    ai_scanner(
+        df_live_processed
+    )
+)
+
+
+# ============================================================
+# Tabs
+# ============================================================
+
+if show_ict_tab:
+
+    tab1, tab2, tab3 = st.tabs(
+        [
+            "⚡ حالة الذكاء الاصطناعي",
+            "📊 سجل الخبرات المكتسبة",
+            "🧭 لوحة ICT / Smart Money",
+        ]
+    )
+
+else:
+
+    tab1, tab2 = st.tabs(
+        [
+            "⚡ حالة الذكاء الاصطناعي",
+            "📊 سجل الخبرات المكتسبة",
+        ]
+    )
+
+    tab3 = None
+
+
+# ============================================================
+# TAB 1 — AI
+# ============================================================
+
+with tab1:
+
+    if not twelve_key:
+
+        st.warning(
+            "⚠️ النظام نائم: أدخل مفتاح Twelve Data API."
+        )
+
+    if os.path.exists(
+        TRAINING_LOCK_FILE
     ):
 
-        sell_score += 10
+        st.info(
+            "🧠 النموذج يتدرب حالياً "
+            "في الخلفية على البيانات "
+            "التاريخية."
+        )
 
     # --------------------------------------------------------
-    # Premium / Discount
+    # حالة الصفقة
     # --------------------------------------------------------
 
-    if premium_discount.get("zone") == "DISCOUNT":
-        buy_score += 10
+    st.markdown(
+        "### 🎯 حالة الصفقة"
+    )
 
-    if premium_discount.get("zone") == "PREMIUM":
-        sell_score += 10
+    trade_exists = bool(
+        ai_result.get(
+            "trade_exists",
+            False,
+        )
+    )
+
+    if trade_exists:
+
+        direction = ai_result.get(
+            "direction"
+        )
+
+        if (
+            direction
+            and "BUY"
+            in str(direction)
+        ):
+
+            status_class = (
+                "trade-buy"
+            )
+
+            status_text = (
+                "🟢 توجد صفقة"
+            )
+
+        elif (
+            direction
+            and "SELL"
+            in str(direction)
+        ):
+
+            status_class = (
+                "trade-sell"
+            )
+
+            status_text = (
+                "🔴 توجد صفقة"
+            )
+
+        else:
+
+            status_class = (
+                "trade-neutral"
+            )
+
+            status_text = (
+                "🟡 توجد إشارة"
+            )
+
+    else:
+
+        status_class = (
+            "trade-neutral"
+        )
+
+        status_text = (
+            "⚪ لا توجد صفقة"
+        )
+
+    st.markdown(
+        f"""
+<div class="trade-status-card">
+
+    <div class="trade-status-title">
+        TRADE STATUS
+    </div>
+
+    <div class="trade-status-value {status_class}">
+        {status_text}
+    </div>
+
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+
+    # --------------------------------------------------------
+    # Confidence
+    # --------------------------------------------------------
+
+    st.markdown(
+        "### 🧠 مراحل الثقة"
+    )
+
+    c1, c2, c3 = st.columns(3)
+
+
+    ai_before = float(
+        ai_result.get(
+            "ai_conf_before_groq",
+            0,
+        )
+        or 0
+    )
+
+
+    groq_conf = ai_result.get(
+        "groq_conf"
+    )
+
+
+    final_conf = float(
+        ai_result.get(
+            "final_confidence",
+            ai_before,
+        )
+        or 0
+    )
+
+
+    c1.markdown(
+        f"""
+<div class="confidence-card">
+
+    <div class="confidence-title">
+        AI BEFORE GROQ
+    </div>
+
+    <div class="confidence-value">
+        {ai_before:.1f}%
+    </div>
+
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+
+    if groq_conf is None:
+
+        groq_display = "—"
+
+    else:
+
+        groq_display = (
+            f"{float(groq_conf):.1f}%"
+        )
+
+
+    c2.markdown(
+        f"""
+<div class="confidence-card">
+
+    <div class="confidence-title">
+        GROQ REVIEW
+    </div>
+
+    <div class="confidence-value">
+        {groq_display}
+    </div>
+
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+
+    c3.markdown(
+        f"""
+<div class="confidence-card">
+
+    <div class="confidence-title">
+        FINAL CONFIDENCE
+    </div>
+
+    <div class="confidence-value">
+        {final_conf:.1f}%
+    </div>
+
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
 
     # --------------------------------------------------------
     # Direction
     # --------------------------------------------------------
 
-    if buy_score > sell_score:
-        direction = "BUY"
-
-    elif sell_score > buy_score:
-        direction = "SELL"
-
-    else:
-        direction = "NONE"
-
-    confidence = min(
-        100,
-        max(
-            buy_score,
-            sell_score,
-        ),
-    )
-
-    return {
-        "bias": structure_data["bias"],
-        "structure": structure_data,
-        "liquidity": liquidity,
-        "bull_fvg": (
-            bullish_fvg[-1]
-            if bullish_fvg
-            else None
-        ),
-        "bear_fvg": (
-            bearish_fvg[-1]
-            if bearish_fvg
-            else None
-        ),
-        "bull_ob": bullish_ob,
-        "bear_ob": bearish_ob,
-        "displacements": displacement_data[-3:],
-        "pd": premium_discount,
-        "ote": ote,
-        "breakers": breakers,
-        "sessions": sessions,
-        "buy_score": buy_score,
-        "sell_score": sell_score,
-        "direction": direction,
-        "ict_confidence": confidence,
-        "price": current_price,
-        "atr": float(x.atr.iloc[-1]),
-        "rsi": float(x.rsi.iloc[-1]),
-    }
-
-
-# ============================================================
-# QUANT REGIME
-# ============================================================
-
-def calculate_quant_regime(
-    h1,
-    h4,
-    m15,
-    m5,
-    ict,
-):
-
-    h1_last = h1.iloc[-1]
-    h4_last = h4.iloc[-1]
-    m15_last = m15.iloc[-1]
-    m5_last = m5.iloc[-1]
-
-    if (
-        h1_last.close
-        > h1_last.ema200
-        and h1_last.ema50
-        > h1_last.ema200
+    if ai_result.get(
+        "direction"
     ):
 
-        h1_bias = 1
-
-    elif (
-        h1_last.close
-        < h1_last.ema200
-        and h1_last.ema50
-        < h1_last.ema200
-    ):
-
-        h1_bias = -1
-
-    else:
-
-        h1_bias = 0
-
-    if (
-        h4_last.close
-        > h4_last.ema200
-        and h4_last.ema50
-        > h4_last.ema200
-    ):
-
-        h4_bias = 1
-
-    elif (
-        h4_last.close
-        < h4_last.ema200
-        and h4_last.ema50
-        < h4_last.ema200
-    ):
-
-        h4_bias = -1
-
-    else:
-
-        h4_bias = 0
-
-    if (
-        m15_last.close
-        > m15_last.ema50
-        and m15_last.ema20
-        > m15_last.ema50
-    ):
-
-        m15_trend = 1
-
-    elif (
-        m15_last.close
-        < m15_last.ema50
-        and m15_last.ema20
-        < m15_last.ema50
-    ):
-
-        m15_trend = -1
-
-    else:
-
-        m15_trend = 0
-
-    if m5_last.close > m5_last.ema50:
-        m5_trend = 1
-
-    elif m5_last.close < m5_last.ema50:
-        m5_trend = -1
-
-    else:
-
-        m5_trend = 0
-
-    return {
-        "h4_bias": h4_bias,
-        "h1_bias": h1_bias,
-        "m15_trend": m15_trend,
-        "m5_trend": m5_trend,
-        "rsi": float(m5_last.rsi),
-        "atr": float(m5_last.atr),
-        "mom3": float(m5_last.mom3),
-        "mom6": float(m5_last.mom6),
-        "range_rel": float(m5_last.range_rel),
-        "body_ratio": float(m5_last.body_ratio),
-        "volatility_pct": float(
-            m5_last.volatility_pct
-        ),
-        "ict_buy": ict["buy_score"],
-        "ict_sell": ict["sell_score"],
-        "ict_conf": ict["ict_confidence"],
-    }
-
-
-# ============================================================
-# CANDIDATE GENERATOR
-# ============================================================
-
-def generate_candidate(
-    h4,
-    h1,
-    m15,
-    m5,
-    ict,
-):
-
-    quant = calculate_quant_regime(
-        h1,
-        h4,
-        m15,
-        m5,
-        ict,
-    )
-
-    direction = ict["direction"]
-
-    if direction == "NONE":
-        return None
-
-    sweep = ict[
-        "liquidity"
-    ].get("sweep")
-
-    sweep_flag = (
-        1
-        if sweep
-        else 0
-    )
-
-    ote_inside = (
-        1
-        if (
-            ict["ote"]
-            and ict["ote"]["inside"]
-        )
-        else 0
-    )
-
-    premium_discount = (
-        1
-        if ict["pd"].get("zone")
-        == "PREMIUM"
-        else -1
-    )
-
-    fvg_present = (
-        1
-        if (
-            ict["bull_fvg"]
-            or ict["bear_fvg"]
-        )
-        else 0
-    )
-
-    ob_present = (
-        1
-        if (
-            ict["bull_ob"]
-            or ict["bear_ob"]
-        )
-        else 0
-    )
-
-    displacement_present = (
-        1
-        if ict["displacements"]
-        else 0
-    )
-
-    alignment = 0
-
-    if direction == "BUY":
-
-        if quant["h4_bias"] == 1:
-            alignment += 10
-
-        if quant["h1_bias"] == 1:
-            alignment += 10
-
-        if quant["m15_trend"] == 1:
-            alignment += 10
-
-        if (
-            sweep == "SSL_SWEEP"
-        ):
-            alignment += 15
-
-        if ote_inside:
-            alignment += 10
-
-        if ict["bull_ob"]:
-            alignment += 10
-
-        if ict["bull_fvg"]:
-            alignment += 5
-
-    else:
-
-        if quant["h4_bias"] == -1:
-            alignment += 10
-
-        if quant["h1_bias"] == -1:
-            alignment += 10
-
-        if quant["m15_trend"] == -1:
-            alignment += 10
-
-        if (
-            sweep == "BSL_SWEEP"
-        ):
-            alignment += 15
-
-        if ote_inside:
-            alignment += 10
-
-        if ict["bear_ob"]:
-            alignment += 10
-
-        if ict["bear_fvg"]:
-            alignment += 5
-
-    score = min(
-        100,
-        ict["ict_confidence"] * 0.5
-        + alignment * 0.5,
-    )
-
-    if sweep:
-
-        setup = "ICT_LIQUIDITY_SWEEP"
-
-    elif ob_present or fvg_present:
-
-        setup = "ICT_FVG_OB"
-
-    else:
-
-        setup = "ICT_STRUCTURE"
-
-    return {
-        "direction": direction,
-        "score": round(score, 1),
-        "setup": setup,
-        "q": quant,
-        "sweep": sweep_flag,
-        "ote_inside": ote_inside,
-        "premium_discount": premium_discount,
-        "fvg_present": fvg_present,
-        "ob_present": ob_present,
-        "displacement_present": displacement_present,
-        "price": ict["price"],
-        "atr": ict["atr"],
-    }
-
-
-# ============================================================
-# ML FEATURES
-# ============================================================
-
-def make_feature_vector(candidate):
-
-    q = candidate["q"]
-
-    direction_num = (
-        1
-        if candidate["direction"] == "BUY"
-        else -1
-    )
-
-    return np.array(
-        [[
-            direction_num,
-            q["ict_conf"],
-            q["ict_buy"],
-            q["ict_sell"],
-            q["h4_bias"],
-            q["h1_bias"],
-            q["m15_trend"],
-            q["m5_trend"],
-            q["rsi"],
-            q["mom3"],
-            q["mom6"],
-            q["range_rel"],
-            q["body_ratio"],
-            q["volatility_pct"],
-            candidate["sweep"],
-            candidate["ote_inside"],
-            candidate["premium_discount"],
-            candidate["fvg_present"],
-            candidate["ob_present"],
-            candidate["displacement_present"],
-        ]],
-        dtype=float,
-    )
-
-
-# ============================================================
-# MODEL
-# ============================================================
-
-def load_model():
-
-    if (
-        os.path.exists(MODEL_FILE)
-        and os.path.exists(SCALER_FILE)
-    ):
-
-        try:
-
-            return (
-                joblib.load(MODEL_FILE),
-                joblib.load(SCALER_FILE),
-            )
-
-        except Exception:
-            pass
-
-    return None, None
-
-
-model, scaler = load_model()
-
-
-def train_model_from_history():
-
-    global model
-    global scaler
-
-    con = get_db()
-
-    trades = pd.read_sql(
-        """
-        SELECT *
-        FROM trades
-        WHERE features IS NOT NULL
-        """,
-        con,
-    )
-
-    con.close()
-
-    if len(trades) < 30:
-        return False
-
-    X = []
-    y = []
-
-    for _, row in trades.iterrows():
-
-        try:
-
-            feature_dict = json.loads(
-                row["features"]
-            )
-
-            X.append(
-                [
-                    feature_dict[key]
-                    for key in FEATURES
-                ]
-            )
-
-            y.append(
-                int(row["win"])
-            )
-
-        except Exception:
-            continue
-
-    if (
-        len(X) < 30
-        or len(set(y)) < 2
-    ):
-
-        return False
-
-    scaler_new = StandardScaler()
-
-    X_scaled = scaler_new.fit_transform(
-        np.asarray(
-            X,
-            dtype=float,
-        )
-    )
-
-    model_new = HistGradientBoostingClassifier(
-        max_iter=250,
-        learning_rate=0.04,
-        max_leaf_nodes=15,
-        l2_regularization=2.0,
-        random_state=42,
-    )
-
-    model_new.fit(
-        X_scaled,
-        y,
-    )
-
-    joblib.dump(
-        model_new,
-        MODEL_FILE,
-    )
-
-    joblib.dump(
-        scaler_new,
-        SCALER_FILE,
-    )
-
-    model = model_new
-    scaler = scaler_new
-
-    return True
-
-
-def get_ml_probability(
-    candidate,
-):
-
-    if (
-        model is None
-        or scaler is None
-    ):
-
-        return None
-
-    try:
-
-        features = make_feature_vector(
-            candidate
+        st.info(
+            f"📌 الاتجاه المقترح: "
+            f"**{ai_result['direction']}**"
         )
 
-        probabilities = model.predict_proba(
-            scaler.transform(features)
-        )[0]
-
-        if len(probabilities) != 2:
-            return None
-
-        return float(
-            probabilities[1]
-        )
-
-    except Exception:
-
-        return None
-
-
-# ============================================================
-# GROQ
-# ============================================================
-
-def groq_review(
-    candidate,
-    ict,
-):
-
-    if (
-        not use_groq
-        or not groq_key
-    ):
-
-        return None
-
-    snapshot = {
-        "direction": candidate["direction"],
-        "setup": candidate["setup"],
-        "score": candidate["score"],
-        "ml_confidence": candidate.get(
-            "ml_confidence"
-        ),
-        "ict": {
-            "bias": ict["bias"],
-            "buy_score": ict["buy_score"],
-            "sell_score": ict["sell_score"],
-            "liquidity_sweep": ict[
-                "liquidity"
-            ].get("sweep"),
-            "bullish_ob": bool(
-                ict["bull_ob"]
-            ),
-            "bearish_ob": bool(
-                ict["bear_ob"]
-            ),
-            "bullish_fvg": bool(
-                ict["bull_fvg"]
-            ),
-            "bearish_fvg": bool(
-                ict["bear_fvg"]
-            ),
-            "ote": ict["ote"],
-            "premium_discount": ict["pd"],
-            "displacements": ict[
-                "displacements"
-            ][-2:],
-        },
-        "quant": candidate["q"],
-    }
-
-    prompt = (
-        "You are a risk-control reviewer for a "
-        "systematic XAU/USD trading engine. "
-        "Evaluate only the supplied data. "
-        "Do not invent missing information. "
-        "You are a filter, never the trade generator. "
-        "Reject weak confluence, conflicting higher "
-        "timeframe direction, late entries and dangerous "
-        "volatility. Return JSON only using exactly: "
-        "{agree:boolean, confidence:number, reason:string, "
-        "risk_flags:[string]}\n\n"
-        + json.dumps(
-            snapshot,
-            ensure_ascii=False,
-        )
-    )
-
-    try:
-
-        response = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={
-                "Authorization": (
-                    f"Bearer {groq_key}"
-                ),
-                "Content-Type": (
-                    "application/json"
-                ),
-            },
-            json={
-                "model": groq_model,
-                "temperature": 0,
-                "max_completion_tokens": 300,
-                "response_format": {
-                    "type": "json_object"
-                },
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": prompt,
-                    }
-                ],
-            },
-            timeout=15,
-        )
-
-        data = response.json()
-
-        text = data[
-            "choices"
-        ][0][
-            "message"
-        ][
-            "content"
-        ]
-
-        parsed = json.loads(
-            text.replace(
-                "```json",
-                "",
-            )
-            .replace(
-                "```",
-                "",
-            )
-            .strip()
-        )
-
-        return {
-            "agree": bool(
-                parsed.get(
-                    "agree"
-                )
-            ),
-            "confidence": float(
-                parsed.get(
-                    "confidence",
-                    0,
-                )
-            ),
-            "reason": str(
-                parsed.get(
-                    "reason",
-                    "",
-                )
-            ),
-            "risk_flags": parsed.get(
-                "risk_flags",
-                [],
-            ),
-        }
-
-    except Exception:
-
-        return None
-
-
-# ============================================================
-# SESSION GUARD
-# ============================================================
-
-def session_allowed():
-
-    now = datetime.now(
-        timezone.utc
-    )
-
-    if (
-        avoid_friday
-        and now.weekday() == 4
-        and now.hour >= 18
-    ):
-
-        return False
-
-    if session_start < session_end:
-
-        return (
-            session_start
-            <= now.hour
-            < session_end
-        )
-
-    return (
-        now.hour >= session_start
-        or now.hour < session_end
-    )
-
-
-# ============================================================
-# DAILY GUARD
-# ============================================================
-
-def daily_guard():
-
-    today = datetime.now(
-        timezone.utc
-    ).date().isoformat()
-
-    con = get_db()
-
-    trades = pd.read_sql(
-        """
-        SELECT *
-        FROM trades
-        WHERE date=?
-        """,
-        con,
-        params=(today,),
-    )
-
-    con.close()
-
-    if trades.empty:
-        return True
-
-    losses = int(
-        (trades.win == 0).sum()
-    )
-
-    return losses < max_daily_losses
-
-
-# ============================================================
-# TRADE LEVELS
-# ============================================================
-
-def calculate_trade_levels(
-    candidate,
-    ict,
-):
-
-    price = candidate["price"]
-    atr = candidate["atr"]
-    direction = candidate["direction"]
-
-    structure = ict["structure"]
-
-    lows = [
-        price
-        for _, price
-        in structure["lows"][-3:]
-    ]
-
-    highs = [
-        price
-        for _, price
-        in structure["highs"][-3:]
-    ]
-
-    if direction == "BUY":
-
-        structural_stop = (
-            min(lows)
-            if lows
-            else price
-            - atr * atr_sl
-        )
-
-        sl = min(
-            price - atr * atr_sl,
-            structural_stop,
-        )
-
-        tp = (
-            price
-            + (price - sl) * rr
-        )
-
-    else:
-
-        structural_stop = (
-            max(highs)
-            if highs
-            else price
-            + atr * atr_sl
-        )
-
-        sl = max(
-            price + atr * atr_sl,
-            structural_stop,
-        )
-
-        tp = (
-            price
-            - (sl - price) * rr
-        )
-
-    return (
-        round(price, 2),
-        round(sl, 2),
-        round(tp, 2),
-    )
-
-
-# ============================================================
-# CANDIDATE AUDIT
-# ============================================================
-
-def save_candidate_audit(
-    candidate,
-    accepted,
-    ml_confidence,
-):
-
-    con = get_db()
-
-    con.execute(
-        """
-        INSERT INTO candidates(
-            time,
-            direction,
-            setup,
-            score,
-            ml_confidence,
-            accepted,
-            snapshot
-        )
-        VALUES(?,?,?,?,?,?,?)
-        """,
-        (
-            datetime.now(
-                timezone.utc
-            ).isoformat(),
-            candidate["direction"],
-            candidate["setup"],
-            candidate["score"],
-            (
-                ml_confidence
-                if ml_confidence is not None
-                else -1
-            ),
-            int(accepted),
-            json.dumps(
-                candidate,
-                default=str,
-            ),
-        ),
-    )
-
-    con.commit()
-    con.close()
-
-
-# ============================================================
-# OPEN TRADE
-# ============================================================
-
-def open_trade(
-    candidate,
-    ict,
-    ml_confidence,
-    groq_result,
-):
-
-    entry, sl, tp = calculate_trade_levels(
-        candidate,
-        ict,
-    )
-
-    vector = make_feature_vector(
-        candidate
-    )[0]
-
-    feature_dict = {
-        key: float(value)
-        for key, value
-        in zip(
-            FEATURES,
-            vector,
-        )
-    }
-
-    snapshot = {
-        "ict": ict,
-        "candidate": candidate,
-    }
-
-    con = get_db()
-
-    con.execute(
-        "DELETE FROM active_trade"
-    )
-
-    con.execute(
-        """
-        INSERT INTO active_trade(
-            id,
-            symbol,
-            direction,
-            entry,
-            sl,
-            tp,
-            time,
-            setup,
-            confidence,
-            ml_confidence,
-            groq_confidence,
-            features,
-            snapshot
-        )
-        VALUES(
-            1,?,?,?,?,?,?,?,?,?,?,?,?
-        )
-        """,
-        (
-            SYMBOL,
-            candidate["direction"],
-            entry,
-            sl,
-            tp,
-            datetime.now(
-                timezone.utc
-            ).isoformat(),
-            candidate["setup"],
-            candidate["score"],
-            (
-                ml_confidence
-                if ml_confidence is not None
-                else -1
-            ),
-            (
-                groq_result["confidence"]
-                if groq_result
-                else -1
-            ),
-            json.dumps(
-                feature_dict
-            ),
-            json.dumps(
-                snapshot,
-                default=str,
-            ),
-        ),
-    )
-
-    con.commit()
-    con.close()
-
-    groq_conf = (
-        groq_result["confidence"]
-        if groq_result
-        else -1
-    )
-
-    send_alert(
-        f"""
-XAU/USD {candidate["direction"]}
-
-Setup: {candidate["setup"]}
-
-Entry: {entry}
-SL: {sl}
-TP: {tp}
-
-ICT Score:
-{candidate["score"]:.1f}%
-
-ML Confidence:
-{ml_confidence:.1f}%
-
-Groq:
-{groq_conf:.1f}%
-""",
-        "🚨 XAU Deep AI Trade",
-    )
-
-
-# ============================================================
-# MULTI-TIMEFRAME PIPELINE
-# ============================================================
-
-def build_market_pipeline():
-
-    datasets = {}
-
-    timeframes = {
-        "1h": 500,
-        "4h": 300,
-        "15min": 700,
-        "5min": 900,
-    }
-
-    for timeframe, size in timeframes.items():
-
-        raw = fetch_twelve_data(
-            twelve_key,
-            SYMBOL,
-            timeframe,
-            size,
-        )
-
-        datasets[timeframe] = add_indicators(
-            raw
-        )
-
-    if any(
-        len(df) < 100
-        for df in datasets.values()
-    ):
-
-        return None, datasets
-
-    h1 = datasets["1h"]
-    h4 = datasets["4h"]
-    m15 = datasets["15min"]
-    m5 = datasets["5min"]
-
-    ict = run_ict_engine(
-        m15,
-        swing,
-        disp_mult,
-        fvg_min_atr,
-        ob_lookback,
-    )
-
-    if ict is None:
-        return None, datasets
-
-    candidate = generate_candidate(
-        h4,
-        h1,
-        m15,
-        m5,
-        ict,
-    )
-
-    if candidate is None:
-        return None, datasets
-
-    return {
-        "candidate": candidate,
-        "ict": ict,
-        "h1": h1,
-        "h4": h4,
-        "m15": m15,
-        "m5": m5,
-    }, datasets
-
-
-# ============================================================
-# AUTONOMOUS DECISION ENGINE
-# ============================================================
-
-def autonomous_decision(
-    packet,
-):
-
-    if packet is None:
-
-        return (
-            "NO_DATA",
-            None,
-        )
-
-    candidate = packet[
-        "candidate"
-    ]
-
-    ict = packet["ict"]
 
     # --------------------------------------------------------
-    # Active position
+    # Groq Result
     # --------------------------------------------------------
 
-    if one_position:
-
-        con = get_db()
-
-        active = con.execute(
-            """
-            SELECT 1
-            FROM active_trade
-            WHERE id=1
-            """
-        ).fetchone()
-
-        con.close()
-
-        if active:
-
-            return (
-                "ACTIVE_POSITION",
-                None,
-            )
-
-    # --------------------------------------------------------
-    # Session
-    # --------------------------------------------------------
-
-    if not session_allowed():
-
-        return (
-            "OUT_OF_SESSION",
-            candidate,
-        )
-
-    # --------------------------------------------------------
-    # Daily protection
-    # --------------------------------------------------------
-
-    if not daily_guard():
-
-        return (
-            "DAILY_GUARD",
-            candidate,
-        )
-
-    # --------------------------------------------------------
-    # ICT score
-    # --------------------------------------------------------
-
-    if (
-        candidate["score"]
-        < candidate_min
+    if ai_result.get(
+        "groq_called",
+        False,
     ):
 
-        save_candidate_audit(
-            candidate,
+        if ai_result.get(
+            "groq_available",
             False,
-            None,
-        )
-
-        return (
-            "ICT_SCORE_TOO_LOW",
-            candidate,
-        )
-
-    q = candidate["q"]
-
-    # --------------------------------------------------------
-    # H4/H1/M15 conflict
-    # --------------------------------------------------------
-
-    if candidate["direction"] == "BUY":
-
-        if (
-            q["h4_bias"] == -1
-            or q["h1_bias"] == -1
-            or q["m15_trend"] == -1
         ):
 
-            save_candidate_audit(
-                candidate,
-                False,
-                None,
-            )
-
-            return (
-                "HTF_CONFLICT",
-                candidate,
-            )
-
-    else:
-
-        if (
-            q["h4_bias"] == 1
-            or q["h1_bias"] == 1
-            or q["m15_trend"] == 1
-        ):
-
-            save_candidate_audit(
-                candidate,
-                False,
-                None,
-            )
-
-            return (
-                "HTF_CONFLICT",
-                candidate,
-            )
-
-    # --------------------------------------------------------
-    # ML
-    # --------------------------------------------------------
-
-    ml_probability = get_ml_probability(
-        candidate
-    )
-
-    if ml_probability is not None:
-
-        ml_confidence = (
-            ml_probability * 100
-        )
-
-        candidate[
-            "ml_confidence"
-        ] = ml_confidence
-
-        if (
-            ml_confidence
-            < ml_min
-        ):
-
-            save_candidate_audit(
-                candidate,
-                False,
-                ml_confidence,
-            )
-
-            return (
-                "ML_REJECT",
-                candidate,
-            )
-
-    else:
-
-        ml_confidence = None
-
-    # --------------------------------------------------------
-    # Groq
-    # --------------------------------------------------------
-
-    groq_result = groq_review(
-        candidate,
-        ict,
-    )
-
-    if (
-        use_groq
-        and groq_result is not None
-    ):
-
-        if (
-            not groq_result["agree"]
-            or groq_result[
-                "confidence"
-            ] < groq_min
-        ):
-
-            save_candidate_audit(
-                candidate,
-                False,
-                ml_confidence,
-            )
-
-            return (
-                "GROQ_REJECT",
-                candidate,
-            )
-
-    # --------------------------------------------------------
-    # Accept
-    # --------------------------------------------------------
-
-    save_candidate_audit(
-        candidate,
-        True,
-        ml_confidence,
-    )
-
-    open_trade(
-        candidate,
-        ict,
-        ml_confidence
-        if ml_confidence is not None
-        else 0,
-        groq_result,
-    )
-
-    return (
-        "TRADE_OPENED",
-        candidate,
-    )
-
-
-# ============================================================
-# ACTIVE TRADE MONITOR
-# ============================================================
-
-def monitor_active_trade(
-    m5,
-):
-
-    con = get_db()
-
-    active = pd.read_sql(
-        """
-        SELECT *
-        FROM active_trade
-        WHERE id=1
-        """,
-        con,
-    )
-
-    con.close()
-
-    if (
-        active.empty
-        or m5.empty
-    ):
-
-        return None
-
-    trade = active.iloc[0]
-
-    closed = closed_candles(m5)
-
-    if closed.empty:
-        return None
-
-    candle = closed.iloc[-1]
-
-    is_buy = (
-        "BUY"
-        in trade.direction
-    )
-
-    hit_sl = False
-    hit_tp = False
-
-    if is_buy:
-
-        if candle.low <= trade.sl:
-            hit_sl = True
-
-        elif candle.high >= trade.tp:
-            hit_tp = True
-
-    else:
-
-        if candle.high >= trade.sl:
-            hit_sl = True
-
-        elif candle.low <= trade.tp:
-            hit_tp = True
-
-    if not (
-        hit_sl
-        or hit_tp
-    ):
-
-        return None
-
-    # Conservative classification:
-    # if both barriers were touched within
-    # the same candle, SL wins unless
-    # lower timeframe data proves otherwise.
-
-    win = (
-        0
-        if hit_sl
-        else 1
-    )
-
-    result = (
-        trade.tp
-        - trade.entry
-        if win
-        else trade.sl
-        - trade.entry
-    )
-
-    if not is_buy:
-        result = -result
-
-    con = get_db()
-
-    con.execute(
-        """
-        INSERT INTO trades(
-            date,
-            symbol,
-            direction,
-            entry,
-            sl,
-            tp,
-            result,
-            win,
-            setup,
-            confidence,
-            ml_confidence,
-            groq_confidence,
-            note,
-            features
-        )
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        """,
-        (
-            datetime.now(
-                timezone.utc
-            ).date().isoformat(),
-            trade.symbol,
-            trade.direction,
-            trade.entry,
-            trade.sl,
-            trade.tp,
-            result,
-            win,
-            trade.setup,
-            trade.confidence,
-            trade.ml_confidence,
-            trade.groq_confidence,
-            "TP" if win else "SL",
-            trade.features,
-        ),
-    )
-
-    con.execute(
-        "DELETE FROM active_trade"
-    )
-
-    con.commit()
-    con.close()
-
-    # Re-train after every newly settled
-    # trade once sufficient data exists.
-
-    train_model_from_history()
-
-    send_alert(
-        f"""
-Closed {trade.symbol}
-
-Direction:
-{trade.direction}
-
-Result:
-{"WIN" if win else "LOSS"}
-
-Entry:
-{trade.entry}
-
-SL:
-{trade.sl}
-
-TP:
-{trade.tp}
-""",
-        "🧠 AI Trade Settled",
-    )
-
-    return win
-
-
-# ============================================================
-# UI
-# ============================================================
-
-st.title(
-    "🧠 XAU/USD Deep AI Engine v3.0"
-)
-
-st.caption(
-    "ICT/SMC + Multi-Timeframe Quant + "
-    "ML Meta-Labeling + Groq Risk Review"
-)
-
-
-packet, datasets = build_market_pipeline()
-
-
-if packet is None:
-
-    st.warning(
-        "⚠️ البيانات غير كافية أو Twelve Data "
-        "لم يُرجع جميع الفريمات المطلوبة."
-    )
-
-    if st.session_state.get(
-        "td_error"
-    ):
-
-        st.error(
-            st.session_state[
-                "td_error"
-            ]
-        )
-
-else:
-
-    status, candidate = autonomous_decision(
-        packet
-    )
-
-    ict = packet["ict"]
-
-    c1, c2, c3, c4, c5 = st.columns(5)
-
-    c1.metric(
-        "XAU/USD",
-        f'{ict["price"]:.2f}',
-    )
-
-    c2.metric(
-        "ICT Bias",
-        ict["bias"],
-    )
-
-    c3.metric(
-        "ICT BUY",
-        ict["buy_score"],
-    )
-
-    c4.metric(
-        "ICT SELL",
-        ict["sell_score"],
-    )
-
-    c5.metric(
-        "ICT Confidence",
-        f'{ict["ict_confidence"]:.0f}%',
-    )
-
-    st.info(
-        f"Decision Engine: **{status}**"
-    )
-
-    tabs = st.tabs(
-        [
-            "🧭 ICT / SMC",
-            "🤖 AI Decision",
-            "🏦 Active Trade",
-            "📚 Learning",
-            "🔬 Audit",
-        ]
-    )
-
-    # ========================================================
-    # ICT TAB
-    # ========================================================
-
-    with tabs[0]:
-
-        s = ict["structure"]
-
-        a, b, c, d = st.columns(4)
-
-        a.metric(
-            "Structure",
-            s["bias"],
-        )
-
-        b.metric(
-            "Liquidity",
-            ict[
-                "liquidity"
-            ].get(
-                "sweep",
-                "NONE",
-            ),
-        )
-
-        c.metric(
-            "Premium / Discount",
-            ict[
-                "pd"
-            ].get(
-                "zone",
-                "N/A",
-            ),
-        )
-
-        d.metric(
-            "ATR",
-            f'{ict["atr"]:.2f}',
-        )
-
-        st.subheader(
-            "🏗️ BOS / CHoCH"
-        )
-
-        if s["breaks"]:
-
-            st.dataframe(
-                pd.DataFrame(
-                    s["breaks"]
-                ),
-                use_container_width=True,
-            )
-
-        else:
-
-            st.caption(
-                "لا توجد كسور هيكلية حديثة."
-            )
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-
-            st.subheader(
-                "📦 Order Blocks"
-            )
-
-            st.write(
-                "Bullish:",
-                ict["bull_ob"],
-            )
-
-            st.write(
-                "Bearish:",
-                ict["bear_ob"],
-            )
-
-            st.subheader(
-                "🔄 Breaker Blocks"
-            )
-
-            st.write(
-                ict["breakers"]
-            )
-
-        with col2:
-
-            st.subheader(
-                "🌀 Fair Value Gaps"
-            )
-
-            st.write(
-                "Bullish:",
-                ict["bull_fvg"],
-            )
-
-            st.write(
-                "Bearish:",
-                ict["bear_fvg"],
-            )
-
-            st.subheader(
-                "⚡ Displacement"
-            )
-
-            st.write(
-                ict[
-                    "displacements"
-                ]
-            )
-
-        st.subheader(
-            "🎯 OTE"
-        )
-
-        st.write(
-            ict["ote"]
-        )
-
-        st.subheader(
-            "💧 Liquidity"
-        )
-
-        st.write(
-            ict["liquidity"]
-        )
-
-        st.subheader(
-            "🕒 Sessions"
-        )
-
-        st.json(
-            ict["sessions"]
-        )
-
-    # ========================================================
-    # AI TAB
-    # ========================================================
-
-    with tabs[1]:
-
-        if candidate is not None:
-
-            q = candidate["q"]
-
-            x1, x2, x3, x4, x5 = st.columns(5)
-
-            x1.metric(
-                "Setup",
-                candidate["setup"],
-            )
-
-            x2.metric(
-                "Score",
-                f'{candidate["score"]:.1f}',
-            )
-
-            if (
-                candidate.get(
-                    "ml_confidence"
-                )
-                is not None
+            if ai_result.get(
+                "groq_agree"
             ):
 
-                x3.metric(
-                    "ML Confidence",
-                    f'{candidate["ml_confidence"]:.1f}%',
+                st.success(
+                    "✅ Groq وافق على الإشارة."
                 )
 
             else:
 
-                x3.metric(
-                    "ML Confidence",
-                    "Training",
+                st.error(
+                    "❌ Groq لم يوافق على الإشارة."
                 )
 
-            x4.metric(
-                "RSI",
-                f'{q["rsi"]:.1f}',
-            )
+            if ai_result.get(
+                "groq_reason"
+            ):
 
-            x5.metric(
-                "Volatility",
-                f'{q["volatility_pct"]:.1f}%',
-            )
+                st.markdown(
+                    f"""
+<div class="groq-note">
 
-            st.subheader(
-                "Decision Factors"
-            )
+<b>🧠 رأي Groq:</b>
 
-            st.json(
-                {
-                    "direction": candidate[
-                        "direction"
-                    ],
-                    "setup": candidate[
-                        "setup"
-                    ],
-                    "score": candidate[
-                        "score"
-                    ],
-                    "H4": q[
-                        "h4_bias"
-                    ],
-                    "H1": q[
-                        "h1_bias"
-                    ],
-                    "M15": q[
-                        "m15_trend"
-                    ],
-                    "M5": q[
-                        "m5_trend"
-                    ],
-                    "Liquidity Sweep": candidate[
-                        "sweep"
-                    ],
-                    "OTE": candidate[
-                        "ote_inside"
-                    ],
-                    "FVG": candidate[
-                        "fvg_present"
-                    ],
-                    "Order Block": candidate[
-                        "ob_present"
-                    ],
-                    "Displacement": candidate[
-                        "displacement_present"
-                    ],
-                }
-            )
+{ai_result["groq_reason"]}
 
-    # ========================================================
-    # ACTIVE TRADE
-    # ========================================================
-
-    with tabs[2]:
-
-        con = get_db()
-
-        active = pd.read_sql(
-            """
-            SELECT *
-            FROM active_trade
-            WHERE id=1
-            """,
-            con,
-        )
-
-        con.close()
-
-        if active.empty:
-
-            st.info(
-                "لا توجد صفقة نشطة."
-            )
+</div>
+""",
+                    unsafe_allow_html=True,
+                )
 
         else:
 
-            st.dataframe(
-                active,
-                use_container_width=True,
+            st.warning(
+                "🟠 تم طلب مراجعة Groq "
+                "لكن لم تصل استجابة صحيحة."
             )
 
-    # ========================================================
-    # LEARNING
-    # ========================================================
 
-    with tabs[3]:
+    # --------------------------------------------------------
+    # Main Status
+    # --------------------------------------------------------
 
-        con = get_db()
+    if scan_msg:
 
-        trades = pd.read_sql(
+        st.info(
+            f"🔍 {scan_msg}"
+        )
+
+
+    # --------------------------------------------------------
+    # Twelve Error
+    # --------------------------------------------------------
+
+    twelve_error = (
+        st.session_state.get(
+            "last_twelve_error"
+        )
+    )
+
+    if (
+        twelve_error
+        and twelve_key
+    ):
+
+        st.error(
+            f"⚠️ Twelve Data: "
+            f"{twelve_error}"
+        )
+
+
+    # --------------------------------------------------------
+    # Active Trade Details
+    # --------------------------------------------------------
+
+    conn = get_db_connection()
+
+    try:
+
+        df_active = pd.read_sql(
+            """
+            SELECT *
+            FROM active_trade
+            WHERE id = 1
+            """,
+            conn,
+        )
+
+    finally:
+
+        conn.close()
+
+
+    if (
+        not df_active.empty
+        and twelve_key
+    ):
+
+        active_trade = (
+            df_active.iloc[0]
+        )
+
+        st.warning(
+            f"""
+🔒 **صفقة نشطة حالياً**
+
+الاتجاه:
+{active_trade['direction']}
+
+الدخول:
+${active_trade['entry']}
+
+SL:
+${active_trade['sl']}
+
+TP:
+${active_trade['tp']}
+"""
+        )
+
+
+    # --------------------------------------------------------
+    # Snapshot
+    # --------------------------------------------------------
+
+    if not df_live_processed.empty:
+
+        last_snapshot = (
+            df_live_processed.iloc[-1]
+        )
+
+        s1, s2, s3, s4, s5 = (
+            st.columns(5)
+        )
+
+        s1.metric(
+            "السعر",
+            f"{last_snapshot['close']:.2f}",
+        )
+
+        s2.metric(
+            "RSI",
+            f"{last_snapshot['rsi']:.1f}",
+        )
+
+        s3.metric(
+            "EMA50",
+            f"{last_snapshot['ema_50']:.2f}",
+        )
+
+        s4.metric(
+            "EMA200",
+            f"{last_snapshot['ema_200']:.2f}",
+        )
+
+        s5.metric(
+            "ATR",
+            f"{last_snapshot['atr']:.2f}",
+        )
+
+
+# ============================================================
+# TAB 2 — Trade History
+# ============================================================
+
+with tab2:
+
+    conn = get_db_connection()
+
+    try:
+
+        df_log = pd.read_sql(
             """
             SELECT *
             FROM trades
             ORDER BY id DESC
             """,
-            con,
+            conn,
         )
 
-        con.close()
+    finally:
 
-        if trades.empty:
+        conn.close()
+
+
+    if not df_log.empty:
+
+        win_rate = (
+            df_log["win"].sum()
+            / len(df_log)
+            * 100
+        )
+
+        m1, m2 = st.columns(2)
+
+        m1.metric(
+            "إجمالي الصفقات",
+            len(df_log),
+        )
+
+        m2.metric(
+            "نسبة الربح",
+            f"{win_rate:.1f}%",
+        )
+
+        st.dataframe(
+            df_log,
+            use_container_width=True,
+        )
+
+    else:
+
+        st.info(
+            "لا توجد صفقات مغلقة مسجلة حتى الآن."
+        )
+
+
+# ============================================================
+# TAB 3 — ICT
+# ============================================================
+
+if tab3 is not None:
+
+    with tab3:
+
+        if not twelve_key:
+
+            st.warning(
+                "⚠️ أدخل مفتاح Twelve Data API."
+            )
+
+        elif ict_data is None:
 
             st.info(
-                "النموذج ينتظر نتائج صفقات "
-                "كافية لبدء Meta-Learning."
+                "بيانات غير كافية لعرض تحليل ICT."
             )
 
         else:
 
-            m1, m2, m3 = st.columns(3)
-
-            m1.metric(
-                "Closed Trades",
-                len(trades),
+            st.caption(
+                "🧭 لوحة تحليلية للقراءة فقط "
+                "(Read-Only)."
             )
 
-            m2.metric(
-                "Win Rate",
-                f'{trades.win.mean()*100:.1f}%',
+
+            sub1, sub2, sub3, sub4, sub5 = (
+                st.tabs(
+                    [
+                        "📉 Volatility & Risk",
+                        "🏗️ Market Structure",
+                        "🏦 Smart Money Concepts",
+                        "📐 Fibonacci & OTE",
+                        "🎯 Trade Setup / Signals",
+                    ]
+                )
             )
 
-            m3.metric(
-                "Wins",
-                int(trades.win.sum()),
-            )
 
-            st.dataframe(
-                trades,
-                use_container_width=True,
-            )
+            # =================================================
+            # Volatility
+            # =================================================
 
-    # ========================================================
-    # AUDIT
-    # ========================================================
+            with sub1:
 
-    with tabs[4]:
-
-        con = get_db()
-
-        candidates = pd.read_sql(
-            """
-            SELECT *
-            FROM candidates
-            ORDER BY id DESC
-            LIMIT 100
-            """,
-            con,
-        )
-
-        con.close()
-
-        st.dataframe(
-            candidates,
-            use_container_width=True,
-        )
+                risk_label = (
+                    "HIGH"
+                    if ict_data[
+                        "vol_score"
+                    ] >= 70
+                    else
+                    "MEDIUM"
+                    if ict_data[
+                        "vol_score"
+                    ] >= 50
+                    else
+                    "LOW"
+                )
 
 
-# ============================================================
-# MONITOR ACTIVE POSITION
-# ============================================================
-
-if packet is not None:
-
-    monitor_active_trade(
-        packet["m5"]
-    )
+                v1, v2 = (
+                    st.columns(2)
+                )
 
 
-# ============================================================
-# FOOTER
-# ============================================================
+                v1.markdown(
+                    f"""
+<div class="ict-card">
 
-st.markdown(
-    """
----
-### ⚠️ Research Notice
+    <div class="ict-title">
+        Volatility
+    </div>
 
-هذا النظام لا يعتبر ICT أو SMC أو الذكاء الاصطناعي
-ضماناً للربحية.
+    <div class="ict-value">
+        {ict_data['vol_label']}
+    </div>
 
-ICT/SMC هنا عبارة عن features وhypotheses قابلة للاختبار
-إحصائياً.
+    <div class="ict-sub">
+        ATR: {ict_data['atr']}
+    </div>
 
-قبل التداول الحقيقي يجب اختبار النظام باستخدام:
+</div>
+""",
+                    unsafe_allow_html=True,
+                )
 
-- Walk-Forward Validation
-- Out-of-Sample Testing
-- Monte Carlo
-- Spread Stress
-- Slippage Stress
-- Parameter Stability
-- Regime Stability
-- BUY/SELL Separation
-- Session Analysis
-- Maximum Drawdown
-- Profit Factor
-- Sharpe
-- Expectancy
-- Consecutive Losses
 
-والأهم: لا ينبغي اعتبار نتائج الـBacktest دليلاً على
-الربحية المستقبلية.
+                v2.markdown(
+                    f"""
+<div class="ict-card">
+
+    <div class="ict-title">
+        Risk Level
+    </div>
+
+    <div class="ict-value">
+        {risk_label}
+    </div>
+
+    <div class="ict-sub">
+        Score: {ict_data['vol_score']}
+    </div>
+
+</div>
+""",
+                    unsafe_allow_html=True,
+                )
+
+
+                if ict_data[
+                    "session"
+                ]:
+
+                    st.markdown(
+                        "#### 🕒 Session Analyzer"
+                    )
+
+                    session = (
+                        ict_data[
+                            "session"
+                        ]
+                    )
+
+                    if (
+                        session["bias"]
+                        == "BULLISH"
+                    ):
+
+                        bias_class = (
+                            "ict-bullish"
+                        )
+
+                    elif (
+                        session["bias"]
+                        == "BEARISH"
+                    ):
+
+                        bias_class = (
+                            "ict-bearish"
+                        )
+
+                    else:
+
+                        bias_class = (
+                            "ict-neutral"
+                        )
+
+
+                    sc1, sc2, sc3, sc4 = (
+                        st.columns(4)
+                    )
+
+
+                    sc1.markdown(
+                        f"""
+<div class="ict-row">
+
+<b>BIAS</b>
+
+<br>
+
+<span class="{bias_class}">
+{session['bias']}
+</span>
+
+</div>
+""",
+                        unsafe_allow_html=True,
+                    )
+
+
+                    sc2.markdown(
+                        f"""
+<div class="ict-row">
+
+<b>MAIN SCORE</b>
+
+<br>
+
+{session['main_score']}
+
+</div>
+""",
+                        unsafe_allow_html=True,
+                    )
+
+
+                    sc3.markdown(
+                        f"""
+<div class="ict-row">
+
+<b>SESSION RANGE</b>
+
+<br>
+
+{session['range']}
+
+</div>
+""",
+                        unsafe_allow_html=True,
+                    )
+
+
+                    sc4.markdown(
+                        f"""
+<div class="ict-row">
+
+<b>SESSION HIGH/LOW</b>
+
+<br>
+
+{session['high']}
+/
+{session['low']}
+
+</div>
+""",
+                        unsafe_allow_html=True,
+                    )
+
+
+                if ict_data[
+                    "asian_levels"
+                ]:
+
+                    st.markdown(
+                        "#### 🌏 Asian Session"
+                    )
+
+                    ah, al = (
+                        st.columns(2)
+                    )
+
+                    ah.metric(
+                        "Asian High",
+                        ict_data[
+                            "asian_levels"
+                        ][
+                            "asian_high"
+                        ],
+                    )
+
+                    al.metric(
+                        "Asian Low",
+                        ict_data[
+                            "asian_levels"
+                        ][
+                            "asian_low"
+                        ],
+                    )
+
+
+            # =================================================
+            # Market Structure
+            # =================================================
+
+            with sub2:
+
+                if (
+                    ict_data["bias"]
+                    == "BULLISH"
+                ):
+
+                    bias_class = (
+                        "ict-bullish"
+                    )
+
+                elif (
+                    ict_data["bias"]
+                    == "BEARISH"
+                ):
+
+                    bias_class = (
+                        "ict-bearish"
+                    )
+
+                else:
+
+                    bias_class = (
+                        "ict-neutral"
+                    )
+
+
+                st.markdown(
+                    f"""
+### الاتجاه الهيكلي الحالي:
+
+<span class="{bias_class}">
+{ict_data['bias']}
+</span>
+""",
+                    unsafe_allow_html=True,
+                )
+
+
+                st.markdown(
+                    "#### 📊 Score Breakdown"
+                )
+
+
+                b1, b2, b3, b4 = (
+                    st.columns(4)
+                )
+
+
+                b1.metric(
+                    "Structure Score",
+                    ict_data[
+                        "scores"
+                    ][
+                        "structure"
+                    ],
+                )
+
+
+                b2.metric(
+                    "Liquidity Score",
+                    ict_data[
+                        "scores"
+                    ][
+                        "liquidity"
+                    ],
+                )
+
+
+                b3.metric(
+                    "Order Block Score",
+                    ict_data[
+                        "scores"
+                    ][
+                        "order_block"
+                    ],
+                )
+
+
+                b4.metric(
+                    "FVG Score",
+                    ict_data[
+                        "scores"
+                    ][
+                        "fvg"
+                    ],
+                )
+
+
+                st.markdown(
+                    "#### 🧱 Structure Breaks"
+                )
+
+
+                if ict_data[
+                    "structure_breaks"
+                ]:
+
+                    for brk in reversed(
+                        ict_data[
+                            "structure_breaks"
+                        ]
+                    ):
+
+                        css = (
+                            "ict-bullish"
+                            if brk[
+                                "direction"
+                            ]
+                            == "BULLISH"
+                            else
+                            "ict-bearish"
+                        )
+
+                        st.markdown(
+                            f"""
+<div class="ict-row">
+
+<b>{brk['type']}</b>
+
+—
+
+<span class="{css}">
+{brk['direction']}
+</span>
+
+@
+
+{brk['price']}
+
+</div>
+""",
+                            unsafe_allow_html=True,
+                        )
+
+                else:
+
+                    st.caption(
+                        "لا توجد كسور هيكل واضحة."
+                    )
+
+
+                if ict_data[
+                    "displacements"
+                ]:
+
+                    st.markdown(
+                        "#### ⚡ Recent Displacements"
+                    )
+
+                    for displacement in (
+                        ict_data[
+                            "displacements"
+                        ]
+                    ):
+
+                        css = (
+                            "ict-bullish"
+                            if displacement[
+                                "bias"
+                            ]
+                            == "BULLISH"
+                            else
+                            "ict-bearish"
+                        )
+
+                        st.markdown(
+                            f"""
+<div class="ict-row">
+
+<span class="{css}">
+{displacement['bias']}
+</span>
+
+—
+
+Body:
+{displacement['body_pct']}%
+
+</div>
+""",
+                            unsafe_allow_html=True,
+                        )
+
+
+            # =================================================
+            # Smart Money
+            # =================================================
+
+            with sub3:
+
+                st.markdown(
+                    "#### 📦 Order Blocks"
+                )
+
+
+                oc1, oc2 = (
+                    st.columns(2)
+                )
+
+
+                if ict_data[
+                    "bull_ob"
+                ]:
+
+                    ob = (
+                        ict_data[
+                            "bull_ob"
+                        ]
+                    )
+
+                    oc1.success(
+                        f"""
+Bullish OB
+
+Top:
+{ob['top']}
+
+Bottom:
+{ob['bottom']}
+
+Strength:
+{ob['strength']}%
 """
+                    )
+
+                else:
+
+                    oc1.caption(
+                        "لا يوجد Bullish Order Block حديث."
+                    )
+
+
+                if ict_data[
+                    "bear_ob"
+                ]:
+
+                    ob = (
+                        ict_data[
+                            "bear_ob"
+                        ]
+                    )
+
+                    oc2.error(
+                        f"""
+Bearish OB
+
+Top:
+{ob['top']}
+
+Bottom:
+{ob['bottom']}
+
+Strength:
+{ob['strength']}%
+"""
+                    )
+
+                else:
+
+                    oc2.caption(
+                        "لا يوجد Bearish Order Block حديث."
+                    )
+
+
+                st.markdown(
+                    "#### 🌀 Fair Value Gaps"
+                )
+
+
+                fc1, fc2 = (
+                    st.columns(2)
+                )
+
+
+                if ict_data[
+                    "bull_fvg"
+                ]:
+
+                    fvg = (
+                        ict_data[
+                            "bull_fvg"
+                        ]
+                    )
+
+                    fc1.success(
+                        "Bullish FVG: "
+                        f"{fvg['bottom']} "
+                        "→ "
+                        f"{fvg['top']}"
+                    )
+
+                else:
+
+                    fc1.caption(
+                        "لا توجد فجوة سعرية صاعدة حديثة."
+                    )
+
+
+                if ict_data[
+                    "bear_fvg"
+                ]:
+
+                    fvg = (
+                        ict_data[
+                            "bear_fvg"
+                        ]
+                    )
+
+                    fc2.error(
+                        "Bearish FVG: "
+                        f"{fvg['bottom']} "
+                        "→ "
+                        f"{fvg['top']}"
+                    )
+
+                else:
+
+                    fc2.caption(
+                        "لا توجد فجوة سعرية هابطة حديثة."
+                    )
+
+
+                st.markdown(
+                    "#### 💧 Liquidity & Manipulation"
+                )
+
+
+                lc1, lc2 = (
+                    st.columns(2)
+                )
+
+
+                lc1.metric(
+                    "BSL",
+                    (
+                        ict_data["bsl"]
+                        if ict_data[
+                            "bsl"
+                        ] is not None
+                        else "N/A"
+                    ),
+                )
+
+
+                lc2.metric(
+                    "SSL",
+                    (
+                        ict_data["ssl"]
+                        if ict_data[
+                            "ssl"
+                        ] is not None
+                        else "N/A"
+                    ),
+                )
+
+
+                if ict_data[
+                    "manipulation"
+                ]:
+
+                    st.markdown(
+                        f"""
+<span class="ict-badge-yes">
+MANIPULATION: YES
+</span>
+
+&nbsp;
+
+{ict_data['manip_note']}
+""",
+                        unsafe_allow_html=True,
+                    )
+
+                else:
+
+                    st.markdown(
+                        """
+<span class="ict-badge-no">
+MANIPULATION: NO
+</span>
+
+&nbsp;
+
+لا يوجد اصطياد سيولة واضح حالياً.
+""",
+                        unsafe_allow_html=True,
+                    )
+
+
+            # =================================================
+            # Fibonacci / OTE
+            # =================================================
+
+            with sub4:
+
+                if ict_data[
+                    "ote"
+                ]:
+
+                    ote = (
+                        ict_data[
+                            "ote"
+                        ]
+                    )
+
+                    st.markdown(
+                        f"""
+#### 🎯 Optimal Trade Entry (OTE)
+
+الاتجاه:
+**{ote['direction']}**
+"""
+                    )
+
+
+                    st.write(
+                        "المنطقة: "
+                        f"**{ote['bottom']} "
+                        f"→ "
+                        f"{ote['top']}**"
+                    )
+
+
+                    if ote[
+                        "inside"
+                    ]:
+
+                        st.success(
+                            "✅ السعر الحالي داخل منطقة OTE."
+                        )
+
+                    else:
+
+                        st.info(
+                            "⚪ السعر الحالي خارج منطقة OTE."
+                        )
+
+
+                if ict_data[
+                    "fib_levels"
+                ]:
+
+                    st.markdown(
+                        "#### 📐 Fibonacci Extensions"
+                    )
+
+
+                    for (
+                        label,
+                        value,
+                    ) in ict_data[
+                        "fib_levels"
+                    ].items():
+
+                        st.markdown(
+                            f"""
+<div class="ict-row">
+
+<b>{label}</b>:
+
+{value}
+
+</div>
+""",
+                            unsafe_allow_html=True,
+                        )
+
+
+            # =================================================
+            # Trade Setup
+            # =================================================
+
+            with sub5:
+
+                bias_txt = (
+                    ict_data[
+                        "bias"
+                    ]
+                )
+
+
+                if (
+                    bias_txt
+                    == "BULLISH"
+                ):
+
+                    color_class = (
+                        "ict-bullish"
+                    )
+
+                elif (
+                    bias_txt
+                    == "BEARISH"
+                ):
+
+                    color_class = (
+                        "ict-bearish"
+                    )
+
+                else:
+
+                    color_class = (
+                        "ict-neutral"
+                    )
+
+
+                st.markdown(
+                    f"""
+<div class="ict-card">
+
+    <div class="ict-title">
+        Bias
+    </div>
+
+    <div class="ict-value {color_class}">
+        {bias_txt}
+    </div>
+
+    <div class="ict-sub">
+        Confidence:
+        {ict_data['confidence']}%
+    </div>
+
+</div>
+""",
+                    unsafe_allow_html=True,
+                )
+
+
+                st.markdown(
+                    "#### 📡 Signals"
+                )
+
+
+                signal_count = 0
+
+
+                if ict_data[
+                    "manipulation"
+                ]:
+
+                    st.write(
+                        "- "
+                        + ict_data[
+                            "manip_note"
+                        ]
+                    )
+
+                    signal_count += 1
+
+
+                if (
+                    ict_data["ote"]
+                    and ict_data[
+                        "ote"
+                    ]["inside"]
+                ):
+
+                    st.write(
+                        "- السعر داخل منطقة OTE "
+                        "باتجاه "
+                        f"{ict_data['ote']['direction']}"
+                    )
+
+                    signal_count += 1
+
+
+                if (
+                    bias_txt
+                    == "BULLISH"
+                    and ict_data[
+                        "bull_ob"
+                    ]
+                ):
+
+                    st.write(
+                        "- Order Block صاعد "
+                        "يدعم الاتجاه الهيكلي."
+                    )
+
+                    signal_count += 1
+
+
+                if (
+                    bias_txt
+                    == "BEARISH"
+                    and ict_data[
+                        "bear_ob"
+                    ]
+                ):
+
+                    st.write(
+                        "- Order Block هابط "
+                        "يدعم الاتجاه الهيكلي."
+                    )
+
+                    signal_count += 1
+
+
+                if signal_count == 0:
+
+                    st.caption(
+                        "لا توجد إشارات إضافية بارزة حالياً."
+                    )
+
+
+                st.caption(
+                    "هذا القسم تحليلي بالكامل."
+                )
+
+
+# ============================================================
+# Automatic Monitoring
+# ============================================================
+
+st_autorefresh(
+    interval=60000,
+    key="deep_ai_loop",
 )
 
-time.sleep(0.01)
+
+# ============================================================
+# Active Trade Monitoring
+# ============================================================
+
+if twelve_key:
+
+    conn = get_db_connection()
+
+    try:
+
+        active_df = pd.read_sql(
+            """
+            SELECT *
+            FROM active_trade
+            WHERE id = 1
+            """,
+            conn,
+        )
+
+    finally:
+
+        conn.close()
+
+
+    if (
+        not active_df.empty
+        and not df_live_processed.empty
+    ):
+
+        trade_row = (
+            active_df.iloc[0]
+        )
+
+        last_row = (
+            df_live_processed.iloc[-1]
+        )
+
+        is_buy_trade = (
+            "BUY"
+            in str(
+                trade_row[
+                    "direction"
+                ]
+            )
+        )
+
+
+        # ====================================================
+        # AI Reversal Detection
+        # ====================================================
+
+        if model_is_ready(
+            model,
+            scaler,
+        ):
+
+            try:
+
+                x_current = (
+                    scaler.transform(
+                        last_row[
+                            FEATURES
+                        ]
+                        .astype(float)
+                        .values
+                        .reshape(
+                            1,
+                            -1,
+                        )
+                    )
+                )
+
+                current_probs = (
+                    model.predict_proba(
+                        x_current
+                    )[0]
+                )
+
+                current_pred = int(
+                    np.argmax(
+                        current_probs
+                    )
+                )
+
+                current_conf = float(
+                    current_probs[
+                        current_pred
+                    ]
+                    * 100
+                )
+
+                reversal_detected = False
+
+                if (
+                    is_buy_trade
+                    and current_pred == 0
+                    and current_conf
+                    >= (
+                        min_conf - 5
+                    )
+                ):
+
+                    reversal_detected = True
+
+                elif (
+                    not is_buy_trade
+                    and current_pred == 1
+                    and current_conf
+                    >= (
+                        min_conf - 5
+                    )
+                ):
+
+                    reversal_detected = True
+
+
+                if reversal_detected:
+
+                    send_alert(
+                        (
+                            "⚠️ تنبيه من الشبكة "
+                            "العصبية: "
+                            "رصد انعكاس محتمل "
+                            f"ضد الصفقة "
+                            f"({trade_row['direction']}) "
+                            f"بقوة "
+                            f"({current_conf:.1f}%)."
+                        ),
+                        "🚨 AI Reversal Warning",
+                    )
+
+            except Exception:
+                pass
+
+
+        # ====================================================
+        # SL / TP
+        # ====================================================
+
+        high_price = float(
+            last_row["high"]
+        )
+
+        low_price = float(
+            last_row["low"]
+        )
+
+        sl_price = float(
+            trade_row["sl"]
+        )
+
+        tp_price = float(
+            trade_row["tp"]
+        )
+
+        hit_sl = False
+        hit_tp = False
+
+
+        if is_buy_trade:
+
+            if low_price <= sl_price:
+
+                hit_sl = True
+
+            elif high_price >= tp_price:
+
+                hit_tp = True
+
+        else:
+
+            if high_price >= sl_price:
+
+                hit_sl = True
+
+            elif low_price <= tp_price:
+
+                hit_tp = True
+
+
+        # ====================================================
+        # Close Trade
+        # ====================================================
+
+        if hit_sl or hit_tp:
+
+            win_value = (
+                1
+                if hit_tp
+                else 0
+            )
+
+            note_str = (
+                "AI Target Reached "
+                "(تم التعلم بنجاح)"
+                if hit_tp
+                else
+                "AI Stop Loss Hit "
+                "(خطأ وتم الاستيعاب)"
+            )
+
+
+            # =================================================
+            # Learning
+            # =================================================
+
+            try:
+
+                stored_features = (
+                    trade_row.get(
+                        "features"
+                    )
+                )
+
+                if stored_features:
+
+                    feature_dict = (
+                        json.loads(
+                            stored_features
+                        )
+                    )
+
+                    feature_array = np.array(
+                        [
+                            [
+                                float(
+                                    feature_dict[
+                                        feature
+                                    ]
+                                )
+                                for feature
+                                in FEATURES
+                            ]
+                        ]
+                    )
+
+                    if model_is_ready(
+                        model,
+                        scaler,
+                    ):
+
+                        x_replay = (
+                            scaler.transform(
+                                feature_array
+                            )
+                        )
+
+                        model.partial_fit(
+                            x_replay,
+                            np.array(
+                                [
+                                    win_value
+                                ]
+                            ),
+                            classes=np.array(
+                                [
+                                    0,
+                                    1,
+                                ]
+                            ),
+                        )
+
+                        joblib.dump(
+                            model,
+                            MODEL_FILE,
+                        )
+
+            except Exception:
+                pass
+
+
+            # =================================================
+            # Store Closed Trade
+            # =================================================
+
+            conn = get_db_connection()
+            c = conn.cursor()
+
+            try:
+
+                c.execute(
+                    """
+                    INSERT INTO trades
+                    (
+                        date,
+                        symbol,
+                        direction,
+                        entry,
+                        sl,
+                        tp,
+                        win,
+                        note,
+                        groq_conf,
+                        groq_note,
+                        ai_conf_before_groq,
+                        ai_conf_after_groq
+                    )
+                    VALUES
+                    (
+                        ?, ?, ?, ?, ?, ?, ?,
+                        ?, ?, ?, ?, ?
+                    )
+                    """,
+                    (
+                        str(
+                            datetime.now(
+                                timezone.utc
+                            ).date()
+                        ),
+
+                        trade_row[
+                            "symbol"
+                        ],
+
+                        trade_row[
+                            "direction"
+                        ],
+
+                        trade_row[
+                            "entry"
+                        ],
+
+                        trade_row[
+                            "sl"
+                        ],
+
+                        trade_row[
+                            "tp"
+                        ],
+
+                        win_value,
+
+                        note_str,
+
+                        (
+                            trade_row.get(
+                                "groq_conf"
+                            )
+                            if pd.notna(
+                                trade_row.get(
+                                    "groq_conf"
+                                )
+                            )
+                            else None
+                        ),
+
+                        str(
+                            trade_row.get(
+                                "groq_note",
+                                "",
+                            )
+                            or ""
+                        ),
+
+                        (
+                            float(
+                                trade_row.get(
+                                    "ai_conf",
+                                    0,
+                                )
+                                or 0
+                            )
+                        ),
+
+                        (
+                            float(
+                                trade_row.get(
+                                    "groq_conf",
+                                    0,
+                                )
+                                or
+                                trade_row.get(
+                                    "ai_conf",
+                                    0,
+                                )
+                                or 0
+                            )
+                        ),
+                    ),
+                )
+
+
+                c.execute(
+                    """
+                    DELETE FROM active_trade
+                    WHERE id = 1
+                    """
+                )
+
+
+                conn.commit()
+
+            finally:
+
+                conn.close()
+
+
+            # =================================================
+            # Notification
+            # =================================================
+
+            send_alert(
+                (
+                    f"Closed "
+                    f"{trade_row['symbol']} "
+                    f"{trade_row['direction']} "
+                    "-> "
+                    f"{note_str}"
+                ),
+                "🧠 AI Trade Settled",
+            )
