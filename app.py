@@ -1,14 +1,14 @@
 """
-XAU/USD Deep AI Engine — النسخة المدمجة والمصححة
-=================================================
-ICT / Smart Money + Deep Neural Network + Groq Second Opinion
+XAU/USD Deep AI Engine
+=========================================================
+ICT / Smart Money + Neural Network + Groq Second Opinion
 
-المكونات:
-1) Twelve Data كمصدر بيانات موحد.
-2) تدريب Neural Network على بيانات XAU/USD H1.
-3) تعلم من نتائج الصفقات المغلقة.
+النسخة المصححة والمراجعة:
+1) Twelve Data كمصدر بيانات.
+2) Neural Network على XAU/USD H1.
+3) Experience Layer من نتائج الصفقات المغلقة.
 4) Groq كرأي ثانٍ اختياري.
-5) ICT / Smart Money Concepts:
+5) ICT / Smart Money:
    - Market Structure
    - BOS / CHoCH
    - Order Blocks
@@ -22,25 +22,29 @@ ICT / Smart Money + Deep Neural Network + Groq Second Opinion
    - Displacement
    - Volatility & Risk
    - Score Breakdown
-6) واجهة تعرض:
-   - حالة وجود صفقة
-   - اتجاه الصفقة
-   - ثقة AI قبل Groq
-   - نتيجة Groq
-   - ثقة Groq
-   - الحالة النهائية
-7) Ntfy Alerts.
-8) SQLite.
-9) Background Training.
-10) حماية من التدريب المتكرر.
-11) منع أخطاء النموذج غير الجاهز.
+6) واجهة:
+   - حالة الصفقة
+   - الاتجاه
+   - AI Confidence
+   - Groq Review
+   - Final Confidence
+   - ICT Dashboard
+7) Ntfy Alerts
+8) SQLite
+9) Background Training
+10) Training Lock
+11) حماية من النموذج غير الجاهز
+12) منع تكرار الإشارة على نفس شمعة H1
+13) استخدام آخر شمعة مغلقة فقط للإشارة
+14) عدم إفساد نموذج الاتجاه بنتائج win/loss
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import json
 import os
 import sqlite3
 import threading
+import time
 import traceback
 
 import joblib
@@ -67,14 +71,41 @@ st.set_page_config(
 
 
 # ============================================================
+# HTML Renderer
+# ============================================================
+
+def render_html(html_content):
+    """
+    عرض HTML بطريقة متوافقة مع Streamlit الحديث والقديم.
+    """
+
+    try:
+        if hasattr(st, "html"):
+            st.html(html_content)
+        else:
+            st.markdown(
+                html_content,
+                unsafe_allow_html=True,
+            )
+
+    except Exception:
+        st.markdown(
+            html_content,
+            unsafe_allow_html=True,
+        )
+
+
+# ============================================================
 # CSS
 # ============================================================
 
-st.markdown(
+render_html(
     """
 <style>
 
-    @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700;900&display=swap');
+    @import url(
+        'https://fonts.googleapis.com/css2?family=Cairo:wght@400;700;900'
+    );
 
     html, body, [class*="css"] {
         font-family: 'Cairo', sans-serif !important;
@@ -96,15 +127,11 @@ st.markdown(
             #1e3a8a 0%,
             #0f172a 100%
         );
-
         padding: 30px;
         border-radius: 20px;
         text-align: center;
         border: 1px solid #3b82f6;
-
-        box-shadow:
-            0 0 25px rgba(59, 130, 246, 0.4);
-
+        box-shadow: 0 0 25px rgba(59, 130, 246, 0.4);
         margin-bottom: 20px;
     }
 
@@ -124,15 +151,7 @@ st.markdown(
 
     .ai-level-sub {
         font-size: 1rem;
-        color: #64748b;
-        margin-top: 10px;
-    }
-
-    .claude-note {
-        background: #111827;
-        border: 1px solid #374151;
-        border-radius: 12px;
-        padding: 14px;
+        color: #94a3b8;
         margin-top: 10px;
     }
 
@@ -150,7 +169,6 @@ st.markdown(
             #111827 0%,
             #0f172a 100%
         );
-
         border: 1px solid #334155;
         border-radius: 18px;
         padding: 22px;
@@ -207,13 +225,11 @@ st.markdown(
             #1e293b 0%,
             #0f172a 100%
         );
-
         padding: 20px;
         border-radius: 16px;
         text-align: center;
         border: 1px solid #334155;
         margin-bottom: 14px;
-        height: 100%;
     }
 
     .ict-title {
@@ -234,7 +250,7 @@ st.markdown(
 
     .ict-sub {
         font-size: 0.85rem;
-        color: #64748b;
+        color: #94a3b8;
         margin-top: 6px;
     }
 
@@ -275,8 +291,7 @@ st.markdown(
     }
 
 </style>
-""",
-    unsafe_allow_html=True,
+"""
 )
 
 
@@ -291,6 +306,11 @@ SCALER_FILE = "xau_deep_scaler_v2.pkl"
 
 TRAINING_LOCK_FILE = "training.lock"
 
+TRAINING_OUTPUT_SIZE = 5000
+LIVE_OUTPUT_SIZE = 220
+
+TRAINING_LOCK_MAX_AGE = 60 * 60
+
 FEATURES = [
     "atr",
     "ema_50",
@@ -300,16 +320,13 @@ FEATURES = [
 
 
 # ============================================================
-# أدوات قاعدة البيانات
+# Database
 # ============================================================
 
 def get_db_connection():
-    """
-    فتح اتصال SQLite مع timeout مناسب.
-    """
     return sqlite3.connect(
         DB_FILE,
-        timeout=15,
+        timeout=20,
         check_same_thread=False,
     )
 
@@ -363,16 +380,13 @@ def init_db():
             features TEXT,
             ai_conf REAL,
             groq_conf REAL,
-            groq_note TEXT
+            groq_note TEXT,
+            signal_bar_time TEXT
         )
         """
     )
 
     conn.commit()
-
-    # --------------------------------------------------------
-    # ترحيل قواعد البيانات القديمة
-    # --------------------------------------------------------
 
     migrations = [
         "ALTER TABLE trades ADD COLUMN claude_conf REAL",
@@ -381,11 +395,11 @@ def init_db():
         "ALTER TABLE trades ADD COLUMN groq_note TEXT",
         "ALTER TABLE trades ADD COLUMN ai_conf_before_groq REAL",
         "ALTER TABLE trades ADD COLUMN ai_conf_after_groq REAL",
-
         "ALTER TABLE active_trade ADD COLUMN features TEXT",
         "ALTER TABLE active_trade ADD COLUMN ai_conf REAL",
         "ALTER TABLE active_trade ADD COLUMN groq_conf REAL",
         "ALTER TABLE active_trade ADD COLUMN groq_note TEXT",
+        "ALTER TABLE active_trade ADD COLUMN signal_bar_time TEXT",
     ]
 
     for stmt in migrations:
@@ -408,71 +422,144 @@ init_db()
 def save_setting(key, val):
 
     conn = get_db_connection()
-    c = conn.cursor()
 
-    c.execute(
-        """
-        INSERT OR REPLACE INTO settings
-        (key, value)
-        VALUES (?, ?)
-        """,
-        (
-            key,
-            str(val),
-        ),
-    )
+    try:
+        c = conn.cursor()
 
-    conn.commit()
-    conn.close()
+        c.execute(
+            """
+            INSERT OR REPLACE INTO settings
+            (key, value)
+            VALUES (?, ?)
+            """,
+            (
+                key,
+                str(val),
+            ),
+        )
+
+        conn.commit()
+
+    finally:
+        conn.close()
 
 
 def load_setting(key, default=""):
 
     conn = get_db_connection()
-    c = conn.cursor()
 
-    c.execute(
-        "SELECT value FROM settings WHERE key = ?",
-        (key,),
-    )
+    try:
+        c = conn.cursor()
 
-    row = c.fetchone()
+        c.execute(
+            """
+            SELECT value
+            FROM settings
+            WHERE key = ?
+            """,
+            (key,),
+        )
 
-    conn.close()
+        row = c.fetchone()
 
-    return row[0] if row else default
+        return row[0] if row else default
+
+    finally:
+        conn.close()
 
 
 def get_successful_trades_count():
 
     conn = get_db_connection()
-    c = conn.cursor()
 
-    c.execute(
-        "SELECT COUNT(*) FROM trades WHERE win = 1"
-    )
+    try:
+        c = conn.cursor()
 
-    count = c.fetchone()[0]
+        c.execute(
+            """
+            SELECT COUNT(*)
+            FROM trades
+            WHERE win = 1
+            """
+        )
 
-    conn.close()
+        return int(c.fetchone()[0])
 
-    return count
+    finally:
+        conn.close()
+
+
+def get_total_trades_count():
+
+    conn = get_db_connection()
+
+    try:
+        c = conn.cursor()
+
+        c.execute(
+            """
+            SELECT COUNT(*)
+            FROM trades
+            """
+        )
+
+        return int(c.fetchone()[0])
+
+    finally:
+        conn.close()
+
+
+# ============================================================
+# Secrets
+# ============================================================
+
+def get_secret_value(key, default=""):
+
+    try:
+        value = st.secrets.get(
+            key,
+            default,
+        )
+
+        if value is None:
+            return default
+
+        return str(value)
+
+    except Exception:
+        return default
 
 
 # ============================================================
 # Sidebar
 # ============================================================
 
-st.sidebar.header("⚙️ إعدادات الذكاء الاصطناعي")
+st.sidebar.header(
+    "⚙️ إعدادات الذكاء الاصطناعي"
+)
 
+
+twelve_secret = get_secret_value(
+    "TWELVE_DATA_API_KEY",
+    "",
+)
 
 twelve_key = st.sidebar.text_input(
     "مفتاح Twelve Data API",
     type="password",
-    value=load_setting("twelve_key", ""),
+    value=(
+        twelve_secret
+        if twelve_secret
+        else st.session_state.get(
+            "twelve_key",
+            "",
+        )
+    ),
 )
 
-save_setting("twelve_key", twelve_key)
+st.session_state[
+    "twelve_key"
+] = twelve_key
 
 
 ntfy_channel = st.sidebar.text_input(
@@ -483,7 +570,10 @@ ntfy_channel = st.sidebar.text_input(
     ),
 )
 
-save_setting("ntfy", ntfy_channel)
+save_setting(
+    "ntfy",
+    ntfy_channel,
+)
 
 
 # ============================================================
@@ -492,7 +582,9 @@ save_setting("ntfy", ntfy_channel)
 
 st.sidebar.markdown("---")
 
-st.sidebar.header("🧠 الرأي الثاني (Groq)")
+st.sidebar.header(
+    "🧠 الرأي الثاني (Groq)"
+)
 
 
 use_groq = st.sidebar.checkbox(
@@ -515,19 +607,27 @@ save_setting(
 )
 
 
+groq_secret = get_secret_value(
+    "GROQ_API_KEY",
+    "",
+)
+
 groq_key = st.sidebar.text_input(
     "مفتاح Groq API",
     type="password",
-    value=load_setting(
-        "groq_key",
-        "",
+    value=(
+        groq_secret
+        if groq_secret
+        else st.session_state.get(
+            "groq_key",
+            "",
+        )
     ),
 )
 
-save_setting(
-    "groq_key",
-    groq_key,
-)
+st.session_state[
+    "groq_key"
+] = groq_key
 
 
 groq_model = st.sidebar.text_input(
@@ -545,7 +645,7 @@ save_setting(
 
 
 st.sidebar.caption(
-    "تأكد من اسم النموذج المتاح حالياً في Groq Console."
+    "تأكد من أن اسم النموذج متاح في Groq Console."
 )
 
 
@@ -559,12 +659,14 @@ min_groq_conf = st.sidebar.slider(
 
 
 # ============================================================
-# إدارة المخاطر
+# Risk
 # ============================================================
 
 st.sidebar.markdown("---")
 
-st.sidebar.header("🎯 إدارة المخاطر")
+st.sidebar.header(
+    "🎯 إدارة المخاطر"
+)
 
 
 atr_mult = st.sidebar.slider(
@@ -577,7 +679,7 @@ atr_mult = st.sidebar.slider(
 
 
 risk_reward = st.sidebar.slider(
-    "نسبة العائد (R:R)",
+    "نسبة العائد R:R",
     1.5,
     4.0,
     2.0,
@@ -612,7 +714,7 @@ show_ict_tab = st.sidebar.checkbox(
 
 
 swing_lookback = st.sidebar.slider(
-    "حساسية القمم/القيعان (Swing Lookback)",
+    "حساسية القمم/القيعان",
     2,
     8,
     3,
@@ -621,7 +723,7 @@ swing_lookback = st.sidebar.slider(
 
 
 ob_displacement_mult = st.sidebar.slider(
-    "معامل قوة الاندفاع (Order Block)",
+    "معامل قوة الاندفاع",
     0.8,
     2.5,
     1.2,
@@ -635,7 +737,7 @@ st.sidebar.caption(
 
 
 # ============================================================
-# إعادة التدريب
+# Reset Model
 # ============================================================
 
 st.sidebar.markdown("---")
@@ -651,10 +753,14 @@ if st.sidebar.button(
         TRAINING_LOCK_FILE,
     ):
 
-        if os.path.exists(file_path):
+        if os.path.exists(
+            file_path
+        ):
 
             try:
-                os.remove(file_path)
+                os.remove(
+                    file_path
+                )
             except OSError:
                 pass
 
@@ -678,21 +784,25 @@ def send_alert(
     if not ntfy_channel:
         return
 
-    ch = ntfy_channel.strip().split("/")[-1]
+    channel = (
+        ntfy_channel
+        .strip()
+        .split("/")[-1]
+    )
 
-    if not ch:
+    if not channel:
         return
 
     try:
 
         requests.post(
-            f"https://ntfy.sh/{ch}",
+            f"https://ntfy.sh/{channel}",
             data=msg.encode("utf-8"),
             headers={
                 "Title": title,
                 "Priority": "high",
             },
-            timeout=4,
+            timeout=5,
         )
 
     except Exception:
@@ -715,17 +825,21 @@ def fetch_twelve_series(
 
     try:
 
-        url = (
-            "https://api.twelvedata.com/time_series"
-            f"?symbol={symbol}"
-            f"&interval={interval}"
-            f"&outputsize={outputsize}"
-            f"&apikey={api_key}"
-        )
+        params = {
+            "symbol": symbol,
+            "interval": interval,
+            "outputsize": min(
+                int(outputsize),
+                5000,
+            ),
+            "timezone": "UTC",
+            "apikey": api_key,
+        }
 
         response = requests.get(
-            url,
-            timeout=8,
+            "https://api.twelvedata.com/time_series",
+            params=params,
+            timeout=10,
         )
 
         response.raise_for_status()
@@ -743,37 +857,86 @@ def fetch_twelve_series(
 
             return pd.DataFrame()
 
-        values = result["values"]
+        values = result[
+            "values"
+        ]
 
         if not values:
             return pd.DataFrame()
 
-        required_columns = [
+        df = pd.DataFrame(
+            values
+        )
+
+        required = [
+            "datetime",
             "open",
             "high",
             "low",
             "close",
         ]
 
-        df = pd.DataFrame(values)
-
         if not all(
             col in df.columns
-            for col in required_columns
+            for col in required
         ):
+
             st.session_state[
                 "last_twelve_error"
-            ] = "بيانات Twelve Data لا تحتوي الأعمدة المطلوبة."
+            ] = (
+                "بيانات Twelve Data لا تحتوي "
+                "الأعمدة المطلوبة."
+            )
 
             return pd.DataFrame()
 
         df = df[
-            required_columns
-        ].astype(float)
+            required
+        ].copy()
 
-        df = (
-            df.iloc[::-1]
-            .reset_index(drop=True)
+        df["datetime"] = pd.to_datetime(
+            df["datetime"],
+            errors="coerce",
+            utc=True,
+        )
+
+        for col in (
+            "open",
+            "high",
+            "low",
+            "close",
+        ):
+
+            df[col] = pd.to_numeric(
+                df[col],
+                errors="coerce",
+            )
+
+        df.dropna(
+            subset=[
+                "datetime",
+                "open",
+                "high",
+                "low",
+                "close",
+            ],
+            inplace=True,
+        )
+
+        df.sort_values(
+            "datetime",
+            inplace=True,
+        )
+
+        df.drop_duplicates(
+            subset=["datetime"],
+            keep="last",
+            inplace=True,
+        )
+
+        df.reset_index(
+            drop=True,
+            inplace=True,
         )
 
         st.session_state[
@@ -786,33 +949,83 @@ def fetch_twelve_series(
 
         st.session_state[
             "last_twelve_error"
-        ] = f"تعذّر الاتصال بـ Twelve Data: {exc}"
+        ] = (
+            f"تعذّر الاتصال بـ Twelve Data: {exc}"
+        )
 
         return pd.DataFrame()
+
+
+# ============================================================
+# Remove Incomplete Candle
+# ============================================================
+
+def keep_closed_candles(
+    df,
+    interval_hours=1,
+):
+
+    if (
+        df is None
+        or df.empty
+        or "datetime" not in df.columns
+    ):
+        return pd.DataFrame()
+
+    df = df.copy()
+
+    now_utc = datetime.now(
+        timezone.utc
+    )
+
+    candle_delta = timedelta(
+        hours=interval_hours
+    )
+
+    mask = (
+        df["datetime"]
+        + candle_delta
+        <= pd.Timestamp(
+            now_utc
+        )
+    )
+
+    closed = df.loc[
+        mask
+    ].copy()
+
+    return (
+        closed
+        .reset_index(drop=True)
+    )
 
 
 # ============================================================
 # Training Data
 # ============================================================
 
-@st.cache_data(ttl=86400)
-def fetch_training_data_twelve(api_key):
+def fetch_training_data_twelve(
+    api_key
+):
 
     return fetch_twelve_series(
         api_key,
         symbol="XAU/USD",
         interval="1h",
-        outputsize=5000,
+        outputsize=TRAINING_OUTPUT_SIZE,
     )
 
 
 # ============================================================
-# Deep Indicators
+# Indicators
 # ============================================================
 
 def apply_deep_indicators(df):
 
-    if df is None or df.empty:
+    if (
+        df is None
+        or df.empty
+    ):
         return pd.DataFrame()
 
     if len(df) < 210:
@@ -859,12 +1072,14 @@ def apply_deep_indicators(df):
         .mean()
     )
 
-    delta = df["close"].diff()
+    delta = df[
+        "close"
+    ].diff()
 
     gain = (
         delta.where(
             delta > 0,
-            0,
+            0.0,
         )
         .rolling(14)
         .mean()
@@ -873,7 +1088,7 @@ def apply_deep_indicators(df):
     loss = (
         -delta.where(
             delta < 0,
-            0,
+            0.0,
         )
         .rolling(14)
         .mean()
@@ -892,13 +1107,17 @@ def apply_deep_indicators(df):
     )
 
     df.replace(
-        [np.inf, -np.inf],
+        [
+            np.inf,
+            -np.inf,
+        ],
         np.nan,
         inplace=True,
     )
 
     df.dropna(
-        inplace=True
+        subset=FEATURES,
+        inplace=True,
     )
 
     return df.reset_index(
@@ -910,7 +1129,10 @@ def apply_deep_indicators(df):
 # Model Validation
 # ============================================================
 
-def model_is_ready(model_obj, scaler_obj):
+def model_is_ready(
+    model_obj,
+    scaler_obj,
+):
 
     if model_obj is None:
         return False
@@ -925,6 +1147,12 @@ def model_is_ready(model_obj, scaler_obj):
         return False
 
     if not hasattr(
+        scaler_obj,
+        "scale_",
+    ):
+        return False
+
+    if not hasattr(
         model_obj,
         "classes_",
     ):
@@ -932,16 +1160,26 @@ def model_is_ready(model_obj, scaler_obj):
 
     try:
 
-        if len(
+        if (
+            len(
+                model_obj.classes_
+            )
+            < 2
+        ):
+            return False
+
+        if (
             getattr(
                 model_obj,
-                "classes_",
-                [],
+                "n_features_in_",
+                len(FEATURES),
             )
-        ) < 2:
+            != len(FEATURES)
+        ):
             return False
 
     except Exception:
+
         return False
 
     return True
@@ -964,6 +1202,13 @@ def _background_train_and_save(
         )
 
         df_train = (
+            keep_closed_candles(
+                df_train,
+                interval_hours=1,
+            )
+        )
+
+        df_train = (
             apply_deep_indicators(
                 df_train
             )
@@ -971,30 +1216,51 @@ def _background_train_and_save(
 
         if (
             df_train.empty
-            or len(df_train) < 100
+            or len(df_train) < 250
         ):
             return
-
-        X = (
-            df_train[
-                FEATURES
-            ]
-            .values[:-1]
-        )
 
         future_close = (
             df_train[
                 "close"
+            ].shift(-1)
+        )
+
+        valid_mask = (
+            future_close.notna()
+        )
+
+        train_df = (
+            df_train.loc[
+                valid_mask
+            ].copy()
+        )
+
+        if len(train_df) < 100:
+            return
+
+        X = (
+            train_df[
+                FEATURES
             ]
-            .shift(-1)
+            .astype(float)
+            .values
         )
 
         y = np.where(
-            future_close
-            > df_train["close"],
+            train_df[
+                "close"
+            ].shift(-1)
+            > train_df[
+                "close"
+            ],
             1,
             0,
-        )[:-1]
+        )
+
+        # إزالة آخر صف لأن هدفه غير موجود
+        X = X[:-1]
+        y = y[:-1]
 
         if (
             len(X) < 100
@@ -1002,9 +1268,12 @@ def _background_train_and_save(
         ):
             return
 
-        if len(
-            np.unique(y)
-        ) < 2:
+        if (
+            len(
+                np.unique(y)
+            )
+            < 2
+        ):
             return
 
         new_scaler = (
@@ -1025,7 +1294,12 @@ def _background_train_and_save(
                 ),
                 activation="relu",
                 solver="adam",
+                alpha=0.0001,
+                learning_rate_init=0.001,
                 max_iter=1000,
+                early_stopping=True,
+                validation_fraction=0.15,
+                n_iter_no_change=30,
                 random_state=42,
             )
         )
@@ -1041,17 +1315,37 @@ def _background_train_and_save(
         ):
             return
 
+        # حفظ ذري قدر الإمكان
+        model_tmp = (
+            MODEL_FILE + ".tmp"
+        )
+
+        scaler_tmp = (
+            SCALER_FILE + ".tmp"
+        )
+
         joblib.dump(
             new_model,
-            MODEL_FILE,
+            model_tmp,
         )
 
         joblib.dump(
             new_scaler,
+            scaler_tmp,
+        )
+
+        os.replace(
+            model_tmp,
+            MODEL_FILE,
+        )
+
+        os.replace(
+            scaler_tmp,
             SCALER_FILE,
         )
 
     except Exception:
+
         pass
 
     finally:
@@ -1066,6 +1360,39 @@ def _background_train_and_save(
                 )
             except OSError:
                 pass
+
+
+# ============================================================
+# Training Lock
+# ============================================================
+
+def clean_stale_training_lock():
+
+    if not os.path.exists(
+        TRAINING_LOCK_FILE
+    ):
+        return
+
+    try:
+
+        age = (
+            time.time()
+            - os.path.getmtime(
+                TRAINING_LOCK_FILE
+            )
+        )
+
+        if age > TRAINING_LOCK_MAX_AGE:
+
+            os.remove(
+                TRAINING_LOCK_FILE
+            )
+
+    except Exception:
+        pass
+
+
+clean_stale_training_lock()
 
 
 # ============================================================
@@ -1110,6 +1437,7 @@ def train_deep_model(
                 )
 
         except Exception:
+
             pass
 
     if (
@@ -1124,14 +1452,13 @@ def train_deep_model(
             with open(
                 TRAINING_LOCK_FILE,
                 "x",
+                encoding="utf-8",
             ) as file:
 
                 file.write(
-                    str(
-                        datetime.now(
-                            timezone.utc
-                        )
-                    )
+                    datetime.now(
+                        timezone.utc
+                    ).isoformat()
                 )
 
             thread = threading.Thread(
@@ -1145,9 +1472,11 @@ def train_deep_model(
             thread.start()
 
         except FileExistsError:
+
             pass
 
         except Exception:
+
             pass
 
     return (
@@ -1159,6 +1488,104 @@ def train_deep_model(
 model, scaler = train_deep_model(
     twelve_key
 )
+
+
+# ============================================================
+# Experience Layer
+# ============================================================
+
+def get_experience_adjustment(
+    direction,
+    ai_conf,
+):
+
+    total = get_total_trades_count()
+
+    if total < 20:
+        return {
+            "available": False,
+            "confidence": ai_conf,
+            "win_rate": None,
+            "sample": total,
+        }
+
+    normalized_direction = (
+        "BUY"
+        if "BUY"
+        in str(direction)
+        else "SELL"
+    )
+
+    conn = get_db_connection()
+
+    try:
+
+        df = pd.read_sql(
+            """
+            SELECT
+                direction,
+                win
+            FROM trades
+            WHERE direction LIKE ?
+            """,
+            conn,
+            params=(
+                f"%{normalized_direction}%",
+            ),
+        )
+
+    finally:
+
+        conn.close()
+
+    if len(df) < 10:
+
+        return {
+            "available": False,
+            "confidence": ai_conf,
+            "win_rate": None,
+            "sample": len(df),
+        }
+
+    wins = float(
+        df["win"].sum()
+    )
+
+    n = len(df)
+
+    # Bayesian smoothing:
+    # prior 50%, strength 10
+    smoothed_rate = (
+        (
+            wins
+            + 5.0
+        )
+        /
+        (
+            n
+            + 10.0
+        )
+        * 100
+    )
+
+    # لا نجعل الخبرة تتغلب بالكامل على AI
+    adjusted = (
+        ai_conf * 0.70
+        + smoothed_rate * 0.30
+    )
+
+    return {
+        "available": True,
+        "confidence": round(
+            float(adjusted),
+            1,
+        ),
+        "win_rate": round(
+            smoothed_rate,
+            1,
+        ),
+        "sample": n,
+    }
 
 
 # ============================================================
@@ -1180,20 +1607,20 @@ def get_groq_review(
 
         prompt = (
             "أنت محلل فني مساعد لصفقة محتملة "
-            "على XAU/USD. "
-            f"الاتجاه المقترح من نموذج الذكاء الاصطناعي: "
-            f"{direction}. "
-            f"ثقة النموذج الأساسية: "
-            f"{ai_conf:.1f}%. "
-            f"ATR={last_row['atr']:.2f}, "
-            f"EMA50={last_row['ema_50']:.2f}, "
-            f"EMA200={last_row['ema_200']:.2f}, "
-            f"RSI={last_row['rsi']:.1f}, "
-            f"السعر={last_row['close']:.2f}. "
-            "قم بمراجعة الاتجاه بشكل مستقل. "
-            "لا تفترض أن النموذج الأساسي صحيح. "
-            "أجب فقط JSON صالح بدون Markdown "
-            "وبهذا الشكل: "
+            "على XAU/USD.\n"
+            f"الاتجاه المقترح: {direction}.\n"
+            f"ثقة نموذج AI الخام: {ai_conf:.1f}%.\n"
+            f"ATR={last_row['atr']:.2f}.\n"
+            f"EMA50={last_row['ema_50']:.2f}.\n"
+            f"EMA200={last_row['ema_200']:.2f}.\n"
+            f"RSI={last_row['rsi']:.1f}.\n"
+            f"السعر={last_row['close']:.2f}.\n"
+            "\n"
+            "راجع الاتجاه بشكل مستقل. "
+            "لا تفترض أن نموذج AI صحيح. "
+            "أعط رأياً محافظاً.\n"
+            "\n"
+            "يجب أن يكون الرد JSON فقط بهذا الشكل:\n"
             '{"agree": true, '
             '"confidence": 0, '
             '"reason": "..."}'
@@ -1211,18 +1638,26 @@ def get_groq_review(
             },
             json={
                 "model": model_name,
+                "temperature": 0,
                 "max_completion_tokens": 300,
                 "messages": [
                     {
+                        "role": "system",
+                        "content": (
+                            "أنت محلل فني محافظ. "
+                            "أعد JSON صالح فقط."
+                        ),
+                    },
+                    {
                         "role": "user",
                         "content": prompt,
-                    }
+                    },
                 ],
                 "response_format": {
                     "type": "json_object"
                 },
             },
-            timeout=15,
+            timeout=20,
         )
 
         response.raise_for_status()
@@ -1251,7 +1686,7 @@ def get_groq_review(
             return None
 
         cleaned = (
-            text
+            str(text)
             .replace(
                 "```json",
                 "",
@@ -1303,6 +1738,7 @@ def get_groq_review(
         }
 
     except Exception:
+
         return None
 
 
@@ -1318,6 +1754,10 @@ def ai_scanner(
         "trade_exists": False,
         "direction": None,
         "ai_conf_before_groq": 0.0,
+        "experience_conf": 0.0,
+        "experience_available": False,
+        "experience_win_rate": None,
+        "experience_sample": 0,
         "groq_called": False,
         "groq_available": False,
         "groq_agree": None,
@@ -1386,6 +1826,7 @@ def ai_scanner(
         if pd.notna(
             groq_conf
         ):
+
             result[
                 "groq_conf"
             ] = float(
@@ -1460,6 +1901,19 @@ def ai_scanner(
         df_live_processed.iloc[-1]
     )
 
+    signal_bar_time = str(
+        last.get(
+            "datetime",
+            "",
+        )
+    )
+
+    # منع إعادة استخدام نفس الشمعة
+    last_signal_key = load_setting(
+        "last_signal_key",
+        "",
+    )
+
     try:
 
         feature_values = (
@@ -1474,6 +1928,20 @@ def ai_scanner(
             )
         )
 
+        if not np.isfinite(
+            feature_values
+        ).all():
+
+            result["status"] = (
+                "لا توجد صفقة: بيانات "
+                "المؤشرات غير صالحة."
+            )
+
+            return (
+                result["status"],
+                result,
+            )
+
         x_input = (
             scaler.transform(
                 feature_values
@@ -1486,14 +1954,26 @@ def ai_scanner(
             )[0]
         )
 
-        pred = int(
+        classes = np.asarray(
+            model.classes_
+        )
+
+        best_index = int(
             np.argmax(
                 probabilities
             )
         )
 
+        pred = int(
+            classes[
+                best_index
+            ]
+        )
+
         ai_conf = float(
-            probabilities[pred]
+            probabilities[
+                best_index
+            ]
             * 100
         )
 
@@ -1536,9 +2016,54 @@ def ai_scanner(
         "direction"
     ] = direction
 
-    # --------------------------------------------------------
+    # ========================================================
+    # Experience Layer
+    # ========================================================
+
+    experience = (
+        get_experience_adjustment(
+            direction,
+            ai_conf,
+        )
+    )
+
+    result[
+        "experience_available"
+    ] = experience[
+        "available"
+    ]
+
+    result[
+        "experience_conf"
+    ] = experience[
+        "confidence"
+    ]
+
+    result[
+        "experience_win_rate"
+    ] = experience[
+        "win_rate"
+    ]
+
+    result[
+        "experience_sample"
+    ] = experience[
+        "sample"
+    ]
+
+    working_conf = (
+        experience[
+            "confidence"
+        ]
+        if experience[
+            "available"
+        ]
+        else ai_conf
+    )
+
+    # ========================================================
     # Groq
-    # --------------------------------------------------------
+    # ========================================================
 
     groq_result = None
 
@@ -1552,7 +2077,7 @@ def ai_scanner(
             get_groq_review(
                 direction,
                 last,
-                ai_conf,
+                working_conf,
                 groq_key,
                 groq_model,
             )
@@ -1582,10 +2107,6 @@ def ai_scanner(
                 "reason"
             ]
 
-            # ------------------------------------------------
-            # Groq رفض
-            # ------------------------------------------------
-
             if (
                 not groq_result[
                     "agree"
@@ -1598,7 +2119,7 @@ def ai_scanner(
                 result[
                     "final_confidence"
                 ] = min(
-                    ai_conf,
+                    working_conf,
                     groq_result[
                         "confidence"
                     ],
@@ -1614,15 +2135,11 @@ def ai_scanner(
                     result,
                 )
 
-            # ------------------------------------------------
-            # Groq وافق
-            # ------------------------------------------------
-
             result[
                 "final_confidence"
             ] = round(
                 (
-                    ai_conf
+                    working_conf
                     + groq_result[
                         "confidence"
                     ]
@@ -1633,22 +2150,18 @@ def ai_scanner(
 
         else:
 
-            # ------------------------------------------------
-            # Groq لم يستجب
-            # ------------------------------------------------
-
             result[
                 "groq_available"
             ] = False
 
             result[
                 "final_confidence"
-            ] = ai_conf
+            ] = working_conf
 
             result["status"] = (
                 "🟠 AI أعطى إشارة، "
                 "لكن Groq لم يستجب. "
-                "تم منع فتح الصفقة تحفظاً."
+                "تم منع الصفقة تحفظاً."
             )
 
             return (
@@ -1660,14 +2173,37 @@ def ai_scanner(
 
         result[
             "final_confidence"
-        ] = ai_conf
+        ] = working_conf
 
-    # --------------------------------------------------------
-    # حساب SL / TP
-    # --------------------------------------------------------
+    # ========================================================
+    # منع تكرار الإشارة
+    # ========================================================
+
+    if (
+        signal_bar_time
+        and last_signal_key
+        == signal_bar_time
+    ):
+
+        result["status"] = (
+            "لا توجد صفقة جديدة: "
+            "تمت معالجة هذه الشمعة "
+            "سابقاً."
+        )
+
+        return (
+            result["status"],
+            result,
+        )
+
+    # ========================================================
+    # SL / TP
+    # ========================================================
 
     curr = round(
-        float(last["close"]),
+        float(
+            last["close"]
+        ),
         2,
     )
 
@@ -1693,7 +2229,8 @@ def ai_scanner(
         )
 
     sl_distance = round(
-        atr_value * atr_mult,
+        atr_value
+        * atr_mult,
         2,
     )
 
@@ -1706,35 +2243,40 @@ def ai_scanner(
     if pred == 1:
 
         sl_price = round(
-            curr - sl_distance,
+            curr
+            - sl_distance,
             2,
         )
 
         tp_price = round(
-            curr + tp_distance,
+            curr
+            + tp_distance,
             2,
         )
 
     else:
 
         sl_price = round(
-            curr + sl_distance,
+            curr
+            + sl_distance,
             2,
         )
 
         tp_price = round(
-            curr - tp_distance,
+            curr
+            - tp_distance,
             2,
         )
 
-    # --------------------------------------------------------
+    # ========================================================
     # تخزين الصفقة
-    # --------------------------------------------------------
+    # ========================================================
 
     conn = get_db_connection()
-    c = conn.cursor()
 
     try:
+
+        c = conn.cursor()
 
         c.execute(
             "DELETE FROM active_trade"
@@ -1754,9 +2296,10 @@ def ai_scanner(
                 features,
                 ai_conf,
                 groq_conf,
-                groq_note
+                groq_note,
+                signal_bar_time
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 1,
@@ -1767,13 +2310,17 @@ def ai_scanner(
                 tp_price,
                 datetime.now(
                     timezone.utc
-                ).strftime(
-                    "%H:%M:%S"
-                ),
+                ).isoformat(),
                 json.dumps(
-                    last[
-                        FEATURES
-                    ].to_dict()
+                    {
+                        feature: float(
+                            last[
+                                feature
+                            ]
+                        )
+                        for feature
+                        in FEATURES
+                    }
                 ),
                 ai_conf,
                 (
@@ -1788,6 +2335,7 @@ def ai_scanner(
                 result[
                     "groq_reason"
                 ],
+                signal_bar_time,
             ),
         )
 
@@ -1797,9 +2345,14 @@ def ai_scanner(
 
         conn.close()
 
-    # --------------------------------------------------------
+    save_setting(
+        "last_signal_key",
+        signal_bar_time,
+    )
+
+    # ========================================================
     # Alert
-    # --------------------------------------------------------
+    # ========================================================
 
     groq_line = ""
 
@@ -1814,13 +2367,14 @@ def ai_scanner(
 
     send_alert(
         (
-            f"🧠 AI Trade Executed\n"
+            "🧠 AI Trade Signal\n"
             f"Direction: {direction}\n"
             f"Entry: ${curr}\n"
             f"SL: ${sl_price}\n"
             f"TP: ${tp_price}\n"
-            f"AI Before Groq: "
-            f"{ai_conf:.1f}%"
+            f"AI Raw: {ai_conf:.1f}%\n"
+            f"Experience: "
+            f"{working_conf:.1f}%"
             f"{groq_line}\n"
             f"Final Confidence: "
             f"{result['final_confidence']:.1f}%"
@@ -1834,11 +2388,10 @@ def ai_scanner(
     result[
         "status"
     ] = (
-        f"🟢 تم إطلاق الصفقة "
+        f"🟢 تم إطلاق الإشارة "
         f"({direction}) — "
-        f"ثقة AI قبل Groq: "
-        f"{ai_conf:.1f}% — "
-        f"الثقة النهائية: "
+        f"AI: {ai_conf:.1f}% — "
+        f"Final: "
         f"{result['final_confidence']:.1f}%"
     )
 
@@ -2063,6 +2616,7 @@ def detect_order_blocks(
         or "atr" not in df.columns
         or len(df) < 5
     ):
+
         return None, None
 
     recent = (
@@ -2114,7 +2668,9 @@ def detect_order_blocks(
         )
 
         previous = (
-            recent.iloc[i - 1]
+            recent.iloc[
+                i - 1
+            ]
         )
 
         if (
@@ -2123,7 +2679,8 @@ def detect_order_blocks(
             and previous[
                 "close"
             ]
-            < previous[
+            <
+            previous[
                 "open"
             ]
         ):
@@ -2165,7 +2722,8 @@ def detect_order_blocks(
             and previous[
                 "close"
             ]
-            > previous[
+            >
+            previous[
                 "open"
             ]
         ):
@@ -2221,6 +2779,7 @@ def detect_fvg(
         or df.empty
         or len(df) < 3
     ):
+
         return None, None
 
     recent = (
@@ -2322,16 +2881,24 @@ def detect_liquidity_and_manipulation(
             "",
         )
 
+    recent_highs = (
+        swing_highs[-5:]
+    )
+
+    recent_lows = (
+        swing_lows[-5:]
+    )
+
     bsl_price = max(
         p
         for _, p
-        in swing_highs[-5:]
+        in recent_highs
     )
 
     ssl_price = min(
         p
         for _, p
-        in swing_lows[-5:]
+        in recent_lows
     )
 
     last = df.iloc[-1]
@@ -2347,6 +2914,7 @@ def detect_liquidity_and_manipulation(
     ):
 
         manipulation = True
+
         note = (
             "BSL swept — احتمال انعكاس."
         )
@@ -2359,6 +2927,7 @@ def detect_liquidity_and_manipulation(
     ):
 
         manipulation = True
+
         note = (
             "SSL swept — احتمال انعكاس."
         )
@@ -2401,11 +2970,15 @@ def session_analyzer(
     ]
 
     session_high = float(
-        window["high"].max()
+        window[
+            "high"
+        ].max()
     )
 
     session_low = float(
-        window["low"].min()
+        window[
+            "low"
+        ].min()
     )
 
     session_range = (
@@ -2415,25 +2988,35 @@ def session_analyzer(
 
     net_change = (
         float(
-            window["close"].iloc[-1]
+            window[
+                "close"
+            ].iloc[-1]
         )
         -
         float(
-            window["open"].iloc[0]
+            window[
+                "open"
+            ].iloc[0]
         )
     )
 
     if net_change < 0:
+
         bias = "BEARISH"
+
     elif net_change > 0:
+
         bias = "BULLISH"
+
     else:
+
         bias = "NEUTRAL"
 
     main_score = round(
         min(
             abs(net_change)
-            / (
+            /
+            (
                 session_range
                 + 1e-6
             )
@@ -2474,20 +3057,27 @@ def compute_asian_session_levels(
         or df.empty
         or len(df) < 24
     ):
+
         return None
 
-    window = df.iloc[-24:]
+    window = df.iloc[
+        -24:
+    ]
 
     return {
         "asian_high": round(
             float(
-                window["high"].max()
+                window[
+                    "high"
+                ].max()
             ),
             2,
         ),
         "asian_low": round(
             float(
-                window["low"].min()
+                window[
+                    "low"
+                ].min()
             ),
             2,
         ),
@@ -2544,7 +3134,10 @@ def compute_fibonacci_extension(
             levels[label] = round(
                 swing_high
                 + diff
-                * (ratio - 1),
+                * (
+                    ratio
+                    - 1
+                ),
                 2,
             )
 
@@ -2553,7 +3146,10 @@ def compute_fibonacci_extension(
             levels[label] = round(
                 swing_low
                 - diff
-                * (ratio - 1),
+                * (
+                    ratio
+                    - 1
+                ),
                 2,
             )
 
@@ -2594,24 +3190,28 @@ def compute_ote_zone(
 
         top = (
             swing_high
-            - diff * 0.618
+            - diff
+            * 0.618
         )
 
         bottom = (
             swing_high
-            - diff * 0.79
+            - diff
+            * 0.79
         )
 
     else:
 
         top = (
             swing_low
-            + diff * 0.79
+            + diff
+            * 0.79
         )
 
         bottom = (
             swing_low
-            + diff * 0.618
+            + diff
+            * 0.618
         )
 
     lo = min(
@@ -2668,6 +3268,7 @@ def compute_volatility_risk(
     )
 
     if atr_series.empty:
+
         return (
             "N/A",
             0,
@@ -2727,6 +3328,7 @@ def detect_recent_displacement(
         df is None
         or df.empty
     ):
+
         return []
 
     recent = df.iloc[
@@ -2762,7 +3364,8 @@ def detect_recent_displacement(
 
         body_pct = round(
             abs(body)
-            / (
+            /
+            (
                 candle_range
                 + 1e-6
             )
@@ -2772,7 +3375,8 @@ def detect_recent_displacement(
 
         if (
             abs(body)
-            > atr_mult
+            >
+            atr_mult
             * atr_value
         ):
 
@@ -2804,11 +3408,13 @@ def run_ict_engine(
         df_processed is None
         or df_processed.empty
         or len(df_processed)
-        < max(
+        <
+        max(
             30,
             swing_lookback * 6,
         )
     ):
+
         return None
 
     swing_highs, swing_lows = (
@@ -2942,15 +3548,17 @@ def run_ict_engine(
             )
         )
 
-    # --------------------------------------------------------
+    # ========================================================
     # Score Breakdown
-    # --------------------------------------------------------
+    # ========================================================
 
     matching_breaks = [
         brk
         for brk
         in structure_breaks
-        if brk["direction"]
+        if brk[
+            "direction"
+        ]
         == bias
     ]
 
@@ -2978,7 +3586,9 @@ def run_ict_engine(
     if bias == "BULLISH":
 
         order_block_score = (
-            bull_ob["strength"]
+            bull_ob[
+                "strength"
+            ]
             if bull_ob
             else 30
         )
@@ -2992,7 +3602,9 @@ def run_ict_engine(
     elif bias == "BEARISH":
 
         order_block_score = (
-            bear_ob["strength"]
+            bear_ob[
+                "strength"
+            ]
             if bear_ob
             else 30
         )
@@ -3079,7 +3691,7 @@ def run_ict_engine(
 
 
 # ============================================================
-# واجهة المستخدم
+# UI Header
 # ============================================================
 
 st.title(
@@ -3091,16 +3703,20 @@ success_count = (
     get_successful_trades_count()
 )
 
+total_count = (
+    get_total_trades_count()
+)
 
 ai_level = max(
     1,
     int(
-        success_count * 1.5
+        success_count
+        * 1.5
     ),
 )
 
 
-st.markdown(
+render_html(
     f"""
 <div class="ai-level-card">
 
@@ -3116,17 +3732,19 @@ st.markdown(
         Successful Trades:
         {success_count}
         |
+        Total Trades:
+        {total_count}
+        |
         Deep Neural Network Active
     </div>
 
 </div>
-""",
-    unsafe_allow_html=True,
+"""
 )
 
 
 # ============================================================
-# Live Data — استدعاء واحد
+# Live Data
 # ============================================================
 
 df_live_raw = (
@@ -3134,16 +3752,26 @@ df_live_raw = (
         twelve_key,
         symbol="XAU/USD",
         interval="1h",
-        outputsize=220,
+        outputsize=LIVE_OUTPUT_SIZE,
     )
     if twelve_key
     else pd.DataFrame()
 )
 
 
+# مهم:
+# نستخدم فقط الشموع المغلقة
+df_live_closed = (
+    keep_closed_candles(
+        df_live_raw,
+        interval_hours=1,
+    )
+)
+
+
 df_live_processed = (
     apply_deep_indicators(
-        df_live_raw
+        df_live_closed
     )
 )
 
@@ -3201,7 +3829,7 @@ else:
 
 
 # ============================================================
-# TAB 1 — AI
+# TAB 1
 # ============================================================
 
 with tab1:
@@ -3218,13 +3846,8 @@ with tab1:
 
         st.info(
             "🧠 النموذج يتدرب حالياً "
-            "في الخلفية على البيانات "
-            "التاريخية."
+            "في الخلفية على البيانات التاريخية."
         )
-
-    # --------------------------------------------------------
-    # حالة الصفقة
-    # --------------------------------------------------------
 
     st.markdown(
         "### 🎯 حالة الصفقة"
@@ -3291,7 +3914,8 @@ with tab1:
             "⚪ لا توجد صفقة"
         )
 
-    st.markdown(
+
+    render_html(
         f"""
 <div class="trade-status-card">
 
@@ -3304,21 +3928,19 @@ with tab1:
     </div>
 
 </div>
-""",
-        unsafe_allow_html=True,
+"""
     )
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # Confidence
-    # --------------------------------------------------------
+    # ========================================================
 
     st.markdown(
         "### 🧠 مراحل الثقة"
     )
 
     c1, c2, c3 = st.columns(3)
-
 
     ai_before = float(
         ai_result.get(
@@ -3328,11 +3950,9 @@ with tab1:
         or 0
     )
 
-
     groq_conf = ai_result.get(
         "groq_conf"
     )
-
 
     final_conf = float(
         ai_result.get(
@@ -3343,7 +3963,7 @@ with tab1:
     )
 
 
-    c1.markdown(
+    render_html(
         f"""
 <div class="confidence-card">
 
@@ -3356,8 +3976,7 @@ with tab1:
     </div>
 
 </div>
-""",
-        unsafe_allow_html=True,
+"""
     )
 
 
@@ -3390,7 +4009,7 @@ with tab1:
     )
 
 
-    c3.markdown(
+    render_html(
         f"""
 <div class="confidence-card">
 
@@ -3403,14 +4022,31 @@ with tab1:
     </div>
 
 </div>
-""",
-        unsafe_allow_html=True,
+"""
     )
 
 
-    # --------------------------------------------------------
+    # ========================================================
+    # Experience
+    # ========================================================
+
+    if ai_result.get(
+        "experience_available",
+        False,
+    ):
+
+        st.info(
+            "📚 Experience Layer: "
+            f"{ai_result['experience_win_rate']:.1f}% "
+            "historical smoothed win-rate "
+            f"on {ai_result['experience_sample']} "
+            "similar-direction trades."
+        )
+
+
+    # ========================================================
     # Direction
-    # --------------------------------------------------------
+    # ========================================================
 
     if ai_result.get(
         "direction"
@@ -3422,9 +4058,9 @@ with tab1:
         )
 
 
-    # --------------------------------------------------------
-    # Groq Result
-    # --------------------------------------------------------
+    # ========================================================
+    # Groq
+    # ========================================================
 
     if ai_result.get(
         "groq_called",
@@ -3454,7 +4090,7 @@ with tab1:
                 "groq_reason"
             ):
 
-                st.markdown(
+                render_html(
                     f"""
 <div class="groq-note">
 
@@ -3463,8 +4099,7 @@ with tab1:
 {ai_result["groq_reason"]}
 
 </div>
-""",
-                    unsafe_allow_html=True,
+"""
                 )
 
         else:
@@ -3475,9 +4110,9 @@ with tab1:
             )
 
 
-    # --------------------------------------------------------
-    # Main Status
-    # --------------------------------------------------------
+    # ========================================================
+    # Status
+    # ========================================================
 
     if scan_msg:
 
@@ -3486,9 +4121,9 @@ with tab1:
         )
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # Twelve Error
-    # --------------------------------------------------------
+    # ========================================================
 
     twelve_error = (
         st.session_state.get(
@@ -3507,9 +4142,9 @@ with tab1:
         )
 
 
-    # --------------------------------------------------------
-    # Active Trade Details
-    # --------------------------------------------------------
+    # ========================================================
+    # Active Trade
+    # ========================================================
 
     conn = get_db_connection()
 
@@ -3553,13 +4188,16 @@ ${active_trade['sl']}
 
 TP:
 ${active_trade['tp']}
+
+شمعة الإشارة:
+{active_trade.get('signal_bar_time', '')}
 """
         )
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # Snapshot
-    # --------------------------------------------------------
+    # ========================================================
 
     if not df_live_processed.empty:
 
@@ -3596,9 +4234,16 @@ ${active_trade['tp']}
             f"{last_snapshot['atr']:.2f}",
         )
 
+        if "datetime" in last_snapshot:
+
+            st.caption(
+                "آخر شمعة مغلقة: "
+                f"{last_snapshot['datetime']}"
+            )
+
 
 # ============================================================
-# TAB 2 — Trade History
+# TAB 2 — History
 # ============================================================
 
 with tab2:
@@ -3624,12 +4269,15 @@ with tab2:
     if not df_log.empty:
 
         win_rate = (
-            df_log["win"].sum()
-            / len(df_log)
+            df_log[
+                "win"
+            ].sum()
+            /
+            len(df_log)
             * 100
         )
 
-        m1, m2 = st.columns(2)
+        m1, m2, m3 = st.columns(3)
 
         m1.metric(
             "إجمالي الصفقات",
@@ -3639,6 +4287,15 @@ with tab2:
         m2.metric(
             "نسبة الربح",
             f"{win_rate:.1f}%",
+        )
+
+        m3.metric(
+            "الصفقات الرابحة",
+            int(
+                df_log[
+                    "win"
+                ].sum()
+            ),
         )
 
         st.dataframe(
@@ -3720,7 +4377,7 @@ if tab3 is not None:
                 )
 
 
-                v1.markdown(
+                render_html(
                     f"""
 <div class="ict-card">
 
@@ -3737,12 +4394,11 @@ if tab3 is not None:
     </div>
 
 </div>
-""",
-                    unsafe_allow_html=True,
+"""
                 )
 
 
-                v2.markdown(
+                render_html(
                     f"""
 <div class="ict-card">
 
@@ -3759,8 +4415,7 @@ if tab3 is not None:
     </div>
 
 </div>
-""",
-                    unsafe_allow_html=True,
+"""
                 )
 
 
@@ -3808,7 +4463,7 @@ if tab3 is not None:
                     )
 
 
-                    sc1.markdown(
+                    render_html(
                         f"""
 <div class="ict-row">
 
@@ -3821,12 +4476,11 @@ if tab3 is not None:
 </span>
 
 </div>
-""",
-                        unsafe_allow_html=True,
+"""
                     )
 
 
-                    sc2.markdown(
+                    render_html(
                         f"""
 <div class="ict-row">
 
@@ -3837,12 +4491,11 @@ if tab3 is not None:
 {session['main_score']}
 
 </div>
-""",
-                        unsafe_allow_html=True,
+"""
                     )
 
 
-                    sc3.markdown(
+                    render_html(
                         f"""
 <div class="ict-row">
 
@@ -3853,12 +4506,11 @@ if tab3 is not None:
 {session['range']}
 
 </div>
-""",
-                        unsafe_allow_html=True,
+"""
                     )
 
 
-                    sc4.markdown(
+                    render_html(
                         f"""
 <div class="ict-row">
 
@@ -3871,8 +4523,7 @@ if tab3 is not None:
 {session['low']}
 
 </div>
-""",
-                        unsafe_allow_html=True,
+"""
                     )
 
 
@@ -3914,7 +4565,9 @@ if tab3 is not None:
             with sub2:
 
                 if (
-                    ict_data["bias"]
+                    ict_data[
+                        "bias"
+                    ]
                     == "BULLISH"
                 ):
 
@@ -3923,7 +4576,9 @@ if tab3 is not None:
                     )
 
                 elif (
-                    ict_data["bias"]
+                    ict_data[
+                        "bias"
+                    ]
                     == "BEARISH"
                 ):
 
@@ -3938,15 +4593,16 @@ if tab3 is not None:
                     )
 
 
-                st.markdown(
+                render_html(
                     f"""
-### الاتجاه الهيكلي الحالي:
+<h3>
+الاتجاه الهيكلي الحالي:
+</h3>
 
 <span class="{bias_class}">
 {ict_data['bias']}
 </span>
-""",
-                    unsafe_allow_html=True,
+"""
                 )
 
 
@@ -3969,7 +4625,6 @@ if tab3 is not None:
                     ],
                 )
 
-
                 b2.metric(
                     "Liquidity Score",
                     ict_data[
@@ -3979,7 +4634,6 @@ if tab3 is not None:
                     ],
                 )
 
-
                 b3.metric(
                     "Order Block Score",
                     ict_data[
@@ -3988,7 +4642,6 @@ if tab3 is not None:
                         "order_block"
                     ],
                 )
-
 
                 b4.metric(
                     "FVG Score",
@@ -4025,7 +4678,7 @@ if tab3 is not None:
                             "ict-bearish"
                         )
 
-                        st.markdown(
+                        render_html(
                             f"""
 <div class="ict-row">
 
@@ -4042,8 +4695,7 @@ if tab3 is not None:
 {brk['price']}
 
 </div>
-""",
-                            unsafe_allow_html=True,
+"""
                         )
 
                 else:
@@ -4077,7 +4729,7 @@ if tab3 is not None:
                             "ict-bearish"
                         )
 
-                        st.markdown(
+                        render_html(
                             f"""
 <div class="ict-row">
 
@@ -4091,8 +4743,7 @@ Body:
 {displacement['body_pct']}%
 
 </div>
-""",
-                            unsafe_allow_html=True,
+"""
                         )
 
 
@@ -4106,11 +4757,9 @@ Body:
                     "#### 📦 Order Blocks"
                 )
 
-
                 oc1, oc2 = (
                     st.columns(2)
                 )
-
 
                 if ict_data[
                     "bull_ob"
@@ -4180,11 +4829,9 @@ Strength:
                     "#### 🌀 Fair Value Gaps"
                 )
 
-
                 fc1, fc2 = (
                     st.columns(2)
                 )
-
 
                 if ict_data[
                     "bull_fvg"
@@ -4238,11 +4885,9 @@ Strength:
                     "#### 💧 Liquidity & Manipulation"
                 )
 
-
                 lc1, lc2 = (
                     st.columns(2)
                 )
-
 
                 lc1.metric(
                     "BSL",
@@ -4254,7 +4899,6 @@ Strength:
                         else "N/A"
                     ),
                 )
-
 
                 lc2.metric(
                     "SSL",
@@ -4272,7 +4916,7 @@ Strength:
                     "manipulation"
                 ]:
 
-                    st.markdown(
+                    render_html(
                         f"""
 <span class="ict-badge-yes">
 MANIPULATION: YES
@@ -4281,13 +4925,12 @@ MANIPULATION: YES
 &nbsp;
 
 {ict_data['manip_note']}
-""",
-                        unsafe_allow_html=True,
+"""
                     )
 
                 else:
 
-                    st.markdown(
+                    render_html(
                         """
 <span class="ict-badge-no">
 MANIPULATION: NO
@@ -4296,8 +4939,7 @@ MANIPULATION: NO
 &nbsp;
 
 لا يوجد اصطياد سيولة واضح حالياً.
-""",
-                        unsafe_allow_html=True,
+"""
                     )
 
 
@@ -4326,14 +4968,12 @@ MANIPULATION: NO
 """
                     )
 
-
                     st.write(
                         "المنطقة: "
                         f"**{ote['bottom']} "
                         f"→ "
                         f"{ote['top']}**"
                     )
-
 
                     if ote[
                         "inside"
@@ -4358,7 +4998,6 @@ MANIPULATION: NO
                         "#### 📐 Fibonacci Extensions"
                     )
 
-
                     for (
                         label,
                         value,
@@ -4366,7 +5005,7 @@ MANIPULATION: NO
                         "fib_levels"
                     ].items():
 
-                        st.markdown(
+                        render_html(
                             f"""
 <div class="ict-row">
 
@@ -4375,8 +5014,7 @@ MANIPULATION: NO
 {value}
 
 </div>
-""",
-                            unsafe_allow_html=True,
+"""
                         )
 
 
@@ -4391,7 +5029,6 @@ MANIPULATION: NO
                         "bias"
                     ]
                 )
-
 
                 if (
                     bias_txt
@@ -4418,7 +5055,7 @@ MANIPULATION: NO
                     )
 
 
-                st.markdown(
+                render_html(
                     f"""
 <div class="ict-card">
 
@@ -4436,15 +5073,13 @@ MANIPULATION: NO
     </div>
 
 </div>
-""",
-                    unsafe_allow_html=True,
+"""
                 )
 
 
                 st.markdown(
                     "#### 📡 Signals"
                 )
-
 
                 signal_count = 0
 
@@ -4579,14 +5214,41 @@ if twelve_key:
             )
         )
 
+        signal_bar_time = str(
+            trade_row.get(
+                "signal_bar_time",
+                "",
+            )
+            or ""
+        )
+
+        current_bar_time = str(
+            last_row.get(
+                "datetime",
+                "",
+            )
+        )
+
+        # ====================================================
+        # لا نغلق الصفقة على نفس شمعة الإشارة
+        # ====================================================
+
+        can_monitor_trade = (
+            current_bar_time
+            != signal_bar_time
+        )
+
 
         # ====================================================
         # AI Reversal Detection
         # ====================================================
 
-        if model_is_ready(
-            model,
-            scaler,
+        if (
+            can_monitor_trade
+            and model_is_ready(
+                model,
+                scaler,
+            )
         ):
 
             try:
@@ -4611,15 +5273,25 @@ if twelve_key:
                     )[0]
                 )
 
-                current_pred = int(
+                classes = np.asarray(
+                    model.classes_
+                )
+
+                current_index = int(
                     np.argmax(
                         current_probs
                     )
                 )
 
+                current_pred = int(
+                    classes[
+                        current_index
+                    ]
+                )
+
                 current_conf = float(
                     current_probs[
-                        current_pred
+                        current_index
                     ]
                     * 100
                 )
@@ -4665,6 +5337,7 @@ if twelve_key:
                     )
 
             except Exception:
+
                 pass
 
 
@@ -4672,275 +5345,278 @@ if twelve_key:
         # SL / TP
         # ====================================================
 
-        high_price = float(
-            last_row["high"]
-        )
+        if can_monitor_trade:
 
-        low_price = float(
-            last_row["low"]
-        )
-
-        sl_price = float(
-            trade_row["sl"]
-        )
-
-        tp_price = float(
-            trade_row["tp"]
-        )
-
-        hit_sl = False
-        hit_tp = False
-
-
-        if is_buy_trade:
-
-            if low_price <= sl_price:
-
-                hit_sl = True
-
-            elif high_price >= tp_price:
-
-                hit_tp = True
-
-        else:
-
-            if high_price >= sl_price:
-
-                hit_sl = True
-
-            elif low_price <= tp_price:
-
-                hit_tp = True
-
-
-        # ====================================================
-        # Close Trade
-        # ====================================================
-
-        if hit_sl or hit_tp:
-
-            win_value = (
-                1
-                if hit_tp
-                else 0
+            high_price = float(
+                last_row["high"]
             )
 
-            note_str = (
-                "AI Target Reached "
-                "(تم التعلم بنجاح)"
-                if hit_tp
-                else
-                "AI Stop Loss Hit "
-                "(خطأ وتم الاستيعاب)"
+            low_price = float(
+                last_row["low"]
             )
+
+            sl_price = float(
+                trade_row["sl"]
+            )
+
+            tp_price = float(
+                trade_row["tp"]
+            )
+
+            hit_sl = False
+            hit_tp = False
+
+            if is_buy_trade:
+
+                if (
+                    low_price
+                    <= sl_price
+                ):
+
+                    hit_sl = True
+
+                if (
+                    high_price
+                    >= tp_price
+                ):
+
+                    hit_tp = True
+
+            else:
+
+                if (
+                    high_price
+                    >= sl_price
+                ):
+
+                    hit_sl = True
+
+                if (
+                    low_price
+                    <= tp_price
+                ):
+
+                    hit_tp = True
 
 
             # =================================================
-            # Learning
+            # إذا ضرب SL وTP في نفس الشمعة
+            # نستخدم القرار المحافظ: SL
             # =================================================
 
-            try:
+            both_hit = (
+                hit_sl
+                and hit_tp
+            )
 
-                stored_features = (
-                    trade_row.get(
-                        "features"
-                    )
+            if both_hit:
+
+                hit_tp = False
+                hit_sl = True
+
+
+            # =================================================
+            # Close Trade
+            # =================================================
+
+            if hit_sl or hit_tp:
+
+                win_value = (
+                    1
+                    if hit_tp
+                    else 0
                 )
 
-                if stored_features:
+                if both_hit:
 
-                    feature_dict = (
-                        json.loads(
-                            stored_features
-                        )
+                    note_str = (
+                        "SL and TP touched "
+                        "in same candle; "
+                        "conservative SL outcome."
                     )
 
-                    feature_array = np.array(
-                        [
-                            [
-                                float(
-                                    feature_dict[
-                                        feature
-                                    ]
-                                )
-                                for feature
-                                in FEATURES
-                            ]
-                        ]
+                else:
+
+                    note_str = (
+                        "AI Target Reached "
+                        "(تم التعلم من النتيجة)"
+                        if hit_tp
+                        else
+                        "AI Stop Loss Hit "
+                        "(تم تسجيل النتيجة)"
                     )
 
-                    if model_is_ready(
-                        model,
-                        scaler,
-                    ):
 
-                        x_replay = (
-                            scaler.transform(
-                                feature_array
-                            )
-                        )
-
-                        model.partial_fit(
-                            x_replay,
-                            np.array(
-                                [
-                                    win_value
-                                ]
-                            ),
-                            classes=np.array(
-                                [
-                                    0,
-                                    1,
-                                ]
-                            ),
-                        )
-
-                        joblib.dump(
-                            model,
-                            MODEL_FILE,
-                        )
-
-            except Exception:
-                pass
+                # =================================================
+                # Experience
+                # =================================================
+                #
+                # لا نستخدم partial_fit على نموذج الاتجاه
+                # لأن النموذج الأساسي يتعلم:
+                #
+                # next candle direction
+                #
+                # وليس:
+                #
+                # win/loss
+                #
+                # لذلك يتم تسجيل النتيجة في SQLite
+                # وتستخدم لاحقاً في Experience Layer.
+                # =================================================
 
 
-            # =================================================
-            # Store Closed Trade
-            # =================================================
+                # =================================================
+                # Store Closed Trade
+                # =================================================
 
-            conn = get_db_connection()
-            c = conn.cursor()
+                conn = get_db_connection()
 
-            try:
+                try:
 
-                c.execute(
-                    """
-                    INSERT INTO trades
-                    (
-                        date,
-                        symbol,
-                        direction,
-                        entry,
-                        sl,
-                        tp,
-                        win,
-                        note,
-                        groq_conf,
-                        groq_note,
-                        ai_conf_before_groq,
-                        ai_conf_after_groq
-                    )
-                    VALUES
-                    (
-                        ?, ?, ?, ?, ?, ?, ?,
-                        ?, ?, ?, ?, ?
-                    )
-                    """,
-                    (
-                        str(
-                            datetime.now(
-                                timezone.utc
-                            ).date()
-                        ),
+                    c = conn.cursor()
 
-                        trade_row[
-                            "symbol"
-                        ],
-
-                        trade_row[
-                            "direction"
-                        ],
-
-                        trade_row[
-                            "entry"
-                        ],
-
-                        trade_row[
-                            "sl"
-                        ],
-
-                        trade_row[
-                            "tp"
-                        ],
-
-                        win_value,
-
-                        note_str,
-
+                    c.execute(
+                        """
+                        INSERT INTO trades
                         (
-                            trade_row.get(
-                                "groq_conf"
-                            )
-                            if pd.notna(
+                            date,
+                            symbol,
+                            direction,
+                            entry,
+                            sl,
+                            tp,
+                            win,
+                            note,
+                            claude_conf,
+                            claude_note,
+                            groq_conf,
+                            groq_note,
+                            ai_conf_before_groq,
+                            ai_conf_after_groq
+                        )
+                        VALUES
+                        (
+                            ?, ?, ?, ?, ?, ?, ?,
+                            ?, ?, ?, ?, ?, ?, ?
+                        )
+                        """,
+                        (
+                            str(
+                                datetime.now(
+                                    timezone.utc
+                                ).date()
+                            ),
+
+                            trade_row[
+                                "symbol"
+                            ],
+
+                            trade_row[
+                                "direction"
+                            ],
+
+                            float(
+                                trade_row[
+                                    "entry"
+                                ]
+                            ),
+
+                            float(
+                                trade_row[
+                                    "sl"
+                                ]
+                            ),
+
+                            float(
+                                trade_row[
+                                    "tp"
+                                ]
+                            ),
+
+                            win_value,
+
+                            note_str,
+
+                            None,
+
+                            None,
+
+                            (
+                                float(
+                                    trade_row.get(
+                                        "groq_conf"
+                                    )
+                                )
+                                if pd.notna(
+                                    trade_row.get(
+                                        "groq_conf"
+                                    )
+                                )
+                                else None
+                            ),
+
+                            str(
+                                trade_row.get(
+                                    "groq_note",
+                                    "",
+                                )
+                                or ""
+                            ),
+
+                            float(
+                                trade_row.get(
+                                    "ai_conf",
+                                    0,
+                                )
+                                or 0
+                            ),
+
+                            float(
                                 trade_row.get(
                                     "groq_conf"
                                 )
-                            )
-                            else None
-                        ),
-
-                        str(
-                            trade_row.get(
-                                "groq_note",
-                                "",
-                            )
-                            or ""
-                        ),
-
-                        (
-                            float(
+                                if pd.notna(
+                                    trade_row.get(
+                                        "groq_conf"
+                                    )
+                                )
+                                else
                                 trade_row.get(
                                     "ai_conf",
                                     0,
                                 )
                                 or 0
-                            )
+                            ),
                         ),
+                    )
 
-                        (
-                            float(
-                                trade_row.get(
-                                    "groq_conf",
-                                    0,
-                                )
-                                or
-                                trade_row.get(
-                                    "ai_conf",
-                                    0,
-                                )
-                                or 0
-                            )
-                        ),
+
+                    c.execute(
+                        """
+                        DELETE FROM active_trade
+                        WHERE id = 1
+                        """
+                    )
+
+
+                    conn.commit()
+
+                finally:
+
+                    conn.close()
+
+
+                # =================================================
+                # Notification
+                # =================================================
+
+                send_alert(
+                    (
+                        f"Closed "
+                        f"{trade_row['symbol']} "
+                        f"{trade_row['direction']} "
+                        "-> "
+                        f"{note_str}"
                     ),
+                    "🧠 AI Trade Settled",
                 )
-
-
-                c.execute(
-                    """
-                    DELETE FROM active_trade
-                    WHERE id = 1
-                    """
-                )
-
-
-                conn.commit()
-
-            finally:
-
-                conn.close()
-
-
-            # =================================================
-            # Notification
-            # =================================================
-
-            send_alert(
-                (
-                    f"Closed "
-                    f"{trade_row['symbol']} "
-                    f"{trade_row['direction']} "
-                    "-> "
-                    f"{note_str}"
-                ),
-                "🧠 AI Trade Settled",
-            )
