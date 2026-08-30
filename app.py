@@ -550,12 +550,18 @@ twelve_key = st.sidebar.text_input(
     value=(
         twelve_secret
         if twelve_secret
-        else st.session_state.get(
+        else load_setting(
             "twelve_key",
             "",
         )
     ),
 )
+
+if twelve_key:
+    save_setting(
+        "twelve_key",
+        twelve_key,
+    )
 
 st.session_state[
     "twelve_key"
@@ -618,12 +624,18 @@ groq_key = st.sidebar.text_input(
     value=(
         groq_secret
         if groq_secret
-        else st.session_state.get(
+        else load_setting(
             "groq_key",
             "",
         )
     ),
 )
+
+if groq_key:
+    save_setting(
+        "groq_key",
+        groq_key,
+    )
 
 st.session_state[
     "groq_key"
