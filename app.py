@@ -153,6 +153,17 @@ atr_mult = st.sidebar.slider('معامل الوقف ATR', 1.0, 3.0, 1.5, 0.1)
 risk_reward = st.sidebar.slider('نسبة العائد (R:R)', 1.5, 4.0, 2.0, 0.5)
 min_conf = st.sidebar.slider('أدنى ثقة مطلوبة من الشبكة العصبية (%)', 60, 95, 75, 1)
 
+st.sidebar.markdown('---')
+# FIX: تطوير جديد — إعادة تدريب يدوية. سابقاً كان الملف المخزَّن يُحمَّل
+# للأبد بلا وسيلة لإجبار تدريب جديد على بيانات سوق أحدث سوى حذف الملفات
+# يدوياً من السيرفر. الآن زر واحد يفعل ذلك ويعيد تشغيل الصفحة.
+if st.sidebar.button('🔄 إعادة تدريب النموذج من الصفر'):
+    for f in (MODEL_FILE, SCALER_FILE):
+        if os.path.exists(f):
+            os.remove(f)
+    st.cache_data.clear()
+    st.rerun()
+
 def send_alert(msg, title='🧠 Deep AI Alert'):
     if ntfy_channel:
         ch = ntfy_channel.strip().split('/')[-1]
@@ -178,10 +189,15 @@ def fetch_twelve_series(api_key, symbol='XAU/USD', interval='1h', outputsize=150
                f'&outputsize={outputsize}&apikey={api_key}')
         res = requests.get(url, timeout=8).json()
         if 'values' in res:
+            st.session_state['last_twelve_error'] = None
             df = pd.DataFrame(res['values'])[['open', 'high', 'low', 'close']].astype(float)
             return df.iloc[::-1].reset_index(drop=True)
-    except Exception:
-        pass
+        # FIX: تشخيص أوضح — Twelve Data يرجع {"status":"error","message":...}
+        # عند مفتاح خاطئ أو تجاوز حد الطلبات؛ كانت هذه الرسالة تُبتلع بصمت
+        # وتظهر للمستخدم كـ"بيانات غير كافية" بلا تفسير حقيقي.
+        st.session_state['last_twelve_error'] = res.get('message', 'استجابة غير متوقعة من Twelve Data.')
+    except Exception as e:
+        st.session_state['last_twelve_error'] = f'تعذّر الاتصال بـ Twelve Data: {e}'
     return pd.DataFrame()
 
 # بيانات التدريب: سحبة واحدة كبيرة (بالساعة) تُحدَّث مرة كل 24 ساعة فقط
@@ -327,6 +343,9 @@ def execute_autonomous_scan(df_live_processed):
                 note = (f"الشبكة العصبية اقترحت {direction} بثقة {conf:.1f}%، لكن مراجعة Groq لم توافق "
                         f"(ثقته: {claude_result['confidence']:.0f}%) — تم تجاهل الإشارة تحفظاً.")
                 return note, claude_result
+        # FIX: تمييز واضح بين "Groq رفض الإشارة" و"Groq لم يستجب أصلاً" —
+        # سابقاً كانت الحالتان تُعاملان بنفس الطريقة (فتح الصفقة بصمت دون
+        # أي إشارة لعدم توفر المراجعة)، مما يصعّب تشخيص مشاكل المفتاح.
 
     sl_p = round(curr - sl_d, 2) if pred == 1 else round(curr + sl_d, 2)
     tp_p = round(curr + tp_d, 2) if pred == 1 else round(curr - tp_d, 2)
@@ -345,6 +364,8 @@ def execute_autonomous_scan(df_live_processed):
     claude_line = ''
     if claude_result is not None:
         claude_line = f"\nمراجعة Groq: موافق ({claude_result['confidence']:.0f}%) — {claude_result['reason']}"
+    elif use_claude:
+        claude_line = "\nملاحظة: تعذّر الحصول على مراجعة Groq (مفتاح غير صالح أو تعذّر الاتصال) — تم فتح الصفقة بالاعتماد على الشبكة العصبية وحدها."
     send_alert(f'🧠 AI Trade Executed: {direction}\nEntry: ${curr}\nSL: ${sl_p}\nTP: ${tp_p}\nAI Confidence: {conf:.1f}%{claude_line}')
     return f'تم اتخاذ قرار ({direction}) بثقة {conf:.1f}% وتم إرسال التنبيه.', claude_result
 
@@ -387,17 +408,40 @@ with tab1:
     else:
         st.info(f'🔍 {scan_msg}')
 
+    # FIX: تطوير جديد — إظهار رسالة الخطأ الفعلية من Twelve Data (مفتاح
+    # خاطئ، تجاوز حد الطلبات...) بدل رسالة عامة غامضة فقط.
+    twelve_err = st.session_state.get('last_twelve_error')
+    if twelve_err and twelve_key:
+        st.error(f'⚠️ Twelve Data: {twelve_err}')
+
     if claude_info is not None:
         agree_txt = '✅ موافق' if claude_info['agree'] else '❌ غير موافق'
         st.markdown(f"""<div class="claude-note">
             <b>🧠 رأي Groq:</b> {agree_txt} — ثقة {claude_info['confidence']:.0f}%<br>{claude_info['reason']}
         </div>""", unsafe_allow_html=True)
 
+    # FIX: تطوير جديد — لوحة شفافية تُظهر قيم المؤشرات اللحظية بدل صندوق
+    # أسود بلا تفاصيل، تساعد على فهم/تشخيص قرارات النموذج.
+    if not df_live_processed.empty:
+        last_snapshot = df_live_processed.iloc[-1]
+        s1, s2, s3, s4, s5 = st.columns(5)
+        s1.metric('السعر', f"{last_snapshot['close']:.2f}")
+        s2.metric('RSI', f"{last_snapshot['rsi']:.1f}")
+        s3.metric('EMA50', f"{last_snapshot['ema_50']:.2f}")
+        s4.metric('EMA200', f"{last_snapshot['ema_200']:.2f}")
+        s5.metric('ATR', f"{last_snapshot['atr']:.2f}")
+
 with tab2:
     conn = sqlite3.connect(DB_FILE)
     df_log = pd.read_sql('SELECT * FROM trades ORDER BY id DESC', conn)
     conn.close()
     if not df_log.empty:
+        # FIX: تطوير جديد — نسبة الربح % إلى جانب العدد الخام، مقياس أوضح
+        # لأداء النموذج الفعلي من مجرد "عدد الصفقات الناجحة".
+        win_rate = (df_log['win'].sum() / len(df_log)) * 100
+        m1, m2 = st.columns(2)
+        m1.metric('إجمالي الصفقات', len(df_log))
+        m2.metric('نسبة الربح', f"{win_rate:.1f}%")
         st.dataframe(df_log, use_container_width=True)
     else:
         st.info('لا توجد صفقات مغلقة مسجلة حتى الآن. الشبكة العصبية بانتظار أول نجاح.')
@@ -413,6 +457,11 @@ if twelve_key:
     if not c_active.empty and not df_live_processed.empty:
         t_row = c_active.iloc[0]
         last_row = df_live_processed.iloc[-1]
+        # FIX (خطأ حقيقي): is_buy_trade كانت تُحسب داخل try الخاصة بفحص
+        # الانعكاس فقط، بينما تُستخدم لاحقاً خارجها لفحص SL/TP. لو فشل
+        # predict_proba لأي سبب، كان التطبيق يتوقف بخطأ NameError بدل أن
+        # يتجاهل الخطأ بهدوء. حُسبت الآن قبل أي try، فهي متاحة دائماً.
+        is_buy_trade = 'BUY' in t_row['direction']
 
         try:
             x_current = scaler.transform(last_row[FEATURES].values.reshape(1, -1))
@@ -420,7 +469,6 @@ if twelve_key:
             curr_pred = np.argmax(current_probs)
             curr_conf = current_probs[curr_pred] * 100
 
-            is_buy_trade = 'BUY' in t_row['direction']
             reversal_detected = False
 
             if is_buy_trade and curr_pred == 0 and curr_conf >= (min_conf - 5):
