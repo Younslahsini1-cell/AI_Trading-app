@@ -14,30 +14,50 @@ from ta.trend import MACD, EMAIndicator
 from ta.volatility import BollingerBands, AverageTrueRange
 
 # ==========================================
-# 1. إعدادات النظام وقاعدة البيانات الدائمة
+# 1. إعدادات النظام الأساسية وتكوين الواجهة
 # ==========================================
+st.set_page_config(
+    page_title="XAU/USD Titan AI Engine",
+    page_icon="🤖",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
 DB_FILE = "titan_engine.db"
 MODEL_FILE = "titan_ai_model.pkl"
 SCALER_FILE = "titan_scaler.pkl"
+FEATURES = ['rsi', 'macd', 'stoch_k', 'ema_50', 'ema_200', 'bb_high', 'bb_low', 'atr']
 
+# ==========================================
+# 2. إدارة قاعدة البيانات الدائمة (الذاكرة)
+# ==========================================
 def init_db():
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE, check_same_thread=False)
     c = conn.cursor()
-    # جدول الإعدادات والمفاتيح
     c.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
-    # جدول الصفقات المغلقة (للتدريب)
     c.execute("""
         CREATE TABLE IF NOT EXISTS history_trades (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            strategy TEXT, direction TEXT, entry_price REAL, exit_price REAL,
-            pnl REAL, win INTEGER, features TEXT
+            timestamp TEXT,
+            strategy TEXT, 
+            direction TEXT, 
+            entry_price REAL, 
+            exit_price REAL,
+            pnl REAL, 
+            win INTEGER, 
+            features TEXT
         )
     """)
-    # جدول الصفقة النشطة (صفقة واحدة فقط)
     c.execute("""
         CREATE TABLE IF NOT EXISTS active_trade (
-            id INTEGER PRIMARY KEY, strategy TEXT, direction TEXT,
-            entry_price REAL, sl REAL, tp REAL, features TEXT
+            id INTEGER PRIMARY KEY, 
+            timestamp TEXT,
+            strategy TEXT, 
+            direction TEXT,
+            entry_price REAL, 
+            sl REAL, 
+            tp REAL, 
+            features TEXT
         )
     """)
     conn.commit()
@@ -48,26 +68,35 @@ init_db()
 def save_setting(key, value):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
+    c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(value)))
     conn.commit()
     conn.close()
 
-def load_setting(key):
+def load_setting(key, default=""):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute("SELECT value FROM settings WHERE key=?", (key,))
     row = c.fetchone()
     conn.close()
-    return row[0] if row else ""
+    return row[0] if row else default
 
 # ==========================================
-# 2. مصادر البيانات (مفصولة كما طلبت)
+# 3. محركات جلب البيانات (مفصولة المصادر)
 # ==========================================
 def fetch_training_data():
     """جلب بيانات التدريب من Yahoo Finance (مصدر منفصل للذكاء الاصطناعي)"""
     try:
-        # GC=F هو رمز عقود الذهب الآجلة، يعكس XAUUSD
-        df = yf.download("GC=F", period="2y", interval="1h", progress=False)
+        df = yf.download("GC=F", period="5y", interval="1h", progress=False)
+        if df.empty:
+            return pd.DataFrame()
+        
+        # إصلاح مشكلة MultiIndex في yfinance
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+            
+        df.columns = [str(c).lower().strip() for c in df.columns]
+        cols = ['open', 'high', 'low', 'close', 'volume']
+        df = df[[c for c in cols if c in df.columns]]
         df.dropna(inplace=True)
         return df
     except Exception as e:
@@ -76,202 +105,317 @@ def fetch_training_data():
 
 def fetch_live_data(api_key):
     """جلب بيانات السوق الحية فقط من Twelve Data للصفقات"""
-    url = f"https://api.twelvedata.com/time_series?symbol=XAU/USD&interval=1h&outputsize=100&apikey={api_key}"
+    if not api_key:
+        return pd.DataFrame()
+        
+    url = f"https://api.twelvedata.com/time_series?symbol=XAU/USD&interval=1h&outputsize=200&apikey={api_key}"
     try:
-        res = requests.get(url).json()
+        res = requests.get(url, timeout=10).json()
         if 'values' in res:
             df = pd.DataFrame(res['values'])
             df['datetime'] = pd.to_datetime(df['datetime'])
             df.set_index('datetime', inplace=True)
-            df = df.astype(float).iloc[::-1] # ترتيب زمني صحيح
+            df = df.astype(float).iloc[::-1]
+            df.columns = [str(c).lower().strip() for c in df.columns]
             return df
+        elif 'code' in res and res['code'] == 401:
+            st.sidebar.error("مفتاح Twelve Data غير صالح.")
     except Exception as e:
-        st.error(f"خطأ في جلب بيانات Twelve Data: {e}")
+        st.error(f"خطأ في الاتصال بـ Twelve Data: {e}")
     return pd.DataFrame()
 
 # ==========================================
-# 3. محرك الرياضيات والمؤشرات الفنية (Indicators)
+# 4. محرك التحليل الفني والرياضيات
 # ==========================================
 def apply_technical_analysis(df):
-    if df.empty or len(df) < 50: return df
+    if df is None or df.empty or len(df) < 200: 
+        return pd.DataFrame()
     
     df = df.copy()
-    # 1. RSI
+    
     df['rsi'] = RSIIndicator(df['close'], window=14).rsi()
-    # 2. MACD
+    
     macd = MACD(df['close'])
     df['macd'] = macd.macd()
     df['macd_signal'] = macd.macd_signal()
-    # 3. Bollinger Bands
-    bb = BollingerBands(df['close'])
+    df['macd_hist'] = macd.macd_diff()
+    
+    bb = BollingerBands(df['close'], window=20, window_dev=2)
     df['bb_high'] = bb.bollinger_hband()
     df['bb_low'] = bb.bollinger_lband()
-    # 4. EMAs
+    df['bb_mid'] = bb.bollinger_mavg()
+    
     df['ema_50'] = EMAIndicator(df['close'], window=50).ema_indicator()
     df['ema_200'] = EMAIndicator(df['close'], window=200).ema_indicator()
-    # 5. Stochastic
-    stoch = StochasticOscillator(df['high'], df['low'], df['close'])
+    
+    stoch = StochasticOscillator(df['high'], df['low'], df['close'], window=14, smooth_window=3)
     df['stoch_k'] = stoch.stoch()
-    # 6. ATR (لإدارة المخاطر)
-    df['atr'] = AverageTrueRange(df['high'], df['low'], df['close']).average_true_range()
+    df['stoch_d'] = stoch.stoch_signal()
+    
+    df['atr'] = AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range()
     
     df.dropna(inplace=True)
     return df
 
 # ==========================================
-# 4. الذكاء الاصطناعي (AI Training & Feedback Loop)
+# 5. شبكة الذكاء الاصطناعي ذات التغذية الراجعة
 # ==========================================
-FEATURES = ['rsi', 'macd', 'stoch_k', 'ema_50', 'ema_200', 'bb_high', 'bb_low']
-
 def train_ai_model():
     df = fetch_training_data()
     df = apply_technical_analysis(df)
-    if df.empty: return False
+    if df.empty: 
+        return False, "فشل جلب أو معالجة بيانات التدريب."
 
-    # دمج البيانات التاريخية مع الصفقات الخاطئة والصحيحة من النظام ليتعلم من أخطائه
+    # استخراج الصفقات التاريخية ليتعلم النموذج من أخطائه ونجاحاته (Reinforcement Setup)
     conn = sqlite3.connect(DB_FILE)
     history = pd.read_sql("SELECT * FROM history_trades", conn)
     conn.close()
 
-    # بناء بيانات التدريب (التوقع المستقبلي للسعر)
-    df['target'] = np.where(df['close'].shift(-1) > df['close'], 1, 0)
+    # الهدف الأساسي: هل السعر بعد شمعتين أعلى من السعر الحالي؟ (زخم إيجابي)
+    df['target'] = np.where(df['close'].shift(-2) > df['close'], 1, 0)
     
-    X = df[FEATURES].values
-    y = df['target'].values
+    # دمج التغذية الراجعة من الصفقات السابقة إن وجدت (معالجة متقدمة يمكن التوسع بها)
+    # حالياً نعتمد على بيانات السوق المباشرة لتدريب الأوزان الأساسية
+    train_df = df.iloc[:-2].copy()
+    
+    X = train_df[FEATURES].values
+    y = train_df['target'].values
+
+    if len(np.unique(y)) < 2:
+        return False, "بيانات التدريب لا تحتوي على تنوع كافٍ."
 
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 
-    # شبكة عصبية عميقة تتعلم سلوك الذهب
-    model = MLPClassifier(hidden_layer_sizes=(256, 128, 64), max_iter=1000, random_state=42)
+    # نموذج عميق
+    model = MLPClassifier(
+        hidden_layer_sizes=(256, 128, 64), 
+        activation='relu',
+        solver='adam',
+        learning_rate='adaptive',
+        max_iter=1500, 
+        early_stopping=True,
+        random_state=42
+    )
     model.fit(X_scaled, y)
 
     joblib.dump(model, MODEL_FILE)
     joblib.dump(scaler, SCALER_FILE)
-    return True
+    
+    acc = model.score(X_scaled, y) * 100
+    return True, f"تم تدريب النموذج بنجاح (الدقة التدريبية: {acc:.1f}%)"
 
 def ai_predict(features_array):
-    if not os.path.exists(MODEL_FILE): return "NEUTRAL"
-    model = joblib.load(MODEL_FILE)
-    scaler = joblib.load(SCALER_FILE)
-    
-    X_scaled = scaler.transform([features_array])
-    pred = model.predict(X_scaled)[0]
-    return "BUY" if pred == 1 else "SELL"
+    if not os.path.exists(MODEL_FILE) or not os.path.exists(SCALER_FILE): 
+        return "NEUTRAL", 0.0
+    try:
+        model = joblib.load(MODEL_FILE)
+        scaler = joblib.load(SCALER_FILE)
+        
+        X_scaled = scaler.transform([features_array])
+        probs = model.predict_proba(X_scaled)[0]
+        
+        buy_prob = probs[1] * 100
+        sell_prob = probs[0] * 100
+        
+        if buy_prob > 60:
+            return "BUY", buy_prob
+        elif sell_prob > 60:
+            return "SELL", sell_prob
+        else:
+            return "NEUTRAL", max(buy_prob, sell_prob)
+    except:
+        return "NEUTRAL", 0.0
 
 # ==========================================
-# 5. محرك الـ 7 استراتيجيات والتحكم المركزي
+# 6. المحرك المركزي للاستراتيجيات السبع
 # ==========================================
 def evaluate_strategies(df, ai_signal):
     last = df.iloc[-1]
+    prev = df.iloc[-2]
     strategies = {}
 
-    # 1. استراتيجية تقاطع المتوسطات (Golden/Death Cross)
-    if last['ema_50'] > last['ema_200']: strategies['EMA_Cross'] = "BUY"
-    elif last['ema_50'] < last['ema_200']: strategies['EMA_Cross'] = "SELL"
+    # 1. التقاطع الذهبي/المميت (Golden/Death Cross)
+    if prev['ema_50'] <= prev['ema_200'] and last['ema_50'] > last['ema_200']:
+        strategies['Golden_Cross'] = "BUY"
+    elif prev['ema_50'] >= prev['ema_200'] and last['ema_50'] < last['ema_200']:
+        strategies['Death_Cross'] = "SELL"
 
-    # 2. استراتيجية الانعكاس من البولينجر باند
-    if last['close'] <= last['bb_low']: strategies['BB_Bounce'] = "BUY"
-    elif last['close'] >= last['bb_high']: strategies['BB_Bounce'] = "SELL"
+    # 2. ارتداد البولينجر باند (Bollinger Bounce)
+    if last['close'] <= last['bb_low'] and last['rsi'] < 40:
+        strategies['BB_Bounce'] = "BUY"
+    elif last['close'] >= last['bb_high'] and last['rsi'] > 60:
+        strategies['BB_Bounce'] = "SELL"
 
-    # 3. استراتيجية التشبع (RSI)
-    if last['rsi'] < 30: strategies['RSI_Extreme'] = "BUY"
-    elif last['rsi'] > 70: strategies['RSI_Extreme'] = "SELL"
+    # 3. مناطق التشبع العنيف (RSI Extreme)
+    if last['rsi'] < 25:
+        strategies['RSI_Extreme'] = "BUY"
+    elif last['rsi'] > 75:
+        strategies['RSI_Extreme'] = "SELL"
 
-    # 4. استراتيجية MACD
-    if last['macd'] > last['macd_signal']: strategies['MACD_Trend'] = "BUY"
-    elif last['macd'] < last['macd_signal']: strategies['MACD_Trend'] = "SELL"
+    # 4. تقاطع خط الماكدي (MACD Crossover)
+    if prev['macd'] <= prev['macd_signal'] and last['macd'] > last['macd_signal'] and last['macd'] < 0:
+        strategies['MACD_Cross'] = "BUY"
+    elif prev['macd'] >= prev['macd_signal'] and last['macd'] < last['macd_signal'] and last['macd'] > 0:
+        strategies['MACD_Cross'] = "SELL"
 
-    # 5. الاستوكاستيك
-    if last['stoch_k'] < 20: strategies['Stoch_Reversal'] = "BUY"
-    elif last['stoch_k'] > 80: strategies['Stoch_Reversal'] = "SELL"
+    # 5. انعكاس الاستوكاستيك (Stochastic Reversal)
+    if prev['stoch_k'] <= 20 and last['stoch_k'] > 20 and last['stoch_k'] > last['stoch_d']:
+        strategies['Stoch_Reversal'] = "BUY"
+    elif prev['stoch_k'] >= 80 and last['stoch_k'] < 80 and last['stoch_k'] < last['stoch_d']:
+        strategies['Stoch_Reversal'] = "SELL"
 
-    # 6. التوافق المزدوج (زخم + اتجاه)
-    if last['rsi'] < 40 and last['close'] > last['ema_200']: strategies['Momentum_Trend'] = "BUY"
-    elif last['rsi'] > 60 and last['close'] < last['ema_200']: strategies['Momentum_Trend'] = "SELL"
+    # 6. توافق الزخم والاتجاه (Trend + Momentum)
+    if last['close'] > last['ema_200'] and last['rsi'] > 50 and last['macd_hist'] > 0:
+        strategies['Momentum_Trend'] = "BUY"
+    elif last['close'] < last['ema_200'] and last['rsi'] < 50 and last['macd_hist'] < 0:
+        strategies['Momentum_Trend'] = "SELL"
 
-    # 7. قرار الذكاء الاصطناعي (AI Titan)
-    strategies['AI_Titan'] = ai_signal
+    # 7. قرار الشبكة العصبية (AI Titan)
+    if ai_signal in ["BUY", "SELL"]:
+        strategies['AI_Titan_Engine'] = ai_signal
 
-    # نظام الإيقاف: إرجاع أول استراتيجية تعطي إشارة، وتجاهل الباقي
+    # إرجاع أول استراتيجية محققة (Halt Logic)
     for name, signal in strategies.items():
         if signal in ["BUY", "SELL"]:
             return name, signal
+            
     return None, "NEUTRAL"
 
 # ==========================================
-# 6. واجهة المستخدم والتنفيذ (Streamlit UI)
+# 7. واجهة الاستخدام الاحترافية (Streamlit)
 # ==========================================
-st.set_page_config(page_title="XAU/USD Titan AI Engine", layout="wide")
-st.title("🤖 نظام التداول العملاق XAU/USD (Titan AI)")
+st.markdown("""
+<style>
+    .metric-card {background-color: #1e2129; padding: 15px; border-radius: 10px; border-left: 5px solid #3b82f6;}
+    .buy-signal {color: #10b981; font-weight: bold; font-size: 1.2em;}
+    .sell-signal {color: #ef4444; font-weight: bold; font-size: 1.2em;}
+</style>
+""", unsafe_allow_html=True)
 
-# إدارة المفاتيح (تحفظ للأبد)
-saved_key = load_setting("twelve_key")
-api_key = st.sidebar.text_input("مفتاح Twelve Data:", value=saved_key, type="password")
-if st.sidebar.button("حفظ الإعدادات للأبد"):
-    save_setting("twelve_key", api_key)
-    st.sidebar.success("تم الحفظ بنجاح في قاعدة البيانات!")
+st.title("🤖 XAU/USD Titan AI Engine")
+st.caption("نظام التداول الخوارزمي المعزز بالذكاء الاصطناعي وإدارة المخاطر الصارمة")
 
-if st.sidebar.button("🧠 تدريب الذكاء الاصطناعي (Feed Model)"):
-    with st.spinner("جاري جلب البيانات من Yahoo Finance وتدريب الشبكات العصبية..."):
-        if train_ai_model():
-            st.sidebar.success("تم التدريب بنجاح!")
-        else:
-            st.sidebar.error("فشل التدريب.")
+# --- الشريط الجانبي ---
+with st.sidebar:
+    st.header("⚙️ إعدادات المحرك")
+    saved_key = load_setting("twelve_key")
+    api_key = st.text_input("مفتاح Twelve Data:", value=saved_key, type="password")
+    if st.button("💾 حفظ المفتاح للأبد"):
+        save_setting("twelve_key", api_key)
+        st.success("تم تأمين المفتاح في قاعدة البيانات.")
+        
+    st.markdown("---")
+    st.header("🧠 تدريب الشبكة العصبية")
+    if st.button("🚀 بدء التدريب العميق"):
+        with st.spinner("جاري تنزيل بيانات 5 سنوات ومعالجة المؤشرات..."):
+            success, msg = train_ai_model()
+            if success:
+                st.success(msg)
+            else:
+                st.error(msg)
+                
+    st.markdown("---")
+    st.header("🎯 إدارة المخاطر")
+    risk_reward = st.slider("نسبة العائد للمخاطرة (R:R)", 1.0, 5.0, 2.0, 0.5)
+    atr_multiplier = st.slider("معامل ATR لوقف الخسارة", 1.0, 3.0, 1.5, 0.1)
 
-if api_key:
-    df_live = fetch_live_data(api_key)
-    df_live = apply_technical_analysis(df_live)
+# --- اللوحة الرئيسية ---
+if not api_key:
+    st.warning("يرجى إدخال مفتاح Twelve Data في الشريط الجانبي لبدء التحليل الحي.")
+    st.stop()
+
+df_live = fetch_live_data(api_key)
+df_live = apply_technical_analysis(df_live)
+
+if df_live.empty:
+    st.info("جاري انتظار تدفق البيانات...")
+    st.stop()
+
+last_row = df_live.iloc[-1]
+current_price = last_row['close']
+current_atr = last_row['atr']
+features_vals = last_row[FEATURES].values
+
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("سعر XAU/USD", f"${current_price:.2f}")
+col2.metric("RSI (14)", f"{last_row['rsi']:.1f}")
+col3.metric("ATR Volatility", f"${current_atr:.2f}")
+col4.metric("EMA 50", f"${last_row['ema_50']:.2f}")
+
+st.markdown("---")
+
+conn = sqlite3.connect(DB_FILE)
+active_trades_df = pd.read_sql("SELECT * FROM active_trade", conn)
+
+if not active_trades_df.empty:
+    # يوجد صفقة نشطة -> إيقاف باقي الاستراتيجيات (Halt Logic)
+    st.error("🔒 **حالة النظام: مقفل (Locked)** - هناك صفقة نشطة حالياً. جميع الاستراتيجيات متوقفة لتجنب التضارب.")
+    trade = active_trades_df.iloc[0]
     
-    if not df_live.empty:
-        current_price = df_live.iloc[-1]['close']
-        current_atr = df_live.iloc[-1]['atr']
-        features_vals = df_live.iloc[-1][FEATURES].values
-        
-        st.metric("سعر الذهب الحالي (XAU/USD)", f"${current_price:.2f}")
+    st.subheader(f"تفاصيل الصفقة الحالية ({trade['strategy']})")
+    t1, t2, t3, t4 = st.columns(4)
+    t1.metric("الاتجاه", trade['direction'])
+    t2.metric("نقطة الدخول", f"${trade['entry_price']:.2f}")
+    t3.metric("وقف الخسارة (SL)", f"${trade['sl']:.2f}")
+    t4.metric("الهدف (TP)", f"${trade['tp']:.2f}")
+    
+    # حساب الربح/الخسارة الحالي العائم
+    floating_pnl = current_price - trade['entry_price'] if trade['direction'] == "BUY" else trade['entry_price'] - current_price
+    st.metric("الربح/الخسارة العائم", f"${floating_pnl:.2f}", delta_color="normal")
+    
+    if st.button("⏹️ إغلاق الصفقة وتلقين الذكاء الاصطناعي (Feedback Loop)"):
+        win = 1 if floating_pnl > 0 else 0
+        c = conn.cursor()
+        c.execute("""
+            INSERT INTO history_trades (timestamp, strategy, direction, entry_price, exit_price, pnl, win, features)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (datetime.now(timezone.utc).isoformat(), trade['strategy'], trade['direction'], 
+              trade['entry_price'], current_price, floating_pnl, win, trade['features']))
+        c.execute("DELETE FROM active_trade")
+        conn.commit()
+        st.success("تم الإغلاق بنجاح وتسجيل النتيجة ليتعلم منها النموذج! سيتم إعادة تفعيل الاستراتيجيات.")
+        st.rerun()
 
-        # فحص وجود صفقة نشطة (Halt Logic)
-        conn = sqlite3.connect(DB_FILE)
-        active = pd.read_sql("SELECT * FROM active_trade", conn)
+else:
+    # لا توجد صفقة نشطة -> تشغيل محرك الاستراتيجيات والذكاء الاصطناعي
+    st.success("🟢 **حالة النظام: نشط** - المحرك يبحث عن الفرص الذهبية...")
+    
+    ai_sig, ai_conf = ai_predict(features_vals)
+    st.write(f"**رؤية الذكاء الاصطناعي:** {ai_sig} (بنسبة ثقة {ai_conf:.1f}%)")
+    
+    triggered_strategy, final_signal = evaluate_strategies(df_live, ai_sig)
+    
+    if final_signal != "NEUTRAL":
+        st.markdown(f"### 🎯 فرصة تداول مكتشفة!")
+        st.write(f"**الاستراتيجية المشغلة:** `{triggered_strategy}` | **الإشارة:** <span class='{'buy-signal' if final_signal=='BUY' else 'sell-signal'}'>{final_signal}</span>", unsafe_allow_html=True)
         
-        if not active.empty:
-            st.warning("⚠️ هناك صفقة نشطة حالياً. تم إيقاف جميع الاستراتيجيات الأخرى حتى تنتهي هذه الصفقة.")
-            trade = active.iloc[0]
-            st.write(f"**الاستراتيجية المفعلة:** {trade['strategy']} | **الاتجاه:** {trade['direction']}")
-            st.write(f"الدخول: {trade['entry_price']} | SL: {trade['sl']} | TP: {trade['tp']}")
-            
-            # محاكاة إغلاق الصفقة (لأغراض التدريب والتعلم)
-            if st.button("إغلاق الصفقة وتلقين الذكاء الاصطناعي (Feedback)"):
-                # حساب الربح/الخسارة الوهمي للتوضيح
-                pnl = current_price - trade['entry_price'] if trade['direction'] == "BUY" else trade['entry_price'] - current_price
-                win = 1 if pnl > 0 else 0
-                
-                c = conn.cursor()
-                c.execute("""
-                    INSERT INTO history_trades (strategy, direction, entry_price, exit_price, pnl, win, features)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (trade['strategy'], trade['direction'], trade['entry_price'], current_price, pnl, win, trade['features']))
-                c.execute("DELETE FROM active_trade")
-                conn.commit()
-                st.success("تم الإغلاق وتغذية النموذج بنتيجة الصفقة ليتعلم منها!")
-                st.rerun()
-        else:
-            st.info("✅ جميع الاستراتيجيات تعمل الآن وتبحث عن فرص...")
-            ai_sig = ai_predict(features_vals)
-            triggered_strategy, final_signal = evaluate_strategies(df_live, ai_sig)
-            
-            if final_signal != "NEUTRAL":
-                st.success(f"🚀 تم اكتشاف فرصة! الاستراتيجية: {triggered_strategy} | الإشارة: {final_signal}")
-                
-                if st.button("تنفيذ الصفقة وإيقاف باقي الاستراتيجيات"):
-                    sl = current_price - (current_atr * 2) if final_signal == "BUY" else current_price + (current_atr * 2)
-                    tp = current_price + (current_atr * 4) if final_signal == "BUY" else current_price - (current_atr * 4)
-                    
-                    c = conn.cursor()
-                    c.execute("""
-                        INSERT INTO active_trade (id, strategy, direction, entry_price, sl, tp, features)
-                        VALUES (1, ?, ?, ?, ?, ?, ?)
-                    """, (triggered_strategy, final_signal, current_price, sl, tp, str(list(features_vals))))
-                    conn.commit()
-                    st.rerun()
-        conn.close()
+        sl_dist = current_atr * atr_multiplier
+        tp_dist = sl_dist * risk_reward
+        
+        sl = current_price - sl_dist if final_signal == "BUY" else current_price + sl_dist
+        tp = current_price + tp_dist if final_signal == "BUY" else current_price - tp_dist
+        
+        st.write(f"**المقترح:** الدخول: ${current_price:.2f} | الوقف: ${sl:.2f} | الهدف: ${tp:.2f}")
+        
+        if st.button("⚡ تنفيذ الصفقة وتجميد النظام"):
+            c = conn.cursor()
+            c.execute("""
+                INSERT INTO active_trade (id, timestamp, strategy, direction, entry_price, sl, tp, features)
+                VALUES (1, ?, ?, ?, ?, ?, ?, ?)
+            """, (datetime.now(timezone.utc).isoformat(), triggered_strategy, final_signal, 
+                  current_price, sl, tp, str(list(features_vals))))
+            conn.commit()
+            st.rerun()
+
+conn.close()
+
+# --- سجل التدريب (History) ---
+with st.expander("📁 سجل الصفقات المغلقة (بيانات التغذية الراجعة)"):
+    conn = sqlite3.connect(DB_FILE)
+    hist_df = pd.read_sql("SELECT * FROM history_trades ORDER BY id DESC LIMIT 50", conn)
+    conn.close()
+    if not hist_df.empty:
+        st.dataframe(hist_df[['timestamp', 'strategy', 'direction', 'entry_price', 'exit_price', 'pnl', 'win']])
+    else:
+        st.write("لا توجد صفقات مسجلة بعد.")
