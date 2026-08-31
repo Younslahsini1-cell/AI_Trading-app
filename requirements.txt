@@ -5,3 +5,6 @@ requests
 joblib
 scikit-learn
 streamlit-autorefresh
+yfinance
+ta
+plotly
