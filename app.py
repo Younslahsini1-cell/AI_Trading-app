@@ -37,6 +37,8 @@ ICT / Smart Money + Neural Network + Groq Second Opinion
 12) منع تكرار الإشارة على نفس شمعة H1
 13) استخدام آخر شمعة مغلقة فقط للإشارة
 14) عدم إفساد نموذج الاتجاه بنتائج win/loss
+15) حفظ مفاتيح API بشكل دائم في قاعدة البيانات
+16) تطبيق قواعد ICT كاستراتيجية تداول
 """
 
 from datetime import datetime, timezone, timedelta
@@ -525,8 +527,15 @@ st.sidebar.header(
     "⚙️ إعدادات الذكاء الاصطناعي"
 )
 
+# Twelve Data API Key مع حفظ دائم
 twelve_secret = get_secret_value(
     "TWELVE_DATA_API_KEY",
+    "",
+)
+
+# تحميل المفتاح من قاعدة البيانات إذا وجد
+saved_twelve_key = load_setting(
+    "twelve_api_key",
     "",
 )
 
@@ -536,12 +545,21 @@ twelve_key = st.sidebar.text_input(
     value=(
         twelve_secret
         if twelve_secret
+        else saved_twelve_key
+        if saved_twelve_key
         else st.session_state.get(
             "twelve_key",
             "",
         )
     ),
 )
+
+# حفظ المفتاح في قاعدة البيانات
+if twelve_key:
+    save_setting(
+        "twelve_api_key",
+        twelve_key,
+    )
 
 st.session_state[
     "twelve_key"
@@ -594,18 +612,33 @@ groq_secret = get_secret_value(
     "",
 )
 
+# تحميل مفتاح Groq من قاعدة البيانات
+saved_groq_key = load_setting(
+    "groq_api_key",
+    "",
+)
+
 groq_key = st.sidebar.text_input(
     "مفتاح Groq API",
     type="password",
     value=(
         groq_secret
         if groq_secret
+        else saved_groq_key
+        if saved_groq_key
         else st.session_state.get(
             "groq_key",
             "",
         )
     ),
 )
+
+# حفظ مفتاح Groq في قاعدة البيانات
+if groq_key:
+    save_setting(
+        "groq_api_key",
+        groq_key,
+    )
 
 st.session_state[
     "groq_key"
@@ -1724,6 +1757,7 @@ def ai_scanner(
         "ict_bias": None,
         "ict_confidence": None,
         "ict_adjustment": 0.0,
+        "ict_signals": [],
     }
 
     if not twelve_key:
@@ -2021,13 +2055,14 @@ def ai_scanner(
     )
 
     # ========================================================
-    # 🧭 ICT Layer (تكامل جديد)
+    # 🧭 ICT Layer (قواعد استراتيجية ICT)
     # ========================================================
 
     ict_adjustment = 0.0
     ict_bias = None
     ict_confidence = None
     ict_used = False
+    ict_signals = []
 
     if ict_data is not None:
 
@@ -2052,78 +2087,134 @@ def ai_scanner(
 
             ai_direction = "BEARISH"
 
-        # إذا كان انحياز ICT متوافقًا مع الاتجاه
+        # ✅ قواعد ICT الأساسية:
+
+        # 1. قاعدة الاتجاه الهيكلي (Bias)
         if ict_bias == ai_direction:
-
-            # إضافة بسيطة حسب ثقة ICT (بحد أقصى 5%)
-            ict_adjustment = min(
-                5.0,
-                (ict_confidence - 50)
-                * 0.1,
+            ict_signals.append(
+                f"توافق الهيكل: {ict_bias}"
             )
+            ict_adjustment += 5.0  # تعزيز
 
-            working_conf += ict_adjustment
-
-        # إذا كان متعارضًا
         elif ict_bias != "NEUTRAL":
-
-            # خصم بسيط
-            ict_adjustment = -min(
-                5.0,
-                (ict_confidence - 50)
-                * 0.1,
+            ict_signals.append(
+                f"تعارض الهيكل: {ict_bias} مقابل {ai_direction}"
             )
+            ict_adjustment -= 10.0  # تخفيض كبير
 
-            working_conf += ict_adjustment
+        # 2. قاعدة السيولة (Liquidity Sweep)
+        if ict_data.get("manipulation"):
+            manip_note = ict_data.get(
+                "manip_note",
+                "",
+            )
+            # إذا كان هناك Sweep عكس الاتجاه، فقد يكون انعكاسًا
+            if "BSL swept" in manip_note and ai_direction == "BULLISH":
+                # BSL swept يعني احتمال انعكاس هابط
+                ict_signals.append(
+                    "BSL swept: إشارة انعكاس هابط"
+                )
+                ict_adjustment -= 8.0
+            elif "SSL swept" in manip_note and ai_direction == "BEARISH":
+                ict_signals.append(
+                    "SSL swept: إشارة انعكاس صاعد"
+                )
+                ict_adjustment -= 8.0
+            else:
+                # قد يكون sweep في نفس الاتجاه
+                ict_signals.append(
+                    f"Liquidity Sweep: {manip_note}"
+                )
+                ict_adjustment += 3.0  # تعزيز بسيط
 
-        # إذا كان ICT محايدًا لا نغيّر شيئًا
+        # 3. قاعدة Order Blocks
+        bull_ob = ict_data.get("bull_ob")
+        bear_ob = ict_data.get("bear_ob")
 
-        # التأكد من أن الثقة ضمن النطاق
-        working_conf = max(
-            0,
-            min(
-                100,
-                working_conf,
-            ),
-        )
+        if ai_direction == "BULLISH" and bull_ob:
+            ict_signals.append(
+                "Bullish Order Block موجود"
+            )
+            ict_adjustment += 4.0
+        elif ai_direction == "BEARISH" and bear_ob:
+            ict_signals.append(
+                "Bearish Order Block موجود"
+            )
+            ict_adjustment += 4.0
+        else:
+            ict_signals.append(
+                "لا يوجد Order Block داعم"
+            )
+            ict_adjustment -= 2.0
 
-        # تحديث النتيجة
-        result[
-            "ict_used"
-        ] = ict_used
+        # 4. قاعدة FVG
+        bull_fvg = ict_data.get("bull_fvg")
+        bear_fvg = ict_data.get("bear_fvg")
 
-        result[
-            "ict_bias"
-        ] = ict_bias
+        if ai_direction == "BULLISH" and bull_fvg:
+            ict_signals.append(
+                "Bullish FVG موجود"
+            )
+            ict_adjustment += 3.0
+        elif ai_direction == "BEARISH" and bear_fvg:
+            ict_signals.append(
+                "Bearish FVG موجود"
+            )
+            ict_adjustment += 3.0
+        else:
+            ict_signals.append(
+                "لا يوجد FVG داعم"
+            )
+            ict_adjustment -= 1.0
 
-        result[
-            "ict_confidence"
-        ] = ict_confidence
+        # 5. قاعدة OTE
+        ote = ict_data.get("ote")
+        if ote and ote.get("inside") and ote.get("direction") == ai_direction:
+            ict_signals.append(
+                "السعر داخل منطقة OTE المثالية"
+            )
+            ict_adjustment += 5.0
+        elif ote and ote.get("inside"):
+            ict_signals.append(
+                "السعر داخل OTE ولكن عكس الاتجاه"
+            )
+            ict_adjustment -= 3.0
 
-        result[
-            "ict_adjustment"
-        ] = round(
-            ict_adjustment,
-            2,
-        )
+        # 6. قاعدة الجلسة الآسيوية
+        asian_levels = ict_data.get("asian_levels")
+        if asian_levels:
+            if ai_direction == "BULLISH" and last["close"] > asian_levels["asian_high"]:
+                ict_signals.append(
+                    "السعر فوق قمة الجلسة الآسيوية"
+                )
+                ict_adjustment += 2.0
+            elif ai_direction == "BEARISH" and last["close"] < asian_levels["asian_low"]:
+                ict_signals.append(
+                    "السعر تحت قاع الجلسة الآسيوية"
+                )
+                ict_adjustment += 2.0
 
-        # إذا انخفضت الثقة بعد تعديل ICT دون الحد الأدنى
+        # تحديد التعديل النهائي (بحدود معقولة)
+        ict_adjustment = max(-15.0, min(15.0, ict_adjustment))
+
+        working_conf += ict_adjustment
+        working_conf = max(0.0, min(100.0, working_conf))
+
+        result.update({
+            "ict_used": True,
+            "ict_bias": ict_bias,
+            "ict_confidence": ict_confidence,
+            "ict_adjustment": round(ict_adjustment, 2),
+            "ict_signals": ict_signals,
+        })
+
+        # إذا انخفضت الثقة دون الحد الأدنى بعد تعديل ICT
         if working_conf < min_conf:
-
-            result[
-                "final_confidence"
-            ] = working_conf
-
+            result["final_confidence"] = working_conf
             result["status"] = (
-                "🟡 إشارة AI موجودة، "
-                "لكن ICT خفّض الثقة "
-                "دون الحد الأدنى."
+                "🟡 إشارة AI موجودة، لكن قواعد ICT خفّضت الثقة دون الحد الأدنى."
             )
-
-            return (
-                result["status"],
-                result,
-            )
+            return result["status"], result
 
     # ========================================================
     # Groq
@@ -2438,7 +2529,12 @@ def ai_scanner(
             f"{ict_bias} "
             f"({ict_confidence:.1f}%) "
             f"تعديل: "
-            f"{ict_adjustment:+.1f}%"
+            f"{ict_adjustment:+.1f}%\n"
+            "إشارات:\n"
+            + "\n".join(
+                f"- {s}"
+                for s in ict_signals
+            )
         )
 
     send_alert(
@@ -4157,7 +4253,7 @@ with tab1:
             )
 
     # ========================================================
-    # ICT Adjustment Info
+    # ICT Signals
     # ========================================================
 
     if ai_result.get(
@@ -4165,41 +4261,37 @@ with tab1:
         False,
     ):
 
-        ict_bias = ai_result[
-            "ict_bias"
-        ]
+        st.markdown(
+            "### 🧭 إشارات ICT"
+        )
 
-        ict_conf = ai_result[
-            "ict_confidence"
-        ]
+        for signal in ai_result.get(
+            "ict_signals",
+            [],
+        ):
+            st.write(f"- {signal}")
 
-        ict_adj = ai_result[
-            "ict_adjustment"
-        ]
+        ict_adj = ai_result.get(
+            "ict_adjustment",
+            0,
+        )
 
         if ict_adj > 0:
 
             st.success(
-                f"🧭 ICT يؤكد الاتجاه "
-                f"({ict_bias}) "
-                f"بثقة {ict_conf:.1f}% "
-                f"(تعديل +{ict_adj:.1f}%)"
+                f"تعديل ICT: +{ict_adj:.1f}%"
             )
 
         elif ict_adj < 0:
 
             st.warning(
-                f"🧭 ICT يعارض الاتجاه "
-                f"({ict_bias}) "
-                f"بثقة {ict_conf:.1f}% "
-                f"(تعديل {ict_adj:.1f}%)"
+                f"تعديل ICT: {ict_adj:.1f}%"
             )
 
         else:
 
             st.info(
-                f"🧭 ICT محايد أو غير مؤثر "
-                f"({ict_bias})"
+                "تعديل ICT: 0.0%"
             )
 
     # ========================================================
