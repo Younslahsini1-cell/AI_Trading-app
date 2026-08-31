@@ -166,6 +166,7 @@ def fetch_data(symbol="XAUUSD=X", interval="1h", period="6mo", api_key=None):
                     df["Datetime"] = pd.to_datetime(df["Datetime"], utc=True)
                     for col in ["open", "high", "low", "close"]:
                         df[col] = pd.to_numeric(df[col], errors='coerce')
+                    df["volume"] = 0  # Twelve Data لا يوفر volume افتراضيًا لهذا الرمز، نضيف صفر
                     df = df[["Datetime", "open", "high", "low", "close", "volume"]].dropna()
                     df = df.sort_values("Datetime").reset_index(drop=True)
         except Exception as e:
@@ -178,8 +179,22 @@ def fetch_data(symbol="XAUUSD=X", interval="1h", period="6mo", api_key=None):
             if not df.empty:
                 df = df.reset_index()
                 df = df.rename(columns={"index": "Datetime"})
-                df = df[["Datetime", "Open", "High", "Low", "Close", "Volume"]].copy()
-                df.columns = ["Datetime", "open", "high", "low", "close", "volume"]
+                # ضمان وجود جميع الأعمدة المطلوبة
+                required_cols = ["Datetime", "Open", "High", "Low", "Close", "Volume"]
+                # إعادة تسمية الأعمدة
+                df = df.rename(columns={
+                    "Datetime": "Datetime",
+                    "Open": "open",
+                    "High": "high",
+                    "Low": "low",
+                    "Close": "close",
+                    "Volume": "volume"
+                })
+                # إذا كان عمود volume غير موجود (يحدث مع بعض الرموز)، ننشئه بأصفار
+                if 'volume' not in df.columns:
+                    df['volume'] = 0
+                # اختيار الأعمدة المطلوبة فقط
+                df = df[["Datetime", "open", "high", "low", "close", "volume"]].copy()
                 df["Datetime"] = pd.to_datetime(df["Datetime"], utc=True)
                 df = df.dropna().reset_index(drop=True)
         except Exception as e:
@@ -192,6 +207,11 @@ def fetch_data(symbol="XAUUSD=X", interval="1h", period="6mo", api_key=None):
 def add_technical_indicators(df):
     """إضافة أكثر من 25 مؤشر فني."""
     df = df.copy()
+    # التحقق من وجود الأعمدة المطلوبة
+    required_columns = ['open', 'high', 'low', 'close', 'volume']
+    for col in required_columns:
+        if col not in df.columns:
+            df[col] = 0  # إضافة عمود مفقود بقيمة صفر
     # RSI
     df['rsi'] = ta.momentum.RSIIndicator(close=df['close'], window=14).rsi()
     # MACD
@@ -224,7 +244,7 @@ def add_technical_indicators(df):
     df['adx'] = ta.trend.ADXIndicator(high=df['high'], low=df['low'], close=df['close']).adx()
     # Williams %R
     df['williams_r'] = ta.momentum.WilliamsRIndicator(high=df['high'], low=df['low'], close=df['close']).williams_r()
-    # MFI
+    # MFI - تأكد من وجود volume
     df['mfi'] = ta.volume.MFIIndicator(high=df['high'], low=df['low'], close=df['close'], volume=df['volume']).money_flow_index()
     # ROC
     df['roc'] = ta.momentum.ROCIndicator(close=df['close']).roc()
@@ -242,7 +262,7 @@ def add_technical_indicators(df):
     df['price_change_10'] = df['close'].pct_change(10) * 100
     # Volume change
     df['volume_change'] = df['volume'].pct_change(1) * 100
-    # Sentiment score (سيتم تعبئته لاحقاً)
+    # Sentiment score
     df['sentiment_score'] = 0.0
     # إزالة الصفوف الفارغة
     df = df.dropna(subset=FEATURES).reset_index(drop=True)
@@ -254,12 +274,9 @@ def add_technical_indicators(df):
 def get_news_sentiment(symbol="XAU/USD", api_key=None):
     """
     جلب وتحليل المشاعر من عناوين الأخبار (اختياري).
-    يستخدم NewsAPI إذا توفر مفتاح، وإلا يعيد درجة محايدة.
-    يمكن استخدام GDELT المجاني.
+    يستخدم GDELT المجاني.
     """
-    # محاولة GDELT المجانية (لا تحتاج مفتاح)
     try:
-        # استخدام GDELT DOC API للبحث عن أخبار الذهب
         url = "https://api.gdeltproject.org/api/v2/doc/doc"
         params = {
             "query": "gold OR XAU OR gold price",
@@ -273,7 +290,6 @@ def get_news_sentiment(symbol="XAU/USD", api_key=None):
             data = resp.json()
             articles = data.get("articles", [])
             if articles:
-                # تحليل بسيط للكلمات المفتاحية الإيجابية/السلبية
                 positive_words = ['surge', 'rally', 'gain', 'rise', 'bull', 'strong', 'higher', 'record']
                 negative_words = ['drop', 'fall', 'decline', 'bear', 'weak', 'lower', 'loss', 'plunge']
                 pos_count = 0
@@ -284,21 +300,19 @@ def get_news_sentiment(symbol="XAU/USD", api_key=None):
                     neg_count += sum(1 for w in negative_words if w in title)
                 total = pos_count + neg_count
                 if total > 0:
-                    sentiment = (pos_count - neg_count) / total * 100  # من -100 إلى 100
+                    sentiment = (pos_count - neg_count) / total * 100
                 else:
                     sentiment = 0.0
                 return sentiment
     except Exception:
         pass
-    # إذا لم يتوفر مصدر، نعيد قيمة محايدة
     return 0.0
 
 # ============================================================
 # Model Training
 # ============================================================
 def train_ensemble_model(df, features):
-    """تدريب نموذج Ensemble (RandomForest + GradientBoosting) للتنبؤ بالاتجاه."""
-    # الهدف: هل السعر بعد 3 فترات سيكون أعلى أم أقل؟ (1 = ارتفاع، 0 = انخفاض)
+    """تدريب نموذج Ensemble للتنبؤ بالاتجاه."""
     df = df.copy()
     df['target'] = (df['close'].shift(-3) > df['close']).astype(int)
     df = df.dropna(subset=features + ['target'])
@@ -306,24 +320,14 @@ def train_ensemble_model(df, features):
         return None, None, None
     X = df[features].values
     y = df['target'].values
-    # تقسيم البيانات
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, shuffle=False)
-    # مقياس
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
-    # RandomForest
     rf = RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1)
     rf.fit(X_train_scaled, y_train)
-    # GradientBoosting
-    gb = GradientBoostingClassifier(n_estimators=100, max_depth=5, random_state=42)
-    gb.fit(X_train_scaled, y_train)
-    # دمج بسيط: متوسط الاحتمالات
-    # سنحفظ النموذجين، أو نستخدم نموذج واحد (RF) للسهولة
-    # سنحفظ RF فقط للتبسيط
     joblib.dump(rf, MODEL_FILE)
     joblib.dump(scaler, SCALER_FILE)
-    # دقة على الاختبار
     y_pred = rf.predict(X_test_scaled)
     acc = accuracy_score(y_test, y_pred)
     return rf, scaler, acc
@@ -378,7 +382,7 @@ def generate_signal(df, model, scaler):
     if sentiment > 0:
         confidence = confidence * 0.8 + sentiment * 0.2
     elif sentiment < 0:
-        confidence = confidence * 0.8 + (100 + sentiment) * 0.2  # sentiment سلبي يعطي ثقة أقل
+        confidence = confidence * 0.8 + (100 + sentiment) * 0.2
     confidence = max(0, min(100, confidence))
     # تحديد نقاط الدخول والوقف
     atr = last['atr']
@@ -386,7 +390,7 @@ def generate_signal(df, model, scaler):
         atr = 1.0
     curr_price = last['close']
     sl_distance = atr * 1.5
-    tp_distance = sl_distance * 2.0  # نسبة R:R = 1:2
+    tp_distance = sl_distance * 2.0
     if direction == "BUY":
         sl = curr_price - sl_distance
         tp = curr_price + tp_distance
