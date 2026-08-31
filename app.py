@@ -1731,6 +1731,59 @@ if last_update:
 else:
     st.caption("🟡 المحرك الخلفي بدأ للتو، بانتظار أول دورة تحليل...")
 
+# ------------------------------------------------------------
+# 🔧 تشخيص المحرك — قسم قابل للطي فقط، لا يُغيّر أي منطق، هدفه
+# توضيح السبب الدقيق وراء بقاء الثقة عند 0% إن حصل ذلك.
+# ------------------------------------------------------------
+
+with st.expander("🔧 حالة المحرك (تشخيص)"):
+
+    diag_model, diag_scaler = load_current_model()
+    model_ready_now = model_is_ready(diag_model, diag_scaler)
+
+    d1, d2 = st.columns(2)
+
+    d1.write(
+        "🔑 مفتاح Twelve Data: "
+        + ("✅ موجود" if twelve_key else "❌ غير مُدخل")
+    )
+
+    d1.write(
+        "🧠 حالة النموذج: "
+        + ("✅ مُدرَّب وجاهز" if model_ready_now else "⏳ غير جاهز بعد")
+    )
+
+    d1.write(
+        "🔒 قفل تدريب نشط الآن: "
+        + ("نعم" if os.path.exists(TRAINING_LOCK_FILE) else "لا")
+    )
+
+    last_train_time = APP_STATE_get("last_train_time")
+    d2.write(f"🕒 آخر تدريب ناجح: {last_train_time or 'لم يحدث بعد'}")
+
+    d2.write(f"🔄 آخر دورة تحليل: {last_update or 'لم تبدأ بعد'}")
+
+    d2.write(f"📶 عدد صفقات في السجل: {get_total_trades_count()}")
+
+    diag_error = APP_STATE_get("last_twelve_error")
+    if diag_error:
+        st.error(f"⚠️ آخر خطأ من Twelve Data: {diag_error}")
+        st.caption(
+            "إذا كانت الرسالة تذكر أن هذا endpoint مدفوع أو أن الرمز "
+            "XAU/USD غير مدعوم على خطتك الحالية، فهذا يعني أن التدريب "
+            "لن يكتمل أبدًا حتى تُفعَّل خطة تدعم بيانات الذهب التاريخية "
+            "على حساب Twelve Data الخاص بك."
+        )
+
+    if not model_ready_now and not diag_error and twelve_key:
+        st.caption(
+            "لا يوجد خطأ ظاهر من Twelve Data، لكن النموذج لم يجهز بعد — "
+            "هذا طبيعي في أول تشغيل ويحتاج بعض الوقت لجلب البيانات "
+            "التاريخية (حتى 5000 شمعة) وتدريب الشبكة العصبية. "
+            "إن استمر الأمر أكثر من بضع دقائق راجع الرسالة أعلاه بعد "
+            "إعادة تحميل الصفحة."
+        )
+
 ai_result = APP_STATE_get("ai_result") or {}
 scan_msg = APP_STATE_get("scan_msg") or ""
 
