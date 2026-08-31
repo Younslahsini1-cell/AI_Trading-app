@@ -29,7 +29,7 @@ from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier,
 from sklearn.neural_network import MLPClassifier
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, classification_report
+from sklearn.metrics import accuracy_score
 import joblib
 import yfinance as yf
 import ta
@@ -155,6 +155,25 @@ def load_setting(key, default=""):
         c.execute("SELECT value FROM settings WHERE key = ?", (key,))
         row = c.fetchone()
         return row[0] if row else default
+    finally:
+        conn.close()
+
+# دوال الإحصائيات
+def get_total_trades():
+    conn = get_db_connection()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM trades")
+        return int(c.fetchone()[0])
+    finally:
+        conn.close()
+
+def get_win_trades():
+    conn = get_db_connection()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM trades WHERE win = 1")
+        return int(c.fetchone()[0])
     finally:
         conn.close()
 
