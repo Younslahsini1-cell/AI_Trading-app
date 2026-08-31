@@ -1,9 +1,4 @@
 streamlit
-streamlit-autorefresh
+plotly
 pandas
 numpy
-scikit-learn
-joblib
-requests
-twelvedata
-yfinance
