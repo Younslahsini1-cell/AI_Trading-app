@@ -1,8 +1,8 @@
-from flask import Flask
+import streamlit as st
+import streamlit.components.v1 as components
 
-app = Flask(__name__)
-
-HTML_CONTENT = """
+# ========== كود HTML الكامل (نفس التصميم السابق) ==========
+HTML = """
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
@@ -982,9 +982,12 @@ HTML_CONTENT = """
 </html>
 """
 
-@app.route('/')
-def index():
-    return HTML_CONTENT
+# ========== إعداد صفحة Streamlit ==========
+st.set_page_config(
+    page_title="أوراكل تريد | تداول بالذكاء الاصطناعي",
+    page_icon="⚡",
+    layout="wide",
+)
 
-if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+# عرض HTML داخل iframe
+components.html(HTML, height=1200, scrolling=True)
