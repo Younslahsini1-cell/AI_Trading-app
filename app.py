@@ -1,7 +1,7 @@
 import streamlit as st
 import streamlit.components.v1 as components
 
-# ========== كود HTML الكامل (نفس التصميم السابق) ==========
+# ========== كود HTML مع تصميم مبسط ==========
 HTML = """
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
@@ -13,321 +13,246 @@ HTML = """
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <style>
         :root {
-            --bg-primary: #0a0e17;
-            --bg-secondary: #111827;
-            --glass-bg: rgba(17, 25, 40, 0.7);
-            --glass-border: rgba(255, 255, 255, 0.1);
-            --neon-blue: #00d4ff;
-            --neon-purple: #a855f7;
-            --neon-green: #10b981;
-            --neon-red: #ef4444;
-            --text-primary: #f3f4f6;
-            --text-secondary: #9ca3af;
-            --shadow-glow: 0 0 30px rgba(0, 212, 255, 0.3);
-            --radius: 20px;
-            --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            --bg-primary: #f5f7fa;
+            --bg-card: #ffffff;
+            --border-color: #e0e0e0;
+            --primary-blue: #2563eb;
+            --primary-blue-hover: #1d4ed8;
+            --green: #16a34a;
+            --red: #dc2626;
+            --text-primary: #1f2937;
+            --text-secondary: #6b7280;
+            --shadow-sm: 0 1px 3px rgba(0,0,0,0.08);
+            --shadow-md: 0 4px 12px rgba(0,0,0,0.1);
+            --radius: 12px;
+            --transition: all 0.2s ease;
         }
+
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
             font-family: 'Cairo', sans-serif;
         }
+
         body {
             background: var(--bg-primary);
             color: var(--text-primary);
             min-height: 100vh;
-            overflow-x: hidden;
-            position: relative;
-            background-image: 
-                radial-gradient(ellipse at 20% 20%, rgba(168, 85, 247, 0.15) 0%, transparent 60%),
-                radial-gradient(ellipse at 80% 80%, rgba(0, 212, 255, 0.1) 0%, transparent 60%);
+            line-height: 1.6;
         }
-        body::before {
-            content: '';
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background-image: 
-                linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
-            background-size: 50px 50px;
-            pointer-events: none;
-            z-index: 0;
-        }
-        .glow-orb {
-            position: fixed;
-            border-radius: 50%;
-            filter: blur(80px);
-            pointer-events: none;
-            z-index: 0;
-            animation: float 8s infinite ease-in-out;
-        }
-        .glow-orb.one {
-            width: 300px;
-            height: 300px;
-            background: rgba(168, 85, 247, 0.4);
-            top: -100px;
-            right: -100px;
-        }
-        .glow-orb.two {
-            width: 250px;
-            height: 250px;
-            background: rgba(0, 212, 255, 0.3);
-            bottom: -80px;
-            left: -80px;
-            animation-delay: -4s;
-        }
-        @keyframes float {
-            0%, 100% { transform: translate(0, 0) scale(1); }
-            33% { transform: translate(30px, -30px) scale(1.1); }
-            66% { transform: translate(-20px, 20px) scale(0.9); }
-        }
+
         .container {
-            max-width: 1400px;
+            max-width: 1200px;
             margin: 0 auto;
             padding: 0 20px;
-            position: relative;
-            z-index: 1;
         }
+
+        /* ===== شريط التنقل ===== */
         nav {
             display: flex;
             justify-content: space-between;
             align-items: center;
             padding: 20px 0;
-            position: relative;
-            z-index: 10;
+            border-bottom: 1px solid var(--border-color);
+            margin-bottom: 40px;
         }
+
         .logo {
             display: flex;
             align-items: center;
-            gap: 12px;
-            font-size: 1.8rem;
-            font-weight: 900;
-            background: linear-gradient(135deg, var(--neon-blue), var(--neon-purple));
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-            letter-spacing: -1px;
+            gap: 10px;
+            font-size: 1.6rem;
+            font-weight: 700;
+            color: var(--text-primary);
         }
+
         .logo-icon {
-            width: 40px;
-            height: 40px;
-            background: linear-gradient(135deg, var(--neon-blue), var(--neon-purple));
-            border-radius: 12px;
+            width: 36px;
+            height: 36px;
+            background: var(--primary-blue);
+            border-radius: 8px;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 1.5rem;
-            -webkit-text-fill-color: white;
+            font-size: 1.2rem;
             color: white;
-            box-shadow: var(--shadow-glow);
-            animation: pulse-glow 2s infinite;
         }
-        @keyframes pulse-glow {
-            0%, 100% { box-shadow: 0 0 20px rgba(0, 212, 255, 0.4); }
-            50% { box-shadow: 0 0 40px rgba(0, 212, 255, 0.8); }
-        }
+
         .nav-links {
             display: flex;
-            gap: 30px;
+            gap: 25px;
             align-items: center;
         }
+
         .nav-links a {
             color: var(--text-secondary);
             text-decoration: none;
             font-weight: 500;
             transition: var(--transition);
-            position: relative;
-            font-size: 1rem;
         }
+
         .nav-links a:hover {
-            color: var(--neon-blue);
+            color: var(--primary-blue);
         }
-        .nav-links a::after {
-            content: '';
-            position: absolute;
-            bottom: -5px;
-            right: 0;
-            width: 0;
-            height: 2px;
-            background: linear-gradient(90deg, var(--neon-blue), var(--neon-purple));
-            transition: var(--transition);
-        }
-        .nav-links a:hover::after {
-            width: 100%;
-        }
+
         .btn {
-            padding: 10px 24px;
-            border-radius: 30px;
+            padding: 8px 20px;
+            border-radius: 25px;
             border: none;
             cursor: pointer;
-            font-weight: 700;
-            font-size: 1rem;
+            font-weight: 600;
+            font-size: 0.95rem;
             transition: var(--transition);
             text-decoration: none;
             display: inline-block;
             font-family: 'Cairo', sans-serif;
         }
+
         .btn-primary {
-            background: linear-gradient(135deg, var(--neon-blue), var(--neon-purple));
+            background: var(--primary-blue);
             color: white;
-            box-shadow: 0 0 20px rgba(0, 212, 255, 0.4);
         }
         .btn-primary:hover {
-            box-shadow: 0 0 40px rgba(0, 212, 255, 0.8);
-            transform: translateY(-2px);
+            background: var(--primary-blue-hover);
+            transform: translateY(-1px);
         }
+
+        /* ===== Hero ===== */
         .hero {
             display: grid;
             grid-template-columns: 1fr 1fr;
             gap: 40px;
             align-items: center;
-            min-height: 80vh;
             padding: 40px 0;
+            margin-bottom: 40px;
         }
+
         .hero-content h1 {
-            font-size: 3.5rem;
-            font-weight: 900;
-            line-height: 1.2;
-            margin-bottom: 20px;
-            background: linear-gradient(135deg, #ffffff 0%, var(--neon-blue) 50%, var(--neon-purple) 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
+            font-size: 2.8rem;
+            font-weight: 700;
+            line-height: 1.3;
+            margin-bottom: 15px;
+            color: var(--text-primary);
         }
+
         .hero-content p {
-            font-size: 1.2rem;
+            font-size: 1.1rem;
             color: var(--text-secondary);
-            margin-bottom: 30px;
-            line-height: 1.8;
+            margin-bottom: 25px;
         }
+
         .hero-buttons {
             display: flex;
-            gap: 20px;
+            gap: 15px;
             flex-wrap: wrap;
         }
+
         .btn-secondary {
             background: transparent;
-            border: 2px solid var(--neon-blue);
-            color: var(--neon-blue);
+            border: 2px solid var(--primary-blue);
+            color: var(--primary-blue);
         }
         .btn-secondary:hover {
-            background: rgba(0, 212, 255, 0.1);
-            box-shadow: var(--shadow-glow);
-            transform: translateY(-2px);
+            background: rgba(37, 99, 235, 0.05);
+            transform: translateY(-1px);
         }
+
         .hero-visual {
-            position: relative;
             display: flex;
             justify-content: center;
             align-items: center;
         }
+
         .hero-card {
-            background: var(--glass-bg);
-            border: 1px solid var(--glass-border);
-            backdrop-filter: blur(20px);
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
             border-radius: var(--radius);
-            padding: 30px;
+            padding: 25px;
             width: 100%;
-            max-width: 500px;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
-            animation: float-card 5s infinite ease-in-out;
+            max-width: 450px;
+            box-shadow: var(--shadow-md);
         }
-        @keyframes float-card {
-            0%, 100% { transform: translateY(0); }
-            50% { transform: translateY(-15px); }
-        }
+
         .hero-card .price-display {
-            font-size: 2.5rem;
-            font-weight: 900;
-            color: var(--neon-blue);
-            text-shadow: 0 0 20px rgba(0, 212, 255, 0.5);
+            font-size: 2.2rem;
+            font-weight: 700;
+            color: var(--primary-blue);
             margin: 10px 0;
         }
+
         .hero-card .change-indicator {
             display: flex;
             align-items: center;
-            gap: 8px;
-            color: var(--neon-green);
-            font-weight: 700;
+            gap: 6px;
+            color: var(--green);
+            font-weight: 600;
+            font-size: 0.95rem;
         }
+
+        /* ===== لوحة التحكم ===== */
         .dashboard {
-            margin-top: 80px;
+            margin: 60px 0;
         }
+
         .section-title {
-            font-size: 2.5rem;
-            font-weight: 900;
+            font-size: 2rem;
+            font-weight: 700;
             text-align: center;
-            margin-bottom: 50px;
-            background: linear-gradient(135deg, var(--neon-blue), var(--neon-purple));
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
+            margin-bottom: 30px;
+            color: var(--text-primary);
         }
+
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-            gap: 25px;
-            margin-bottom: 50px;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
         }
+
         .stat-card {
-            background: var(--glass-bg);
-            border: 1px solid var(--glass-border);
-            backdrop-filter: blur(20px);
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
             border-radius: var(--radius);
-            padding: 25px;
-            transition: var(--transition);
-            position: relative;
-            overflow: hidden;
-        }
-        .stat-card::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 3px;
-            background: linear-gradient(90deg, var(--neon-blue), var(--neon-purple));
-            opacity: 0;
+            padding: 20px;
+            box-shadow: var(--shadow-sm);
             transition: var(--transition);
         }
-        .stat-card:hover::before {
-            opacity: 1;
-        }
+
         .stat-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 10px 40px rgba(0, 212, 255, 0.2);
+            box-shadow: var(--shadow-md);
+            transform: translateY(-2px);
         }
+
         .stat-card .label {
             color: var(--text-secondary);
             font-size: 0.9rem;
-            margin-bottom: 10px;
+            margin-bottom: 8px;
         }
+
         .stat-card .value {
-            font-size: 2rem;
-            font-weight: 900;
+            font-size: 1.8rem;
+            font-weight: 700;
             color: var(--text-primary);
         }
+
         .stat-card .value.positive {
-            color: var(--neon-green);
-            text-shadow: 0 0 15px rgba(16, 185, 129, 0.5);
+            color: var(--green);
         }
+
         .stat-card .value.negative {
-            color: var(--neon-red);
-            text-shadow: 0 0 15px rgba(239, 68, 68, 0.5);
+            color: var(--red);
         }
+
+        /* ===== الرسم البياني ===== */
         .chart-container {
-            background: var(--glass-bg);
-            border: 1px solid var(--glass-border);
-            backdrop-filter: blur(20px);
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
             border-radius: var(--radius);
-            padding: 30px;
-            margin-bottom: 50px;
-            position: relative;
+            padding: 25px;
+            margin: 40px 0;
+            box-shadow: var(--shadow-sm);
         }
+
         .chart-header {
             display: flex;
             justify-content: space-between;
@@ -336,271 +261,254 @@ HTML = """
             flex-wrap: wrap;
             gap: 15px;
         }
+
         .chart-header h3 {
-            font-size: 1.5rem;
-            font-weight: 700;
+            font-size: 1.4rem;
+            font-weight: 600;
         }
+
         .timeframe-buttons {
             display: flex;
-            gap: 10px;
+            gap: 8px;
         }
+
         .timeframe-btn {
-            padding: 8px 16px;
-            border-radius: 20px;
-            border: 1px solid var(--glass-border);
-            background: transparent;
+            padding: 6px 14px;
+            border-radius: 15px;
+            border: 1px solid var(--border-color);
+            background: white;
             color: var(--text-secondary);
             cursor: pointer;
             transition: var(--transition);
-            font-weight: 600;
-            font-size: 0.9rem;
+            font-weight: 500;
+            font-size: 0.85rem;
         }
+
         .timeframe-btn.active {
-            background: linear-gradient(135deg, var(--neon-blue), var(--neon-purple));
+            background: var(--primary-blue);
             color: white;
-            border-color: transparent;
-            box-shadow: 0 0 15px rgba(0, 212, 255, 0.4);
+            border-color: var(--primary-blue);
         }
+
         .timeframe-btn:hover:not(.active) {
-            background: rgba(255, 255, 255, 0.05);
-            color: var(--text-primary);
+            background: #f0f0f0;
         }
+
         #priceChart {
             width: 100% !important;
-            height: 400px !important;
+            height: 380px !important;
         }
+
+        /* ===== محاكي التداول ===== */
         .trading-simulator {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 30px;
-            margin-bottom: 50px;
+            gap: 25px;
+            margin: 40px 0;
         }
+
         .trade-panel, .ai-panel {
-            background: var(--glass-bg);
-            border: 1px solid var(--glass-border);
-            backdrop-filter: blur(20px);
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
             border-radius: var(--radius);
-            padding: 30px;
+            padding: 25px;
+            box-shadow: var(--shadow-sm);
         }
+
         .trade-panel h3, .ai-panel h3 {
-            font-size: 1.5rem;
-            font-weight: 700;
+            font-size: 1.3rem;
+            font-weight: 600;
             margin-bottom: 20px;
-            display: flex;
-            align-items: center;
-            gap: 10px;
         }
+
         .trade-form {
             display: flex;
             flex-direction: column;
             gap: 15px;
         }
+
         .trade-input-group {
             display: flex;
             gap: 10px;
         }
+
         .trade-input {
             flex: 1;
-            padding: 12px 16px;
-            border-radius: 12px;
-            border: 1px solid var(--glass-border);
-            background: rgba(255, 255, 255, 0.05);
+            padding: 10px 14px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            background: #fafafa;
             color: var(--text-primary);
-            font-weight: 600;
-            font-size: 1rem;
+            font-weight: 500;
+            font-size: 0.95rem;
             transition: var(--transition);
             font-family: 'Cairo', sans-serif;
         }
+
         .trade-input:focus {
             outline: none;
-            border-color: var(--neon-blue);
-            box-shadow: 0 0 20px rgba(0, 212, 255, 0.2);
+            border-color: var(--primary-blue);
+            background: white;
         }
+
         .trade-actions {
             display: flex;
             gap: 10px;
         }
+
         .btn-buy {
-            background: linear-gradient(135deg, #10b981, #059669);
+            background: var(--green);
             color: white;
             flex: 1;
         }
         .btn-buy:hover {
-            box-shadow: 0 0 30px rgba(16, 185, 129, 0.5);
-            transform: translateY(-2px);
+            background: #15803d;
+            transform: translateY(-1px);
         }
+
         .btn-sell {
-            background: linear-gradient(135deg, #ef4444, #dc2626);
+            background: var(--red);
             color: white;
             flex: 1;
         }
         .btn-sell:hover {
-            box-shadow: 0 0 30px rgba(239, 68, 68, 0.5);
-            transform: translateY(-2px);
+            background: #b91c1c;
+            transform: translateY(-1px);
         }
+
         .trade-history {
             margin-top: 20px;
             max-height: 200px;
             overflow-y: auto;
-            padding-right: 10px;
+            padding-right: 5px;
         }
+
         .trade-history::-webkit-scrollbar {
             width: 5px;
         }
         .trade-history::-webkit-scrollbar-track {
-            background: rgba(255, 255, 255, 0.05);
+            background: #f1f1f1;
             border-radius: 10px;
         }
         .trade-history::-webkit-scrollbar-thumb {
-            background: var(--neon-blue);
+            background: #ccc;
             border-radius: 10px;
         }
+
         .trade-item {
             display: flex;
             justify-content: space-between;
             padding: 10px 0;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            border-bottom: 1px solid #f0f0f0;
             font-size: 0.9rem;
         }
-        .trade-item.buy {
-            color: var(--neon-green);
-        }
-        .trade-item.sell {
-            color: var(--neon-red);
-        }
+        .trade-item.buy { color: var(--green); }
+        .trade-item.sell { color: var(--red); }
+
+        /* ===== توصيات الذكاء الاصطناعي ===== */
         .ai-recommendation {
-            background: rgba(0, 212, 255, 0.05);
-            border-radius: 12px;
-            padding: 20px;
+            background: #f8fafc;
+            border-radius: 8px;
+            padding: 15px;
             margin-bottom: 20px;
-            border: 1px solid rgba(0, 212, 255, 0.2);
+            border: 1px solid #e2e8f0;
         }
+
         .ai-badge {
             display: inline-block;
-            padding: 4px 12px;
-            border-radius: 20px;
-            font-size: 0.8rem;
-            font-weight: 700;
-            background: linear-gradient(135deg, var(--neon-blue), var(--neon-purple));
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            background: var(--primary-blue);
             color: white;
             margin-bottom: 10px;
         }
+
         .confidence-meter {
             display: flex;
             align-items: center;
             gap: 10px;
-            margin-top: 15px;
+            margin-top: 12px;
         }
+
         .confidence-bar {
             flex: 1;
             height: 6px;
-            background: rgba(255, 255, 255, 0.1);
+            background: #e5e7eb;
             border-radius: 10px;
             overflow: hidden;
         }
+
         .confidence-fill {
             height: 100%;
-            background: linear-gradient(90deg, var(--neon-blue), var(--neon-purple));
+            background: var(--primary-blue);
             border-radius: 10px;
-            transition: width 1s ease;
+            transition: width 0.5s ease;
         }
+
         .market-analysis {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-            gap: 15px;
+            grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+            gap: 12px;
             margin-top: 20px;
         }
+
         .analysis-item {
-            background: rgba(255, 255, 255, 0.03);
-            border-radius: 10px;
-            padding: 15px;
+            background: #f9fafb;
+            border-radius: 8px;
+            padding: 12px;
             text-align: center;
-            transition: var(--transition);
         }
-        .analysis-item:hover {
-            background: rgba(255, 255, 255, 0.08);
-        }
+
         .analysis-item .indicator-name {
             color: var(--text-secondary);
             font-size: 0.8rem;
-            margin-bottom: 5px;
+            margin-bottom: 4px;
         }
+
         .analysis-item .indicator-value {
-            font-size: 1.2rem;
-            font-weight: 700;
+            font-size: 1.1rem;
+            font-weight: 600;
         }
-        .analysis-item .indicator-value.up {
-            color: var(--neon-green);
-        }
-        .analysis-item .indicator-value.down {
-            color: var(--neon-red);
-        }
-        .analysis-item .indicator-value.neutral {
-            color: var(--text-secondary);
-        }
+        .analysis-item .indicator-value.up { color: var(--green); }
+        .analysis-item .indicator-value.down { color: var(--red); }
+        .analysis-item .indicator-value.neutral { color: var(--text-secondary); }
+
+        /* ===== تذييل ===== */
         footer {
             text-align: center;
-            padding: 40px 0;
+            padding: 30px 0;
             color: var(--text-secondary);
-            border-top: 1px solid rgba(255, 255, 255, 0.05);
-            margin-top: 80px;
+            border-top: 1px solid var(--border-color);
+            margin-top: 60px;
+            font-size: 0.9rem;
         }
         footer a {
-            color: var(--neon-blue);
+            color: var(--primary-blue);
             text-decoration: none;
         }
+
+        /* ===== استجابة ===== */
         @media (max-width: 768px) {
             .hero {
                 grid-template-columns: 1fr;
                 text-align: center;
-                min-height: auto;
-                padding: 40px 0;
             }
-            .hero-content h1 {
-                font-size: 2.5rem;
-            }
-            .hero-buttons {
-                justify-content: center;
-            }
-            .trading-simulator {
-                grid-template-columns: 1fr;
-            }
-            .nav-links {
-                display: none;
-            }
-            .chart-header {
-                flex-direction: column;
-                align-items: flex-start;
-            }
-            .timeframe-buttons {
-                width: 100%;
-                justify-content: space-between;
-            }
+            .hero-content h1 { font-size: 2.2rem; }
+            .hero-buttons { justify-content: center; }
+            .trading-simulator { grid-template-columns: 1fr; }
+            .nav-links { display: none; }
+            .chart-header { flex-direction: column; align-items: flex-start; }
+            .timeframe-buttons { width: 100%; justify-content: space-between; }
+            .stats-grid { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
         }
-        @keyframes fadeInUp {
-            from {
-                opacity: 0;
-                transform: translateY(30px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-        .fade-in-up {
-            animation: fadeInUp 0.8s ease forwards;
-        }
-        .delay-1 { animation-delay: 0.2s; }
-        .delay-2 { animation-delay: 0.4s; }
-        .delay-3 { animation-delay: 0.6s; }
     </style>
 </head>
 <body>
-    <div class="glow-orb one"></div>
-    <div class="glow-orb two"></div>
-
     <div class="container">
-        <nav class="fade-in-up">
+        <!-- شريط التنقل -->
+        <nav>
             <div class="logo">
                 <div class="logo-icon">⚡</div>
                 أوراكل تريد
@@ -614,7 +522,8 @@ HTML = """
             <a href="#" class="btn btn-primary">ابدأ الآن</a>
         </nav>
 
-        <section class="hero fade-in-up delay-1">
+        <!-- Hero -->
+        <section class="hero">
             <div class="hero-content">
                 <h1>تداول بذكاء<br>مع قوة الذكاء الاصطناعي</h1>
                 <p>منصة تداول متطورة تستخدم أحدث خوارزميات التعلم الآلي لتحليل الأسواق وتقديم توصيات دقيقة في الوقت الفعلي.</p>
@@ -639,7 +548,8 @@ HTML = """
             </div>
         </section>
 
-        <section class="dashboard fade-in-up delay-2" id="dashboard">
+        <!-- لوحة التحكم -->
+        <section class="dashboard" id="dashboard">
             <h2 class="section-title">لوحة التحكم الرئيسية</h2>
             <div class="stats-grid">
                 <div class="stat-card">
@@ -669,7 +579,8 @@ HTML = """
             </div>
         </section>
 
-        <section class="chart-container fade-in-up" id="chart">
+        <!-- الرسم البياني -->
+        <section class="chart-container" id="chart">
             <div class="chart-header">
                 <h3>📊 الرسم البياني المباشر</h3>
                 <div class="timeframe-buttons">
@@ -682,7 +593,8 @@ HTML = """
             <canvas id="priceChart"></canvas>
         </section>
 
-        <section class="trading-simulator fade-in-up delay-3" id="trading">
+        <!-- التداول والذكاء الاصطناعي -->
+        <section class="trading-simulator" id="trading">
             <div class="trade-panel" id="ai">
                 <h3>💰 محاكي التداول</h3>
                 <div class="trade-form">
@@ -696,7 +608,7 @@ HTML = """
                     </div>
                 </div>
                 <div style="margin-top: 20px; color: var(--text-secondary); font-size: 0.9rem;">
-                    السعر الحالي: <span id="currentTradePrice" style="color: var(--neon-blue); font-weight: 700;">$65,432.10</span>
+                    السعر الحالي: <span id="currentTradePrice" style="color: var(--primary-blue); font-weight: 700;">$65,432.10</span>
                 </div>
                 <div class="trade-history" id="tradeHistory">
                     <div style="text-align: center; color: var(--text-secondary); padding: 20px;">لا توجد صفقات بعد</div>
@@ -707,7 +619,7 @@ HTML = """
                 <h3>🧠 توصيات الذكاء الاصطناعي</h3>
                 <div class="ai-recommendation" id="aiRecommendation">
                     <span class="ai-badge">تحليل فوري</span>
-                    <div style="font-weight: 700; font-size: 1.2rem; margin-bottom: 10px;" id="recommendationText">
+                    <div style="font-weight: 700; font-size: 1.1rem; margin-bottom: 8px;" id="recommendationText">
                         اتجاه صاعد قوي - فرصة شراء
                     </div>
                     <div style="color: var(--text-secondary); font-size: 0.9rem;" id="recommendationDetail">
@@ -742,7 +654,7 @@ HTML = """
             </div>
         </section>
 
-        <footer class="fade-in-up">
+        <footer>
             <p>© 2024 أوراكل تريد - جميع الحقوق محفوظة | مبني بتقنية <a href="#">الذكاء الاصطناعي</a></p>
         </footer>
     </div>
@@ -774,11 +686,11 @@ HTML = """
                 datasets: [{
                     label: 'السعر (USDT)',
                     data: chartData.prices,
-                    borderColor: '#00d4ff',
-                    backgroundColor: 'rgba(0, 212, 255, 0.1)',
-                    borderWidth: 3,
+                    borderColor: '#2563eb',
+                    backgroundColor: 'rgba(37, 99, 235, 0.05)',
+                    borderWidth: 2,
                     pointRadius: 0,
-                    pointHoverRadius: 8,
+                    pointHoverRadius: 6,
                     tension: 0.4,
                     fill: true
                 }]
@@ -790,30 +702,30 @@ HTML = """
                     legend: {
                         display: true,
                         labels: {
-                            color: '#f3f4f6',
-                            font: { family: 'Cairo', weight: '700' }
+                            color: '#1f2937',
+                            font: { family: 'Cairo', weight: '600' }
                         }
                     },
                     tooltip: {
                         mode: 'index',
                         intersect: false,
-                        backgroundColor: 'rgba(17, 24, 39, 0.9)',
-                        titleColor: '#f3f4f6',
-                        bodyColor: '#9ca3af',
-                        borderColor: 'rgba(255, 255, 255, 0.1)',
+                        backgroundColor: 'rgba(255,255,255,0.95)',
+                        titleColor: '#1f2937',
+                        bodyColor: '#6b7280',
+                        borderColor: '#e0e0e0',
                         borderWidth: 1
                     }
                 },
                 scales: {
                     x: {
                         display: true,
-                        grid: { color: 'rgba(255, 255, 255, 0.05)' },
-                        ticks: { color: '#9ca3af', font: { family: 'Cairo' } }
+                        grid: { color: '#f0f0f0' },
+                        ticks: { color: '#6b7280', font: { family: 'Cairo' } }
                     },
                     y: {
                         display: true,
-                        grid: { color: 'rgba(255, 255, 255, 0.05)' },
-                        ticks: { color: '#9ca3af', font: { family: 'Cairo' } }
+                        grid: { color: '#f0f0f0' },
+                        ticks: { color: '#6b7280', font: { family: 'Cairo' } }
                     }
                 },
                 interaction: {
@@ -831,7 +743,7 @@ HTML = """
                 labels: chartData.labels.slice(-20),
                 datasets: [{
                     data: chartData.prices.slice(-20),
-                    borderColor: '#a855f7',
+                    borderColor: '#2563eb',
                     borderWidth: 2,
                     pointRadius: 0,
                     tension: 0.4,
@@ -877,7 +789,7 @@ HTML = """
             const changePercent = ((newPrice - prevPrice) / prevPrice) * 100;
             const changeElement = document.getElementById('heroChange');
             changeElement.textContent = (changePercent >= 0 ? '+' : '') + changePercent.toFixed(2) + '%';
-            changeElement.style.color = changePercent >= 0 ? '#10b981' : '#ef4444';
+            changeElement.style.color = changePercent >= 0 ? '#16a34a' : '#dc2626';
         }
 
         setInterval(updateData, 3000);
@@ -989,5 +901,4 @@ st.set_page_config(
     layout="wide",
 )
 
-# عرض HTML داخل iframe
 components.html(HTML, height=1200, scrolling=True)
