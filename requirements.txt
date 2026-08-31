@@ -1,4 +1,7 @@
 streamlit
-plotly
 pandas
 numpy
+requests
+joblib
+scikit-learn
+streamlit-autorefresh
