@@ -1,774 +1,990 @@
-from datetime import datetime, timezone, timedelta
-import json
-import os
-import sqlite3
-import threading
-import time
-import traceback
+from flask import Flask
 
-import joblib
-import numpy as np
-import pandas as pd
-import requests
-import streamlit as st
+app = Flask(__name__)
 
-from streamlit_autorefresh import st_autorefresh
-
-from sklearn.neural_network import MLPClassifier
-from sklearn.preprocessing import StandardScaler
-
-# ============================================================
-# 1. إعدادات الصفحة والتنسيق العالمي (World-Class Futuristic UI)
-# ============================================================
-
-st.set_page_config(
-    page_title="XAU/USD Institutional Deep Engine Pro",
-    layout="wide",
-    page_icon="⚡",
-    initial_sidebar_state="expanded"
-)
-
-def render_html(html_content):
-    try:
-        if hasattr(st, "html"):
-            st.html(html_content)
-        else:
-            st.markdown(html_content, unsafe_allow_html=True)
-    except Exception:
-        st.markdown(html_content, unsafe_allow_html=True)
-
-render_html(
-    """
-<style>
-    @import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@400;600;800;900&display=swap');
-
-    html, body, [class*="css"] {
-        font-family: 'Tajawal', sans-serif !important;
-    }
-
-    /* الخلفية العامة الهادئة والاحترافية */
-    .stApp {
-        background: radial-gradient(circle at 50% -20%, #151d30, #090c15 80%);
-        color: #e2e8f0;
-    }
-
-    /* الشريط الجانبي */
-    section[data-testid="stSidebar"] {
-        background-color: #0b101d !important;
-        border-right: 1px solid #1e293b;
-    }
-
-    /* البطاقات الزجاجية Glassmorphism */
-    .glass-card {
-        background: rgba(15, 23, 42, 0.75);
-        backdrop-filter: blur(16px);
-        -webkit-backdrop-filter: blur(16px);
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        border-radius: 20px;
-        padding: 24px;
-        box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
-        margin-bottom: 20px;
-        transition: all 0.3s ease;
-    }
-    
-    .glass-card:hover {
-        border-color: rgba(56, 189, 248, 0.3);
-        transform: translateY(-2px);
-    }
-
-    /* كروت المؤشرات الفردية */
-    .metric-card-pro {
-        background: rgba(30, 41, 59, 0.5);
-        border: 1px solid rgba(255, 255, 255, 0.05);
-        border-radius: 14px;
-        padding: 16px;
-        text-align: center;
-    }
-    .metric-label {
-        font-size: 0.85rem;
-        color: #94a3b8;
-        font-weight: 600;
-        margin-bottom: 4px;
-    }
-    .metric-val {
-        font-size: 1.5rem;
-        font-weight: 800;
-        color: #f8fafc;
-    }
-
-    /* التنبيه الضوئي المستمر (Live Status) */
-    .live-badge {
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        background: rgba(34, 197, 94, 0.1);
-        border: 1px solid rgba(34, 197, 94, 0.3);
-        color: #4ade80;
-        padding: 6px 14px;
-        border-radius: 30px;
-        font-size: 0.82rem;
-        font-weight: 700;
-    }
-    .pulse-dot {
-        width: 8px;
-        height: 8px;
-        background-color: #22c55e;
-        border-radius: 50%;
-        box-shadow: 0 0 10px #22c55e;
-        animation: pulse 1.5s infinite;
-    }
-    @keyframes pulse {
-        0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7); }
-        70% { transform: scale(1); box-shadow: 0 0 0 8px rgba(34, 197, 94, 0); }
-        100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(34, 197, 94, 0); }
-    }
-
-    /* علامات التوصية (BUY / SELL / NEUTRAL) */
-    .signal-header {
-        font-size: 2.8rem;
-        font-weight: 900;
-        letter-spacing: 2px;
-        text-shadow: 0 0 20px rgba(255, 255, 255, 0.1);
-    }
-    .signal-buy {
-        color: #10b981;
-        text-shadow: 0 0 30px rgba(16, 185, 129, 0.4);
-    }
-    .signal-sell {
-        color: #f43f5e;
-        text-shadow: 0 0 30px rgba(244, 63, 94, 0.4);
-    }
-    .signal-neutral {
-        color: #64748b;
-    }
-
-    /* ترويسة الصفحة */
-    .main-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 25px;
-        padding-bottom: 15px;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-    }
-</style>
-"""
-)
-
-# ============================================================
-# 2. الثوابت وقواعد شبكة الذكاء الاصطناعي والميزات
-# ============================================================
-
-DB_FILE = "xau_deep_ai.db"
-MODEL_FILE = "xau_deep_mlp_v4_advanced.pkl"
-SCALER_FILE = "xau_deep_scaler_v4_advanced.pkl"
-TRAINING_LOCK_FILE = "training_v4.lock"
-
-TRAINING_OUTPUT_SIZE = 5000
-
-# شريط الميزات الفائق (Enhanced Feature Store)
-FEATURES = [
-    "atr", "ema_50", "ema_200", "rsi", "macd", "macd_signal", "macd_hist",
-    "bb_width", "bb_pct", "stoch_k", "stoch_d", "dist_to_sup", "dist_to_res",
-    "pivot_pp", "price_vs_ema50", "price_vs_ema200", "rsi_momentum"
-]
-
-# ============================================================
-# 3. إدارة قاعدة البيانات SQLite
-# ============================================================
-
-def get_db_connection():
-    return sqlite3.connect(DB_FILE, timeout=20, check_same_thread=False)
-
-def init_db():
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT
-        )
-    """)
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS trades (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            date TEXT,
-            symbol TEXT,
-            direction TEXT,
-            entry REAL,
-            sl REAL,
-            tp REAL,
-            win INTEGER,
-            note TEXT,
-            groq_conf REAL,
-            groq_note TEXT,
-            ai_conf_before_groq REAL,
-            ai_conf_after_groq REAL
-        )
-    """)
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS active_trade (
-            id INTEGER PRIMARY KEY,
-            symbol TEXT,
-            direction TEXT,
-            entry REAL,
-            sl REAL,
-            tp REAL,
-            time TEXT,
-            features TEXT,
-            ai_conf REAL,
-            groq_conf REAL,
-            groq_note TEXT,
-            signal_bar_time TEXT
-        )
-    """)
-    conn.commit()
-    conn.close()
-
-init_db()
-
-def save_setting(key, val):
-    conn = get_db_connection()
-    try:
-        c = conn.cursor()
-        c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(val)))
-        conn.commit()
-    finally:
-        conn.close()
-
-def load_setting(key, default=""):
-    conn = get_db_connection()
-    try:
-        c = conn.cursor()
-        c.execute("SELECT value FROM settings WHERE key = ?", (key,))
-        row = c.fetchone()
-        return row[0] if row else default
-    finally:
-        conn.close()
-
-def get_secret_value(key, default=""):
-    try:
-        val = st.secrets.get(key, default)
-        return str(val) if val is not None else default
-    except Exception:
-        return default
-
-def send_ntfy_notification(channel, title, message):
-    if not channel:
-        return
-    try:
-        requests.post(
-            f"https://ntfy.sh/{channel}",
-            data=message.encode("utf-8"),
-            headers={"Title": title.encode("utf-8")}
-        )
-    except Exception:
-        pass
-
-# ============================================================
-# 4. الشريط الجانبي والإعدادات
-# ============================================================
-
-st.sidebar.markdown("### ⚡ إعدادات المحرك المؤسسي")
-
-twelve_secret = get_secret_value("TWELVE_DATA_API_KEY", "")
-saved_twelve_key = load_setting("twelve_api_key", "")
-twelve_key = st.sidebar.text_input(
-    "مفتاح Twelve Data API",
-    type="password",
-    value=twelve_secret or saved_twelve_key or st.session_state.get("twelve_key", ""),
-)
-if twelve_key:
-    save_setting("twelve_api_key", twelve_key)
-st.session_state["twelve_key"] = twelve_key
-
-ntfy_channel = st.sidebar.text_input(
-    "قناة Ntfy للتنبيهات الفورية",
-    value=load_setting("ntfy", "xau_deep_institutional_channel"),
-)
-save_setting("ntfy", ntfy_channel)
-
-st.sidebar.markdown("---")
-st.sidebar.markdown("### 🤖 إعدادات الشبكة العصبية وGroq")
-
-# تخفيف الشروط للحصول على صفقات أكثر مع الحفاظ على القوة
-min_conf = st.sidebar.slider(
-    "أدنى نسبة ثقة مطلوبة من الذكاء الاصطناعي (%)",
-    min_value=50,
-    max_value=90,
-    value=int(load_setting("min_conf", "58")),
-    step=1,
-    help="تم ترخيف الحد الأدنى لزيادة عدد الفرص الصفقة الجيدة بمرونة."
-)
-save_setting("min_conf", str(min_conf))
-
-use_groq = st.sidebar.checkbox(
-    "تفعيل التحليل الثاني بواسطة Groq AI",
-    value=(load_setting("use_groq", "1") == "1"),
-)
-save_setting("use_groq", "1" if use_groq else "0")
-
-groq_secret = get_secret_value("GROQ_API_KEY", "")
-saved_groq_key = load_setting("groq_api_key", "")
-groq_key = st.sidebar.text_input(
-    "مفتاح Groq API",
-    type="password",
-    value=groq_secret or saved_groq_key or st.session_state.get("groq_key", ""),
-)
-if groq_key:
-    save_setting("groq_api_key", groq_key)
-st.session_state["groq_key"] = groq_key
-
-groq_model = st.sidebar.text_input(
-    "نموذج Groq",
-    value=load_setting("groq_model", "llama-3.3-70b-versatile"),
-)
-save_setting("groq_model", groq_model)
-
-min_groq_conf = st.sidebar.slider("أدنى موافقة مطلوبة من Groq (%)", 40, 90, 55, 1)
-
-st.sidebar.markdown("---")
-st.sidebar.markdown("### 🎯 إدارة المخاطر والتنفيذ")
-atr_mult = st.sidebar.slider("معامل ATR لوقف الخسارة", 1.0, 3.0, 1.5, 0.1)
-risk_reward = st.sidebar.slider("نسبة العائد إلى المخاطرة (R:R)", 1.2, 4.0, 2.0, 0.1)
-
-# ============================================================
-# 5. جلب بيانات السوق وحساب المؤشرات المعقدة
-# ============================================================
-
-def fetch_twelve_series(api_key, symbol="XAU/USD", interval="1h", outputsize=250):
-    if not api_key:
-        return pd.DataFrame()
-    try:
-        params = {
-            "symbol": symbol,
-            "interval": interval,
-            "outputsize": min(int(outputsize), 5000),
-            "timezone": "UTC",
-            "apikey": api_key,
+HTML_CONTENT = """
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>أوراكل تريد | تداول بالذكاء الاصطناعي</title>
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;600;700;900&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        :root {
+            --bg-primary: #0a0e17;
+            --bg-secondary: #111827;
+            --glass-bg: rgba(17, 25, 40, 0.7);
+            --glass-border: rgba(255, 255, 255, 0.1);
+            --neon-blue: #00d4ff;
+            --neon-purple: #a855f7;
+            --neon-green: #10b981;
+            --neon-red: #ef4444;
+            --text-primary: #f3f4f6;
+            --text-secondary: #9ca3af;
+            --shadow-glow: 0 0 30px rgba(0, 212, 255, 0.3);
+            --radius: 20px;
+            --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         }
-        resp = requests.get("https://api.twelvedata.com/time_series", params=params, timeout=12)
-        resp.raise_for_status()
-        res = resp.json()
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Cairo', sans-serif;
+        }
+        body {
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            overflow-x: hidden;
+            position: relative;
+            background-image: 
+                radial-gradient(ellipse at 20% 20%, rgba(168, 85, 247, 0.15) 0%, transparent 60%),
+                radial-gradient(ellipse at 80% 80%, rgba(0, 212, 255, 0.1) 0%, transparent 60%);
+        }
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-image: 
+                linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+            background-size: 50px 50px;
+            pointer-events: none;
+            z-index: 0;
+        }
+        .glow-orb {
+            position: fixed;
+            border-radius: 50%;
+            filter: blur(80px);
+            pointer-events: none;
+            z-index: 0;
+            animation: float 8s infinite ease-in-out;
+        }
+        .glow-orb.one {
+            width: 300px;
+            height: 300px;
+            background: rgba(168, 85, 247, 0.4);
+            top: -100px;
+            right: -100px;
+        }
+        .glow-orb.two {
+            width: 250px;
+            height: 250px;
+            background: rgba(0, 212, 255, 0.3);
+            bottom: -80px;
+            left: -80px;
+            animation-delay: -4s;
+        }
+        @keyframes float {
+            0%, 100% { transform: translate(0, 0) scale(1); }
+            33% { transform: translate(30px, -30px) scale(1.1); }
+            66% { transform: translate(-20px, 20px) scale(0.9); }
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 0 20px;
+            position: relative;
+            z-index: 1;
+        }
+        nav {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 20px 0;
+            position: relative;
+            z-index: 10;
+        }
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 1.8rem;
+            font-weight: 900;
+            background: linear-gradient(135deg, var(--neon-blue), var(--neon-purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            letter-spacing: -1px;
+        }
+        .logo-icon {
+            width: 40px;
+            height: 40px;
+            background: linear-gradient(135deg, var(--neon-blue), var(--neon-purple));
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            -webkit-text-fill-color: white;
+            color: white;
+            box-shadow: var(--shadow-glow);
+            animation: pulse-glow 2s infinite;
+        }
+        @keyframes pulse-glow {
+            0%, 100% { box-shadow: 0 0 20px rgba(0, 212, 255, 0.4); }
+            50% { box-shadow: 0 0 40px rgba(0, 212, 255, 0.8); }
+        }
+        .nav-links {
+            display: flex;
+            gap: 30px;
+            align-items: center;
+        }
+        .nav-links a {
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-weight: 500;
+            transition: var(--transition);
+            position: relative;
+            font-size: 1rem;
+        }
+        .nav-links a:hover {
+            color: var(--neon-blue);
+        }
+        .nav-links a::after {
+            content: '';
+            position: absolute;
+            bottom: -5px;
+            right: 0;
+            width: 0;
+            height: 2px;
+            background: linear-gradient(90deg, var(--neon-blue), var(--neon-purple));
+            transition: var(--transition);
+        }
+        .nav-links a:hover::after {
+            width: 100%;
+        }
+        .btn {
+            padding: 10px 24px;
+            border-radius: 30px;
+            border: none;
+            cursor: pointer;
+            font-weight: 700;
+            font-size: 1rem;
+            transition: var(--transition);
+            text-decoration: none;
+            display: inline-block;
+            font-family: 'Cairo', sans-serif;
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, var(--neon-blue), var(--neon-purple));
+            color: white;
+            box-shadow: 0 0 20px rgba(0, 212, 255, 0.4);
+        }
+        .btn-primary:hover {
+            box-shadow: 0 0 40px rgba(0, 212, 255, 0.8);
+            transform: translateY(-2px);
+        }
+        .hero {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 40px;
+            align-items: center;
+            min-height: 80vh;
+            padding: 40px 0;
+        }
+        .hero-content h1 {
+            font-size: 3.5rem;
+            font-weight: 900;
+            line-height: 1.2;
+            margin-bottom: 20px;
+            background: linear-gradient(135deg, #ffffff 0%, var(--neon-blue) 50%, var(--neon-purple) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .hero-content p {
+            font-size: 1.2rem;
+            color: var(--text-secondary);
+            margin-bottom: 30px;
+            line-height: 1.8;
+        }
+        .hero-buttons {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+        .btn-secondary {
+            background: transparent;
+            border: 2px solid var(--neon-blue);
+            color: var(--neon-blue);
+        }
+        .btn-secondary:hover {
+            background: rgba(0, 212, 255, 0.1);
+            box-shadow: var(--shadow-glow);
+            transform: translateY(-2px);
+        }
+        .hero-visual {
+            position: relative;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        .hero-card {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            backdrop-filter: blur(20px);
+            border-radius: var(--radius);
+            padding: 30px;
+            width: 100%;
+            max-width: 500px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+            animation: float-card 5s infinite ease-in-out;
+        }
+        @keyframes float-card {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-15px); }
+        }
+        .hero-card .price-display {
+            font-size: 2.5rem;
+            font-weight: 900;
+            color: var(--neon-blue);
+            text-shadow: 0 0 20px rgba(0, 212, 255, 0.5);
+            margin: 10px 0;
+        }
+        .hero-card .change-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: var(--neon-green);
+            font-weight: 700;
+        }
+        .dashboard {
+            margin-top: 80px;
+        }
+        .section-title {
+            font-size: 2.5rem;
+            font-weight: 900;
+            text-align: center;
+            margin-bottom: 50px;
+            background: linear-gradient(135deg, var(--neon-blue), var(--neon-purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 25px;
+            margin-bottom: 50px;
+        }
+        .stat-card {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            backdrop-filter: blur(20px);
+            border-radius: var(--radius);
+            padding: 25px;
+            transition: var(--transition);
+            position: relative;
+            overflow: hidden;
+        }
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 3px;
+            background: linear-gradient(90deg, var(--neon-blue), var(--neon-purple));
+            opacity: 0;
+            transition: var(--transition);
+        }
+        .stat-card:hover::before {
+            opacity: 1;
+        }
+        .stat-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 40px rgba(0, 212, 255, 0.2);
+        }
+        .stat-card .label {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            margin-bottom: 10px;
+        }
+        .stat-card .value {
+            font-size: 2rem;
+            font-weight: 900;
+            color: var(--text-primary);
+        }
+        .stat-card .value.positive {
+            color: var(--neon-green);
+            text-shadow: 0 0 15px rgba(16, 185, 129, 0.5);
+        }
+        .stat-card .value.negative {
+            color: var(--neon-red);
+            text-shadow: 0 0 15px rgba(239, 68, 68, 0.5);
+        }
+        .chart-container {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            backdrop-filter: blur(20px);
+            border-radius: var(--radius);
+            padding: 30px;
+            margin-bottom: 50px;
+            position: relative;
+        }
+        .chart-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+        .chart-header h3 {
+            font-size: 1.5rem;
+            font-weight: 700;
+        }
+        .timeframe-buttons {
+            display: flex;
+            gap: 10px;
+        }
+        .timeframe-btn {
+            padding: 8px 16px;
+            border-radius: 20px;
+            border: 1px solid var(--glass-border);
+            background: transparent;
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: var(--transition);
+            font-weight: 600;
+            font-size: 0.9rem;
+        }
+        .timeframe-btn.active {
+            background: linear-gradient(135deg, var(--neon-blue), var(--neon-purple));
+            color: white;
+            border-color: transparent;
+            box-shadow: 0 0 15px rgba(0, 212, 255, 0.4);
+        }
+        .timeframe-btn:hover:not(.active) {
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-primary);
+        }
+        #priceChart {
+            width: 100% !important;
+            height: 400px !important;
+        }
+        .trading-simulator {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin-bottom: 50px;
+        }
+        .trade-panel, .ai-panel {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            backdrop-filter: blur(20px);
+            border-radius: var(--radius);
+            padding: 30px;
+        }
+        .trade-panel h3, .ai-panel h3 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .trade-form {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        .trade-input-group {
+            display: flex;
+            gap: 10px;
+        }
+        .trade-input {
+            flex: 1;
+            padding: 12px 16px;
+            border-radius: 12px;
+            border: 1px solid var(--glass-border);
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-primary);
+            font-weight: 600;
+            font-size: 1rem;
+            transition: var(--transition);
+            font-family: 'Cairo', sans-serif;
+        }
+        .trade-input:focus {
+            outline: none;
+            border-color: var(--neon-blue);
+            box-shadow: 0 0 20px rgba(0, 212, 255, 0.2);
+        }
+        .trade-actions {
+            display: flex;
+            gap: 10px;
+        }
+        .btn-buy {
+            background: linear-gradient(135deg, #10b981, #059669);
+            color: white;
+            flex: 1;
+        }
+        .btn-buy:hover {
+            box-shadow: 0 0 30px rgba(16, 185, 129, 0.5);
+            transform: translateY(-2px);
+        }
+        .btn-sell {
+            background: linear-gradient(135deg, #ef4444, #dc2626);
+            color: white;
+            flex: 1;
+        }
+        .btn-sell:hover {
+            box-shadow: 0 0 30px rgba(239, 68, 68, 0.5);
+            transform: translateY(-2px);
+        }
+        .trade-history {
+            margin-top: 20px;
+            max-height: 200px;
+            overflow-y: auto;
+            padding-right: 10px;
+        }
+        .trade-history::-webkit-scrollbar {
+            width: 5px;
+        }
+        .trade-history::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 10px;
+        }
+        .trade-history::-webkit-scrollbar-thumb {
+            background: var(--neon-blue);
+            border-radius: 10px;
+        }
+        .trade-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            font-size: 0.9rem;
+        }
+        .trade-item.buy {
+            color: var(--neon-green);
+        }
+        .trade-item.sell {
+            color: var(--neon-red);
+        }
+        .ai-recommendation {
+            background: rgba(0, 212, 255, 0.05);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+            border: 1px solid rgba(0, 212, 255, 0.2);
+        }
+        .ai-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--neon-blue), var(--neon-purple));
+            color: white;
+            margin-bottom: 10px;
+        }
+        .confidence-meter {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 15px;
+        }
+        .confidence-bar {
+            flex: 1;
+            height: 6px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        .confidence-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--neon-blue), var(--neon-purple));
+            border-radius: 10px;
+            transition: width 1s ease;
+        }
+        .market-analysis {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+        .analysis-item {
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 10px;
+            padding: 15px;
+            text-align: center;
+            transition: var(--transition);
+        }
+        .analysis-item:hover {
+            background: rgba(255, 255, 255, 0.08);
+        }
+        .analysis-item .indicator-name {
+            color: var(--text-secondary);
+            font-size: 0.8rem;
+            margin-bottom: 5px;
+        }
+        .analysis-item .indicator-value {
+            font-size: 1.2rem;
+            font-weight: 700;
+        }
+        .analysis-item .indicator-value.up {
+            color: var(--neon-green);
+        }
+        .analysis-item .indicator-value.down {
+            color: var(--neon-red);
+        }
+        .analysis-item .indicator-value.neutral {
+            color: var(--text-secondary);
+        }
+        footer {
+            text-align: center;
+            padding: 40px 0;
+            color: var(--text-secondary);
+            border-top: 1px solid rgba(255, 255, 255, 0.05);
+            margin-top: 80px;
+        }
+        footer a {
+            color: var(--neon-blue);
+            text-decoration: none;
+        }
+        @media (max-width: 768px) {
+            .hero {
+                grid-template-columns: 1fr;
+                text-align: center;
+                min-height: auto;
+                padding: 40px 0;
+            }
+            .hero-content h1 {
+                font-size: 2.5rem;
+            }
+            .hero-buttons {
+                justify-content: center;
+            }
+            .trading-simulator {
+                grid-template-columns: 1fr;
+            }
+            .nav-links {
+                display: none;
+            }
+            .chart-header {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+            .timeframe-buttons {
+                width: 100%;
+                justify-content: space-between;
+            }
+        }
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        .fade-in-up {
+            animation: fadeInUp 0.8s ease forwards;
+        }
+        .delay-1 { animation-delay: 0.2s; }
+        .delay-2 { animation-delay: 0.4s; }
+        .delay-3 { animation-delay: 0.6s; }
+    </style>
+</head>
+<body>
+    <div class="glow-orb one"></div>
+    <div class="glow-orb two"></div>
 
-        if "values" not in res:
-            st.session_state["last_twelve_error"] = res.get("message", "خطأ في Twelve Data API")
-            return pd.DataFrame()
-
-        df = pd.DataFrame(res["values"])
-        df["datetime"] = pd.to_datetime(df["datetime"], errors="coerce", utc=True)
-        for c in ["open", "high", "low", "close"]:
-            df[c] = pd.to_numeric(df[c], errors="coerce")
-
-        df.dropna(subset=["datetime", "open", "high", "low", "close"], inplace=True)
-        df.sort_values("datetime", inplace=True)
-        df.reset_index(drop=True, inplace=True)
-        st.session_state["last_twelve_error"] = None
-        return df
-    except Exception as e:
-        st.session_state["last_twelve_error"] = str(e)
-        return pd.DataFrame()
-
-def keep_closed_candles(df, interval_hours=1):
-    if df is None or df.empty:
-        return pd.DataFrame()
-    now_utc = datetime.now(timezone.utc)
-    delta = timedelta(hours=interval_hours)
-    mask = (df["datetime"] + delta) <= pd.Timestamp(now_utc)
-    return df.loc[mask].reset_index(drop=True)
-
-def apply_deep_indicators(df):
-    if df is None or df.empty or len(df) < 210:
-        return pd.DataFrame()
-
-    df = df.copy()
-
-    # 1. Average True Range (ATR)
-    tr = pd.concat([
-        df["high"] - df["low"],
-        (df["high"] - df["close"].shift()).abs(),
-        (df["low"] - df["close"].shift()).abs()
-    ], axis=1).max(axis=1)
-    df["atr"] = tr.rolling(14).mean()
-
-    # 2. Exponential Moving Averages (EMA)
-    df["ema_50"] = df["close"].ewm(span=50, adjust=False).mean()
-    df["ema_200"] = df["close"].ewm(span=200, adjust=False).mean()
-
-    # 3. RSI & Momentum
-    delta = df["close"].diff()
-    gain = delta.where(delta > 0, 0.0).rolling(14).mean()
-    loss = (-delta.where(delta < 0, 0.0)).rolling(14).mean()
-    rs = gain / (loss + 1e-6)
-    df["rsi"] = 100 - (100 / (1 + rs))
-    df["rsi_momentum"] = df["rsi"].diff(3)
-
-    # 4. MACD Indicator
-    ema_12 = df["close"].ewm(span=12, adjust=False).mean()
-    ema_26 = df["close"].ewm(span=26, adjust=False).mean()
-    df["macd"] = ema_12 - ema_26
-    df["macd_signal"] = df["macd"].ewm(span=9, adjust=False).mean()
-    df["macd_hist"] = df["macd"] - df["macd_signal"]
-
-    # 5. Bollinger Bands
-    bb_middle = df["close"].rolling(20).mean()
-    bb_std = df["close"].rolling(20).std()
-    bb_upper = bb_middle + (bb_std * 2)
-    bb_lower = bb_middle - (bb_std * 2)
-    df["bb_width"] = (bb_upper - bb_lower) / (bb_middle + 1e-6)
-    df["bb_pct"] = (df["close"] - bb_lower) / ((bb_upper - bb_lower) + 1e-6)
-
-    # 6. Stochastic Oscillator
-    low_14 = df["low"].rolling(14).min()
-    high_14 = df["high"].rolling(14).max()
-    df["stoch_k"] = 100 * ((df["close"] - low_14) / ((high_14 - low_14) + 1e-6))
-    df["stoch_d"] = df["stoch_k"].rolling(3).mean()
-
-    # 7. Support & Resistance & Pivots
-    rolling_high = df["high"].rolling(20).max()
-    rolling_low = df["low"].rolling(20).min()
-    df["dist_to_res"] = (rolling_high - df["close"]) / df["close"]
-    df["dist_to_sup"] = (df["close"] - rolling_low) / df["close"]
-
-    prev_high = df["high"].shift(1)
-    prev_low = df["low"].shift(1)
-    prev_close = df["close"].shift(1)
-    pivot = (prev_high + prev_low + prev_close) / 3.0
-    df["pivot_pp"] = (df["close"] - pivot) / df["close"]
-
-    # 8. Dynamic Ratios (New Advanced Features)
-    df["price_vs_ema50"] = (df["close"] - df["ema_50"]) / df["ema_50"]
-    df["price_vs_ema200"] = (df["close"] - df["ema_200"]) / df["ema_200"]
-
-    df.replace([np.inf, -np.inf], np.nan, inplace=True)
-    df.dropna(subset=FEATURES, inplace=True)
-
-    return df.reset_index(drop=True)
-
-# ============================================================
-# 6. تطوير المحرك العصبي العميق (Deep MLP Neural Network)
-# ============================================================
-
-def model_is_ready(model_obj, scaler_obj):
-    if model_obj is None or scaler_obj is None:
-        return False
-    if not hasattr(scaler_obj, "mean_") or not hasattr(model_obj, "classes_"):
-        return False
-    if len(model_obj.classes_) < 2:
-        return False
-    if getattr(model_obj, "n_features_in_", len(FEATURES)) != len(FEATURES):
-        return False
-    return True
-
-def _background_train_and_save(api_key):
-    """
-    تدريب شبكة عصبية متعددة الطبقات (Deep Multi-Layer Perceptron) 
-    تتكون من 3 طبقات خفية عميقة (256 -> 128 -> 64) لرفع مستوى التنبؤ.
-    """
-    try:
-        df_train = fetch_twelve_series(api_key, outputsize=TRAINING_OUTPUT_SIZE)
-        df_train = keep_closed_candles(df_train, interval_hours=1)
-        df_train = apply_deep_indicators(df_train)
-
-        if df_train.empty or len(df_train) < 300:
-            return
-
-        # تحديد الهدف: هل ارتفع السعر بنسبة واعدة في الشمعة التالية؟
-        df_train["target"] = np.where(df_train["close"].shift(-1) > df_train["close"], 1, 0)
-        train_df = df_train.iloc[:-1].copy()
-
-        X = train_df[FEATURES].astype(float).values
-        y = train_df["target"].values
-
-        if len(np.unique(y)) < 2:
-            return
-
-        new_scaler = StandardScaler()
-        X_scaled = new_scaler.fit_transform(X)
-
-        # بنية عصبية فائقة القوة وعميقة (Deep Neural Architecture)
-        new_model = MLPClassifier(
-            hidden_layer_sizes=(256, 128, 64),
-            activation="relu",
-            solver="adam",
-            learning_rate="adaptive",
-            learning_rate_init=0.001,
-            max_iter=1200,
-            early_stopping=True,
-            n_iter_no_change=25,
-            random_state=42,
-        )
-        new_model.fit(X_scaled, y)
-
-        if model_is_ready(new_model, new_scaler):
-            joblib.dump(new_model, MODEL_FILE)
-            joblib.dump(new_scaler, SCALER_FILE)
-    except Exception:
-        pass
-    finally:
-        if os.path.exists(TRAINING_LOCK_FILE):
-            try:
-                os.remove(TRAINING_LOCK_FILE)
-            except OSError:
-                pass
-
-def train_deep_model(api_key):
-    if os.path.exists(MODEL_FILE) and os.path.exists(SCALER_FILE):
-        try:
-            m = joblib.load(MODEL_FILE)
-            s = joblib.load(SCALER_FILE)
-            if model_is_ready(m, s):
-                return m, s
-        except Exception:
-            pass
-
-    if api_key and not os.path.exists(TRAINING_LOCK_FILE):
-        try:
-            with open(TRAINING_LOCK_FILE, "w") as f:
-                f.write(datetime.now(timezone.utc).isoformat())
-            t = threading.Thread(target=_background_train_and_save, args=(api_key,), daemon=True)
-            t.start()
-        except Exception:
-            pass
-
-    return None, None
-
-model, scaler = train_deep_model(twelve_key)
-
-# ============================================================
-# 7. استشارة نموذج Groq AI الثانوي
-# ============================================================
-
-def get_groq_review(direction, last_row, ai_conf, api_key, model_name):
-    if not api_key:
-        return None
-    try:
-        prompt = (
-            f"أنت نظام تحليل مؤسسي عالي الدقة لذهب XAU/USD.\n"
-            f"إشارة المحرك العصبي: {direction} بثقة {ai_conf:.1f}%\n"
-            f"بيانات السوق للحظة الحالية:\n"
-            f"- السعر الحالي: ${last_row['close']:.2f}\n"
-            f"- RSI (14): {last_row['rsi']:.1f}\n"
-            f"- MACD Hist: {last_row['macd_hist']:.3f}\n"
-            f"- Stochastic %K: {last_row['stoch_k']:.1f}\n"
-            f"- ATR: ${last_row['atr']:.2f}\n"
-            f"- بعد السعر عن المقاومة: {last_row['dist_to_res']*100:.2f}%\n"
-            f"- بعد السعر عن الدعم: {last_row['dist_to_sup']*100:.2f}%\n\n"
-            f"هل تؤيد فتح هذه الصفقة؟ أجب بصيغة JSON حصرية:\n"
-            f'{{"agree": true, "confidence": 75, "reason": "سبب اختصار باللغة العربية"}}'
-        )
-
-        res = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={
-                "model": model_name,
-                "temperature": 0.2,
-                "max_tokens": 200,
-                "messages": [{"role": "user", "content": prompt}],
-                "response_format": {"type": "json_object"},
-            },
-            timeout=15,
-        )
-        res.raise_for_status()
-        data = res.json()
-        content = data["choices"][0]["message"]["content"]
-        return json.loads(content)
-    except Exception:
-        return None
-
-# ============================================================
-# 8. التحديث التلقائي واللوحة الرئيسية UI
-# ============================================================
-
-st_autorefresh(interval=60000, key="auto_refresh_pro")
-
-# ترويسة الصفحة العالمية
-render_html(
-    """
-    <div class="main-header">
-        <div>
-            <h1 style="margin:0; font-weight:900; font-size:2.2rem; background: linear-gradient(90deg, #38bdf8, #818cf8); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
-                ⚡ XAU/USD Institutional Deep AI Engine
-            </h1>
-            <p style="margin:5px 0 0 0; color:#94a3b8; font-size:0.95rem;">محرك عصبوني عميق متقدم لتحليل وتداول الذهب مع فلاتر الزخم الفنية</p>
-        </div>
-        <div class="live-badge">
-            <div class="pulse-dot"></div>
-            <span>المحرك نشط مباشر</span>
-        </div>
-    </div>
-    """
-)
-
-if not twelve_key:
-    st.warning("⚠️ يرجى إدخال مفتاح Twelve Data API في الشريط الجانبي لتشغيل المحرك.")
-    st.stop()
-
-# جلب بيانات السوق
-df_raw = fetch_twelve_series(twelve_key, outputsize=260)
-df_closed = keep_closed_candles(df_raw, interval_hours=1)
-df_calc = apply_deep_indicators(df_closed)
-
-if df_calc.empty:
-    st.info("🔄 جاري تحميل بيانات الذهب المعمقة وبناء المستويات الديناميكية...")
-    st.stop()
-
-last_candle = df_calc.iloc[-1]
-current_price = last_candle["close"]
-
-# تقييم الإشارة بالذكاء الاصطناعي مع المرونة المشروطة (More Frequent Signals)
-signal = "NEUTRAL"
-raw_conf = 0.0
-
-if model_is_ready(model, scaler):
-    input_vec = scaler.transform([last_candle[FEATURES].values])
-    probs = model.predict_proba(input_vec)[0]
-    buy_prob = probs[1] * 100
-    sell_prob = probs[0] * 100
-
-    # دعم مرونة إضافية: تقاطع RSI أو MACD يزيد ترجيح الإشارة
-    rsi_val = last_candle["rsi"]
-    macd_h = last_candle["macd_hist"]
-
-    adjusted_buy = buy_prob + (5.0 if (rsi_val < 45 and macd_h > 0) else 0.0)
-    adjusted_sell = sell_prob + (5.0 if (rsi_val > 55 and macd_h < 0) else 0.0)
-
-    if adjusted_buy >= min_conf and adjusted_buy > adjusted_sell:
-        signal = "BUY"
-        raw_conf = min(adjusted_buy, 99.0)
-    elif adjusted_sell >= min_conf and adjusted_sell > adjusted_buy:
-        signal = "SELL"
-        raw_conf = min(adjusted_sell, 99.0)
-    else:
-        signal = "NEUTRAL"
-        raw_conf = max(buy_prob, sell_prob)
-
-# حساب وقف الخسارة والهدف بناءً على ATR
-atr_val = last_candle["atr"]
-if signal == "BUY":
-    sl_price = current_price - (atr_val * atr_mult)
-    tp_price = current_price + ((current_price - sl_price) * risk_reward)
-elif signal == "SELL":
-    sl_price = current_price + (atr_val * atr_mult)
-    tp_price = current_price - ((sl_price - current_price) * risk_reward)
-else:
-    sl_price = 0.0
-    tp_price = 0.0
-
-# Groq Review
-groq_result = None
-if signal != "NEUTRAL" and use_groq and groq_key:
-    groq_result = get_groq_review(signal, last_candle, raw_conf, groq_key, groq_model)
-
-# ============================================================
-# 9. التبويبات والعرض المتقدم (Advanced Tabs & Displays)
-# ============================================================
-
-tab_main, tab_tech, tab_ai, tab_history = st.tabs([
-    "🎯 مركز التوصيات والتنفيذ", 
-    "📊 الدعوم والمؤشرات الفنية", 
-    "🧠 الشبكة العصبية المعمقة",
-    "📜 سجل الصفقات والتدقيق"
-])
-
-with tab_main:
-    col_sig, col_price, col_conf = st.columns([1.2, 1, 1])
-    
-    with col_sig:
-        sig_class = f"signal-{signal.lower()}"
-        render_html(
-            f"""
-            <div class="glass-card" style="text-align: center;">
-                <div style="color:#94a3b8; font-weight:700; font-size:0.9rem;">التوصية المؤسسية الحالية</div>
-                <div class="signal-header {sig_class}">{signal}</div>
+    <div class="container">
+        <nav class="fade-in-up">
+            <div class="logo">
+                <div class="logo-icon">⚡</div>
+                أوراكل تريد
             </div>
-            """
-        )
+            <div class="nav-links">
+                <a href="#dashboard">لوحة التحكم</a>
+                <a href="#chart">الرسوم البيانية</a>
+                <a href="#trading">التداول</a>
+                <a href="#ai">الذكاء الاصطناعي</a>
+            </div>
+            <a href="#" class="btn btn-primary">ابدأ الآن</a>
+        </nav>
 
-    with col_price:
-        render_html(
-            f"""
-            <div class="glass-card" style="text-align: center;">
-                <div style="color:#94a3b8; font-weight:700; font-size:0.9rem;">سعر الذهب الحالي (XAU/USD)</div>
-                <div style="font-size: 2.5rem; font-weight: 900; color: #f8fafc; margin-top: 5px;">
-                    ${current_price:.2f}
+        <section class="hero fade-in-up delay-1">
+            <div class="hero-content">
+                <h1>تداول بذكاء<br>مع قوة الذكاء الاصطناعي</h1>
+                <p>منصة تداول متطورة تستخدم أحدث خوارزميات التعلم الآلي لتحليل الأسواق وتقديم توصيات دقيقة في الوقت الفعلي.</p>
+                <div class="hero-buttons">
+                    <a href="#" class="btn btn-primary">جرب مجانًا</a>
+                    <a href="#" class="btn btn-secondary">شاهد العرض</a>
                 </div>
             </div>
-            """
-        )
-
-    with col_conf:
-        render_html(
-            f"""
-            <div class="glass-card" style="text-align: center;">
-                <div style="color:#94a3b8; font-weight:700; font-size:0.9rem;">ثقة المحرك العصبي</div>
-                <div style="font-size: 2.5rem; font-weight: 900; color: #38bdf8; margin-top: 5px;">
-                    {raw_conf:.1f}%
+            <div class="hero-visual">
+                <div class="hero-card">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span style="color: var(--text-secondary)">BTC/USDT</span>
+                        <span class="ai-badge">AI نشط</span>
+                    </div>
+                    <div class="price-display" id="heroPrice">$65,432.10</div>
+                    <div class="change-indicator">
+                        <span>▲</span>
+                        <span id="heroChange">+2.34%</span>
+                    </div>
+                    <canvas id="miniChart" height="120"></canvas>
                 </div>
             </div>
-            """
-        )
+        </section>
 
-    # تفاصيل الأهداف والوقف عند توفر صفقة
-    if signal != "NEUTRAL":
-        st.markdown("<h4 style='color:#38bdf8;'>🎯 تفاصيل الصفقة المقترحة</h4>", unsafe_allow_html=True)
-        t_col1, t_col2, t_col3, t_col4 = st.columns(4)
-        t_col1.metric("نقطة الدخول (Entry)", f"${current_price:.2f}")
-        t_col2.metric("وقف الخسارة (SL)", f"${sl_price:.2f}")
-        t_col3.metric("جني الأرباح (TP)", f"${tp_price:.2f}")
-        t_col4.metric("المخاطرة / العائد", f"1:{risk_reward:.1f}")
+        <section class="dashboard fade-in-up delay-2" id="dashboard">
+            <h2 class="section-title">لوحة التحكم الرئيسية</h2>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="label">رصيد المحفظة</div>
+                    <div class="value">$128,450.00</div>
+                </div>
+                <div class="stat-card">
+                    <div class="label">أرباح اليوم</div>
+                    <div class="value positive">+$3,245.80</div>
+                </div>
+                <div class="stat-card">
+                    <div class="label">صفقات ناجحة</div>
+                    <div class="value positive">87.5%</div>
+                </div>
+                <div class="stat-card">
+                    <div class="label">إجمالي الأصول</div>
+                    <div class="value">$245,780.00</div>
+                </div>
+                <div class="stat-card">
+                    <div class="label">توصيات الذكاء الاصطناعي</div>
+                    <div class="value positive">+18.2%</div>
+                </div>
+                <div class="stat-card">
+                    <div class="label">مؤشر الثقة</div>
+                    <div class="value">92%</div>
+                </div>
+            </div>
+        </section>
 
-    # استجابة Groq AI
-    if groq_result:
-        st.markdown("---")
-        st.markdown("<h4 style='color:#818cf8;'>🤖 التدقيق الثاني عبر Groq AI</h4>", unsafe_allow_html=True)
-        g_col1, g_col2 = st.columns([1, 2])
-        with g_col1:
-            agreed = groq_result.get("agree", False)
-            st.markdown(
-                f"""
-                <div class="glass-card" style="padding:15px; text-align:center;">
-                    <div style="font-size:0.9rem; color:#94a3b8;">توافق Groq AI</div>
-                    <div style="font-size:1.8rem; font-weight:800; color:{'#10b981' if agreed else '#f43f5e'};">
-                        {'موافق ✅' if agreed else 'غير موافق ❌'}
+        <section class="chart-container fade-in-up" id="chart">
+            <div class="chart-header">
+                <h3>📊 الرسم البياني المباشر</h3>
+                <div class="timeframe-buttons">
+                    <button class="timeframe-btn active" data-timeframe="1m">1 دقيقة</button>
+                    <button class="timeframe-btn" data-timeframe="5m">5 دقائق</button>
+                    <button class="timeframe-btn" data-timeframe="1h">ساعة</button>
+                    <button class="timeframe-btn" data-timeframe="1d">يوم</button>
+                </div>
+            </div>
+            <canvas id="priceChart"></canvas>
+        </section>
+
+        <section class="trading-simulator fade-in-up delay-3" id="trading">
+            <div class="trade-panel" id="ai">
+                <h3>💰 محاكي التداول</h3>
+                <div class="trade-form">
+                    <div class="trade-input-group">
+                        <input type="number" class="trade-input" id="tradeAmount" placeholder="الكمية (USDT)" value="100">
+                        <input type="text" class="trade-input" id="tradeAsset" placeholder="الأصل (مثال: BTC)" value="BTC">
+                    </div>
+                    <div class="trade-actions">
+                        <button class="btn btn-buy" onclick="executeTrade('buy')">شراء ▲</button>
+                        <button class="btn btn-sell" onclick="executeTrade('sell')">بيع ▼</button>
                     </div>
                 </div>
-                """,
-                unsafe_allow_html=True
-            )
-        with g_col2:
-            st.info(f"**السبب التحليلي:** {groq_result.get('reason', 'لا يوجد تعليق')}")
+                <div style="margin-top: 20px; color: var(--text-secondary); font-size: 0.9rem;">
+                    السعر الحالي: <span id="currentTradePrice" style="color: var(--neon-blue); font-weight: 700;">$65,432.10</span>
+                </div>
+                <div class="trade-history" id="tradeHistory">
+                    <div style="text-align: center; color: var(--text-secondary); padding: 20px;">لا توجد صفقات بعد</div>
+                </div>
+            </div>
 
-with tab_tech:
-    st.markdown("#### 📌 قراءة المؤشرات الفنية والمستويات المحورية")
-    
-    m1, m2, m3, m4 = st.columns(4)
-    with m1:
-        st.metric("RSI (14)", f"{last_candle['rsi']:.1f}")
-        st.metric("RSI Momentum", f"{last_candle['rsi_momentum']:.2f}")
-    with m2:
-        st.metric("MACD Hist", f"{last_candle['macd_hist']:.3f}")
-        st.metric("Stochastic %K", f"{last_candle['stoch_k']:.1f}")
-    with m3:
-        st.metric("ATR (14)", f"${last_candle['atr']:.2f}")
-        st.metric("نطاق Bollinger %", f"{last_candle['bb_pct']*100:.1f}%")
-    with m4:
-        st.metric("بعد المقاومة", f"{last_candle['dist_to_res']*100:.2f}%")
-        st.metric("بعد الدعم", f"{last_candle['dist_to_sup']*100:.2f}%")
+            <div class="ai-panel">
+                <h3>🧠 توصيات الذكاء الاصطناعي</h3>
+                <div class="ai-recommendation" id="aiRecommendation">
+                    <span class="ai-badge">تحليل فوري</span>
+                    <div style="font-weight: 700; font-size: 1.2rem; margin-bottom: 10px;" id="recommendationText">
+                        اتجاه صاعد قوي - فرصة شراء
+                    </div>
+                    <div style="color: var(--text-secondary); font-size: 0.9rem;" id="recommendationDetail">
+                        نموذج الاختراق الصاعد مع حجم تداول مرتفع. احتمالية استمرار الاتجاه 78%.
+                    </div>
+                    <div class="confidence-meter">
+                        <span style="font-size: 0.8rem; color: var(--text-secondary);">الثقة:</span>
+                        <div class="confidence-bar">
+                            <div class="confidence-fill" id="confidenceFill" style="width: 78%"></div>
+                        </div>
+                        <span style="font-size: 0.8rem; font-weight: 700;" id="confidencePercent">78%</span>
+                    </div>
+                </div>
+                <div class="market-analysis">
+                    <div class="analysis-item">
+                        <div class="indicator-name">RSI</div>
+                        <div class="indicator-value up" id="rsiValue">68.5</div>
+                    </div>
+                    <div class="analysis-item">
+                        <div class="indicator-name">MACD</div>
+                        <div class="indicator-value up" id="macdValue">إيجابي</div>
+                    </div>
+                    <div class="analysis-item">
+                        <div class="indicator-name">المتوسطات</div>
+                        <div class="indicator-value up" id="maValue">صاعدة</div>
+                    </div>
+                    <div class="analysis-item">
+                        <div class="indicator-name">التقلب</div>
+                        <div class="indicator-value neutral" id="volatilityValue">متوسط</div>
+                    </div>
+                </div>
+            </div>
+        </section>
 
-with tab_ai:
-    st.markdown("#### 🔬 ميزات الشبكة العصبية المدخلة (MLP Feature Vector)")
-    st.dataframe(pd.DataFrame([last_candle[FEATURES]]), use_container_width=True)
+        <footer class="fade-in-up">
+            <p>© 2024 أوراكل تريد - جميع الحقوق محفوظة | مبني بتقنية <a href="#">الذكاء الاصطناعي</a></p>
+        </footer>
+    </div>
 
-with tab_history:
-    st.markdown("#### 📜 سجل العمليات وتاريخ الأداء")
-    conn = get_db_connection()
-    try:
-        trades_df = pd.read_sql_query("SELECT * FROM trades ORDER BY id DESC LIMIT 50", conn)
-        if not trades_df.empty:
-            st.dataframe(trades_df, use_container_width=True)
-        else:
-            st.info("لا توجد صفقات مسجلة في السجل حالياً.")
-    finally:
-        conn.close()
+    <script>
+        const chartData = {
+            labels: [],
+            prices: [],
+            volumes: []
+        };
+
+        function generateInitialData() {
+            const now = new Date();
+            for (let i = 59; i >= 0; i--) {
+                const time = new Date(now - i * 60000);
+                chartData.labels.push(time.toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' }));
+                chartData.prices.push(65000 + Math.random() * 2000);
+                chartData.volumes.push(Math.random() * 100);
+            }
+        }
+
+        generateInitialData();
+
+        const ctx = document.getElementById('priceChart').getContext('2d');
+        const priceChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: chartData.labels,
+                datasets: [{
+                    label: 'السعر (USDT)',
+                    data: chartData.prices,
+                    borderColor: '#00d4ff',
+                    backgroundColor: 'rgba(0, 212, 255, 0.1)',
+                    borderWidth: 3,
+                    pointRadius: 0,
+                    pointHoverRadius: 8,
+                    tension: 0.4,
+                    fill: true
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        display: true,
+                        labels: {
+                            color: '#f3f4f6',
+                            font: { family: 'Cairo', weight: '700' }
+                        }
+                    },
+                    tooltip: {
+                        mode: 'index',
+                        intersect: false,
+                        backgroundColor: 'rgba(17, 24, 39, 0.9)',
+                        titleColor: '#f3f4f6',
+                        bodyColor: '#9ca3af',
+                        borderColor: 'rgba(255, 255, 255, 0.1)',
+                        borderWidth: 1
+                    }
+                },
+                scales: {
+                    x: {
+                        display: true,
+                        grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                        ticks: { color: '#9ca3af', font: { family: 'Cairo' } }
+                    },
+                    y: {
+                        display: true,
+                        grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                        ticks: { color: '#9ca3af', font: { family: 'Cairo' } }
+                    }
+                },
+                interaction: {
+                    mode: 'nearest',
+                    axis: 'x',
+                    intersect: false
+                }
+            }
+        });
+
+        const miniCtx = document.getElementById('miniChart').getContext('2d');
+        const miniChart = new Chart(miniCtx, {
+            type: 'line',
+            data: {
+                labels: chartData.labels.slice(-20),
+                datasets: [{
+                    data: chartData.prices.slice(-20),
+                    borderColor: '#a855f7',
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    tension: 0.4,
+                    fill: false
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    x: { display: false },
+                    y: { display: false }
+                }
+            }
+        });
+
+        function updateData() {
+            const now = new Date();
+            const time = now.toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' });
+            const lastPrice = chartData.prices[chartData.prices.length - 1];
+            const change = (Math.random() - 0.5) * 300;
+            const newPrice = Math.max(62000, Math.min(68000, lastPrice + change));
+
+            chartData.labels.push(time);
+            chartData.prices.push(newPrice);
+
+            if (chartData.labels.length > 100) {
+                chartData.labels.shift();
+                chartData.prices.shift();
+            }
+
+            priceChart.update();
+            
+            miniChart.data.labels = chartData.labels.slice(-20);
+            miniChart.data.datasets[0].data = chartData.prices.slice(-20);
+            miniChart.update();
+
+            document.getElementById('heroPrice').textContent = '$' + newPrice.toFixed(2).replace(/\\B(?=(\\d{3})+(?!\\d))/g, ',');
+            document.getElementById('currentTradePrice').textContent = '$' + newPrice.toFixed(2).replace(/\\B(?=(\\d{3})+(?!\\d))/g, ',');
+
+            const prevPrice = chartData.prices[chartData.prices.length - 2] || newPrice;
+            const changePercent = ((newPrice - prevPrice) / prevPrice) * 100;
+            const changeElement = document.getElementById('heroChange');
+            changeElement.textContent = (changePercent >= 0 ? '+' : '') + changePercent.toFixed(2) + '%';
+            changeElement.style.color = changePercent >= 0 ? '#10b981' : '#ef4444';
+        }
+
+        setInterval(updateData, 3000);
+
+        let tradeCount = 0;
+        let walletBalance = 128450.00;
+
+        function executeTrade(type) {
+            const amount = parseFloat(document.getElementById('tradeAmount').value);
+            const asset = document.getElementById('tradeAsset').value || 'BTC';
+            const currentPrice = chartData.prices[chartData.prices.length - 1];
+
+            if (!amount || amount <= 0) {
+                alert('الرجاء إدخال كمية صحيحة');
+                return;
+            }
+
+            tradeCount++;
+            const now = new Date();
+            const timeStr = now.toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+            const historyDiv = document.getElementById('tradeHistory');
+            if (tradeCount === 1) {
+                historyDiv.innerHTML = '';
+            }
+
+            const tradeItem = document.createElement('div');
+            tradeItem.className = `trade-item ${type}`;
+            tradeItem.innerHTML = `
+                <span>${type === 'buy' ? 'شراء' : 'بيع'} ${asset} - ${timeStr}</span>
+                <span>${type === 'buy' ? '+' : '-'}$${amount.toFixed(2)}</span>
+            `;
+            historyDiv.prepend(tradeItem);
+
+            if (type === 'buy') {
+                walletBalance -= amount;
+            } else {
+                walletBalance += amount;
+            }
+
+            const balanceElements = document.querySelectorAll('.stat-card .value');
+            if (balanceElements.length > 0) {
+                balanceElements[0].textContent = '$' + walletBalance.toFixed(2).replace(/\\B(?=(\\d{3})+(?!\\d))/g, ',');
+            }
+
+            updateAIRecommendation();
+        }
+
+        function updateAIRecommendation() {
+            const recommendations = [
+                { text: 'اتجاه صاعد قوي - فرصة شراء', detail: 'نموذج الاختراق الصاعد مع حجم تداول مرتفع. احتمالية استمرار الاتجاه 78%.', confidence: 78 },
+                { text: 'تصحيح مؤقت - انتظر التأكيد', detail: 'مؤشر RSI في منطقة تشبع شرائي. توقع تراجع طفيف قبل استئناف الصعود.', confidence: 65 },
+                { text: 'اتجاه هابط - تجنب الشراء', detail: 'كسر مستويات الدعم الرئيسية. ضغط بيعي متزايد من المؤسسات.', confidence: 82 },
+                { text: 'تذبذب عرضي - تداول بنطاق', detail: 'السوق في حالة توازن. انتظر اختراق واضح للنطاق السعري.', confidence: 55 },
+                { text: 'فرصة ذهبية - شراء قوي', detail: 'تشكل نموذج قاع مزدوج مع تباين إيجابي في مؤشر MACD.', confidence: 88 }
+            ];
+
+            const rec = recommendations[Math.floor(Math.random() * recommendations.length)];
+            document.getElementById('recommendationText').textContent = rec.text;
+            document.getElementById('recommendationDetail').textContent = rec.detail;
+            document.getElementById('confidenceFill').style.width = rec.confidence + '%';
+            document.getElementById('confidencePercent').textContent = rec.confidence + '%';
+
+            const rsi = (Math.random() * 60 + 20).toFixed(1);
+            document.getElementById('rsiValue').textContent = rsi;
+            document.getElementById('rsiValue').className = 'indicator-value ' + (rsi > 70 ? 'down' : rsi < 30 ? 'up' : 'neutral');
+
+            const macdPositive = Math.random() > 0.4;
+            document.getElementById('macdValue').textContent = macdPositive ? 'إيجابي' : 'سلبي';
+            document.getElementById('macdValue').className = 'indicator-value ' + (macdPositive ? 'up' : 'down');
+
+            const maUp = Math.random() > 0.35;
+            document.getElementById('maValue').textContent = maUp ? 'صاعدة' : 'هابطة';
+            document.getElementById('maValue').className = 'indicator-value ' + (maUp ? 'up' : 'down');
+
+            const volatilityOptions = ['منخفض', 'متوسط', 'مرتفع'];
+            const vol = volatilityOptions[Math.floor(Math.random() * 3)];
+            document.getElementById('volatilityValue').textContent = vol;
+            document.getElementById('volatilityValue').className = 'indicator-value ' + (vol === 'منخفض' ? 'up' : vol === 'متوسط' ? 'neutral' : 'down');
+        }
+
+        updateAIRecommendation();
+
+        document.querySelectorAll('.timeframe-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                document.querySelectorAll('.timeframe-btn').forEach(b => b.classList.remove('active'));
+                this.classList.add('active');
+            });
+        });
+
+        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+            anchor.addEventListener('click', function(e) {
+                e.preventDefault();
+                const target = document.querySelector(this.getAttribute('href'));
+                if (target) {
+                    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }
+            });
+        });
+    </script>
+</body>
+</html>
+"""
+
+@app.route('/')
+def index():
+    return HTML_CONTENT
+
+if __name__ == '__main__':
+    app.run(debug=True, host='0.0.0.0', port=5000)
