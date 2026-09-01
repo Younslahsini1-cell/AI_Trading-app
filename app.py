@@ -535,6 +535,71 @@ def fetch_training_data_twelve(api_key):
 
 
 # ============================================================
+# مصدر بيانات مجاني وسريع — للتدريب فقط
+# (Yahoo Finance — لا يحتاج مفتاح API إطلاقًا)
+# Twelve Data يبقى المصدر الوحيد لتحليل السوق الحي وفتح/مراقبة
+# الصفقات كما كان تمامًا — هذا المصدر الجديد لا يُستخدم إلا لتغذية
+# تدريب الشبكة العصبية بسرعة وبدون أي تكلفة أو حد طلبات.
+# ============================================================
+
+def fetch_free_training_series(symbol="XAUUSD=X", interval="60m", range_="730d"):
+    try:
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+
+        response = requests.get(
+            url,
+            params={"interval": interval, "range": range_},
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=15,
+        )
+        response.raise_for_status()
+        payload = response.json()
+
+        result_list = (payload.get("chart") or {}).get("result") or []
+        if not result_list:
+            return pd.DataFrame()
+
+        result = result_list[0]
+        timestamps = result.get("timestamp") or []
+        quote = ((result.get("indicators") or {}).get("quote") or [{}])[0]
+
+        opens = quote.get("open") or []
+        highs = quote.get("high") or []
+        lows = quote.get("low") or []
+        closes = quote.get("close") or []
+
+        if not timestamps or not closes:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(
+            {
+                "datetime": pd.to_datetime(timestamps, unit="s", utc=True),
+                "open": opens,
+                "high": highs,
+                "low": lows,
+                "close": closes,
+            }
+        )
+
+        for col in ("open", "high", "low", "close"):
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+        df.dropna(subset=["datetime", "open", "high", "low", "close"], inplace=True)
+        df.sort_values("datetime", inplace=True)
+        df.drop_duplicates(subset=["datetime"], keep="last", inplace=True)
+        df.reset_index(drop=True, inplace=True)
+
+        return df
+
+    except Exception:
+        return pd.DataFrame()
+
+
+def fetch_training_data_free():
+    return fetch_free_training_series(symbol="XAUUSD=X", interval="60m", range_="730d")
+
+
+# ============================================================
 # Indicators
 # ============================================================
 
@@ -604,7 +669,14 @@ def model_is_ready(model_obj, scaler_obj):
 
 def _background_train_and_save(api_key):
     try:
-        df_train = fetch_training_data_twelve(api_key)
+        # المصدر المجاني والسريع أولاً — هو المصدر المخصص للتدريب فقط.
+        df_train = fetch_training_data_free()
+
+        # خطة احتياطية فقط إن فشل المصدر المجاني (نادرًا) — تبقى
+        # Twelve Data متاحة كبديل ولا شيء يُحذف من القدرة الأصلية.
+        if df_train.empty and api_key:
+            df_train = fetch_training_data_twelve(api_key)
+
         df_train = keep_closed_candles(df_train, interval_hours=1)
         df_train = apply_deep_indicators(df_train)
 
@@ -690,10 +762,11 @@ def maybe_spawn_training(api_key, force=False):
     يبدأ تدريبًا في الخلفية إذا: لا يوجد نموذج، أو النموذج قديم
     (أعيد تدريبه دوريًا كل RETRAIN_INTERVAL_SECONDS لتحسينه باستمرار)،
     أو force=True. لا يفعل شيئًا إن كان هناك تدريب جارٍ بالفعل.
-    """
-    if not api_key:
-        return
 
+    ملاحظة: التدريب أصبح يعتمد على المصدر المجاني (Yahoo) فلا يشترط
+    وجود مفتاح Twelve Data لبدء التدريب — api_key يبقى فقط كخطة
+    احتياطية اختيارية داخل _background_train_and_save.
+    """
     if os.path.exists(TRAINING_LOCK_FILE):
         return
 
@@ -1687,12 +1760,15 @@ def _engine_cycle():
     cfg = _read_worker_config()
     twelve_key_local = cfg["twelve_key"]
 
+    # التدريب يعمل الآن دائمًا وبشكل مستقل عن مفتاح Twelve Data (يعتمد
+    # على المصدر المجاني)، حتى يصبح النموذج جاهزًا للبحث عن صفقة بأسرع
+    # وقت ممكن — تحليل السوق الحي وفتح/مراقبة الصفقات يبقيان حصرًا
+    # عبر Twelve Data كما كانا تمامًا.
+    maybe_spawn_training(twelve_key_local)
+
     if not twelve_key_local:
         APP_STATE_set("scan_msg", "النظام متوقف: يرجى إدخال مفتاح Twelve Data API.")
         return
-
-    # إعادة تدريب دورية (لا تحظر الدورة الحالية؛ تعمل في Thread منفصل)
-    maybe_spawn_training(twelve_key_local)
 
     model, scaler = load_current_model()
 
