@@ -6,22 +6,15 @@ ICT / Smart Money + Neural Network + Groq Second Opinion
 هذه نسخة معدّلة من النظام الأصلي بناءً على طلب المستخدم:
 
 1) كل المؤشرات (ICT / Smart Money) والتدريب والمسح الحي ومراقبة
-   الصفقة المفتوحة تعمل الآن في Thread خلفي مستقل يعمل باستمرار
-   بأقصى معدل ممكن (بدل الاعتماد فقط على إعادة تحميل الصفحة).
-2) الشروط الصارمة التي كانت تُلغي الإشارة بالكامل (مثل: رفض Groq
-   أو عدم استجابته) تحوّلت إلى تعديل ناعم (soft-penalty) على الثقة
-   النهائية بدل الحظر الكامل، طالما الثقة النهائية ما زالت أعلى من
-   الحد الأدنى الذي يضبطه المستخدم.
-3) الواجهة الآن تعرض فقط: مستوى الثقة (Confidence) وحالة/سجل الصفقات.
-   كل تفاصيل ICT (Order Blocks, FVG, Liquidity, Fibonacci ...) ما
-   زالت تُحسب بالكامل في الخلفية وتُستخدم لتعديل الثقة النهائية،
-   لكنها لم تعد تُعرض كلوحة منفصلة.
+   الصفقة المفتوحة تعمل الآن في Thread خلفي مستقل يعمل باستمرار.
+2) الشروط الصارمة (رفض Groq أو عدم استجابته) تحوّلت إلى تعديل ناعم.
+3) الواجهة تعرض فقط: مستوى الثقة وحالة الصفقات.
 
-4) [تعديل جديد]: 
-   - الترند من فريم الساعة (H1)
-   - الـ Setup من فريم 15 دقيقة (M15)
-   - التأكيد الأخير من فريم 5 دقائق (M5)
-   - في الترند الهابط نبحث عن فرص بيع فقط، وفي الترند الصاعد نبحث عن فرص شراء فقط.
+4) [تعديل جديد بناءً على طلبك الأخير]:
+   - قاعدة "الترند صديقك" (Trend is your friend): لا يوجد حظر!
+   - إذا كان H1 هابطاً: نتجاهل اقتراح الشراء من النموذج، ونتجه للبحث عن تأكيدات بيع من M15/M5.
+   - إذا كان H1 صاعداً: نتجاهل اقتراح البيع من النموذج، ونتجه للبحث عن تأكيدات شراء من M15/M5.
+   - إذا أكدت M15/M5 الاتجاه، نفتح الصفقة ونحسب SL/TP، وإذا أكدت عكسه نخفض الثقة جداً.
 """
 
 from datetime import datetime, timezone, timedelta
@@ -60,7 +53,6 @@ st.set_page_config(
 # ============================================================
 
 def render_html(html_content):
-    """عرض HTML بطريقة متوافقة مع Streamlit الحديث والقديم."""
     try:
         if hasattr(st, "html"):
             st.html(html_content)
@@ -71,8 +63,7 @@ def render_html(html_content):
 
 
 # ============================================================
-# CSS  (محفوظة بالكامل كما هي — بعض الكلاسات لم تعد تُستخدم في
-# الواجهة المبسطة لكن تُركت دون حذف)
+# CSS
 # ============================================================
 
 render_html(
@@ -81,13 +72,8 @@ render_html(
     @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700;900');
 
     html, body, [class*="css"] { font-family: 'Cairo', sans-serif !important; }
-
     .stApp { background-color: #07090e; color: #f3f4f6; }
-
-    section[data-testid="stSidebar"] {
-        background-color: #0f172a;
-        border-right: 1px solid #1e293b;
-    }
+    section[data-testid="stSidebar"] { background-color: #0f172a; border-right: 1px solid #1e293b; }
 
     .ai-level-card {
         background: linear-gradient(135deg, #1e3a8a 0%, #0f172a 100%);
@@ -99,11 +85,6 @@ render_html(
     .ai-level-title { font-size: 1.2rem; color: #93c5fd; font-weight: 700; margin-bottom: 10px; }
     .ai-level-value { font-size: 4rem; font-weight: 900; color: #fbbf24; line-height: 1; }
     .ai-level-sub { font-size: 1rem; color: #94a3b8; margin-top: 10px; }
-
-    .groq-note {
-        background: #111827; border: 1px solid #374151;
-        border-radius: 12px; padding: 14px; margin-top: 10px;
-    }
 
     .trade-status-card {
         background: linear-gradient(135deg, #111827 0%, #0f172a 100%);
@@ -123,21 +104,6 @@ render_html(
     .confidence-title { color: #94a3b8; font-size: 0.85rem; }
     .confidence-value { color: #fbbf24; font-size: 2rem; font-weight: 900; }
 
-    .ict-card {
-        background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
-        padding: 20px; border-radius: 16px; text-align: center;
-        border: 1px solid #334155; margin-bottom: 14px;
-    }
-    .ict-title { font-size: 0.85rem; color: #93c5fd; font-weight: 700; letter-spacing: 1px; margin-bottom: 8px; text-transform: uppercase; }
-    .ict-value { font-size: 1.8rem; font-weight: 900; color: #fbbf24; line-height: 1.1; }
-    .ict-sub { font-size: 0.85rem; color: #94a3b8; margin-top: 6px; }
-    .ict-bullish { color: #22c55e !important; }
-    .ict-bearish { color: #ef4444 !important; }
-    .ict-neutral { color: #94a3b8 !important; }
-    .ict-row { background: #0f172a; border: 1px solid #1e293b; border-radius: 10px; padding: 10px 14px; margin-bottom: 8px; }
-    .ict-badge-yes { background: #7f1d1d; color: #fecaca; padding: 4px 12px; border-radius: 999px; font-weight: 700; }
-    .ict-badge-no { background: #14532d; color: #bbf7d0; padding: 4px 12px; border-radius: 999px; font-weight: 700; }
-
     .engine-pulse {
         display: inline-block; width: 10px; height: 10px; border-radius: 50%;
         background: #22c55e; box-shadow: 0 0 10px #22c55e; margin-inline-end: 8px;
@@ -152,30 +118,17 @@ render_html(
 # ============================================================
 
 DB_FILE = "xau_deep_ai.db"
-
 MODEL_FILE = "xau_deep_mlp_v2.pkl"
 SCALER_FILE = "xau_deep_scaler_v2.pkl"
-
 TRAINING_LOCK_FILE = "training.lock"
 
 TRAINING_OUTPUT_SIZE = 5000
 LIVE_OUTPUT_SIZE = 220
-
 TRAINING_LOCK_MAX_AGE = 60 * 60
-
-# إعادة التدريب التلقائي الدوري (بالخلفية) — كل 6 ساعات، بدل مرة واحدة فقط
 RETRAIN_INTERVAL_SECONDS = 6 * 60 * 60
-
-# دورة عمل المحرك الخلفي (كل كم ثانية يعيد الحساب الكامل)
 WORKER_LOOP_SECONDS = 45
 
-FEATURES = [
-    "atr",
-    "ema_50",
-    "ema_200",
-    "rsi",
-]
-
+FEATURES = ["atr", "ema_50", "ema_200", "rsi"]
 ICT_SWING_LOOKBACK = 3
 ICT_OB_DISPLACEMENT_MULT = 1.2
 
@@ -191,57 +144,17 @@ def get_db_connection():
 def init_db():
     conn = get_db_connection()
     c = conn.cursor()
-
-    c.execute(
-        """
-        CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT
-        )
-        """
-    )
-
-    c.execute(
-        """
-        CREATE TABLE IF NOT EXISTS trades (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            date TEXT,
-            symbol TEXT,
-            direction TEXT,
-            entry REAL,
-            sl REAL,
-            tp REAL,
-            win INTEGER,
-            note TEXT,
-            claude_conf REAL,
-            claude_note TEXT,
-            groq_conf REAL,
-            groq_note TEXT,
-            ai_conf_before_groq REAL,
-            ai_conf_after_groq REAL
-        )
-        """
-    )
-
-    c.execute(
-        """
-        CREATE TABLE IF NOT EXISTS active_trade (
-            id INTEGER PRIMARY KEY,
-            symbol TEXT,
-            direction TEXT,
-            entry REAL,
-            sl REAL,
-            tp REAL,
-            time TEXT,
-            features TEXT,
-            ai_conf REAL,
-            groq_conf REAL,
-            groq_note TEXT,
-            signal_bar_time TEXT
-        )
-        """
-    )
-
+    c.execute("""CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS trades (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        date TEXT, symbol TEXT, direction TEXT, entry REAL, sl REAL, tp REAL,
+        win INTEGER, note TEXT, claude_conf REAL, claude_note TEXT,
+        groq_conf REAL, groq_note TEXT, ai_conf_before_groq REAL, ai_conf_after_groq REAL
+    )""")
+    c.execute("""CREATE TABLE IF NOT EXISTS active_trade (
+        id INTEGER PRIMARY KEY, symbol TEXT, direction TEXT, entry REAL, sl REAL, tp REAL,
+        time TEXT, features TEXT, ai_conf REAL, groq_conf REAL, groq_note TEXT, signal_bar_time TEXT
+    )""")
     conn.commit()
 
     migrations = [
@@ -257,14 +170,12 @@ def init_db():
         "ALTER TABLE active_trade ADD COLUMN groq_note TEXT",
         "ALTER TABLE active_trade ADD COLUMN signal_bar_time TEXT",
     ]
-
     for stmt in migrations:
         try:
             c.execute(stmt)
             conn.commit()
         except sqlite3.OperationalError:
             pass
-
     conn.close()
 
 
@@ -279,10 +190,7 @@ def save_setting(key, val):
     conn = get_db_connection()
     try:
         c = conn.cursor()
-        c.execute(
-            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
-            (key, str(val)),
-        )
+        c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(val)))
         conn.commit()
     finally:
         conn.close()
@@ -320,110 +228,46 @@ def get_total_trades_count():
 
 
 # ============================================================
-# Secrets
-# ============================================================
-
-def get_secret_value(key, default=""):
-    try:
-        value = st.secrets.get(key, default)
-        if value is None:
-            return default
-        return str(value)
-    except Exception:
-        return default
-
-
-# ============================================================
-# Sidebar  (تم تبسيطها: أُزيلت عناصر تحكّم لوحة ICT المرئية لأن
-# اللوحة نفسها لم تعد تُعرض؛ محرك ICT ما زال يعمل داخليًا بقيم ثابتة)
+# Sidebar
 # ============================================================
 
 st.sidebar.header("⚙️ إعدادات الذكاء الاصطناعي")
-
 twelve_secret = get_secret_value("TWELVE_DATA_API_KEY", "")
-
-# نهيّئ قيمة الحقل مرة واحدة فقط عند أول تحميل للجلسة، من الـ secrets
-# أو من آخر قيمة محفوظة في قاعدة البيانات — بعدها يتولى Streamlit نفسه
-# الحفاظ عليها ضمن مفتاح session_state المرتبط بالحقل (key="twelve_key").
 if "twelve_key" not in st.session_state:
     st.session_state["twelve_key"] = twelve_secret or load_setting("twelve_key", "")
-
-twelve_key = st.sidebar.text_input(
-    "مفتاح Twelve Data API",
-    type="password",
-    key="twelve_key",
-)
-
-# نحفظ المفتاح في قاعدة البيانات حتى يبقى محفوظًا عند الدخول مرة أخرى،
-# ويستطيع الـ Thread الخلفي استخدامه بشكل مستقل عن الجلسة الحالية.
+twelve_key = st.sidebar.text_input("مفتاح Twelve Data API", type="password", key="twelve_key")
 if twelve_key:
     save_setting("twelve_key", twelve_key)
 
-
-ntfy_channel = st.sidebar.text_input(
-    "قناة Ntfy للتنبيهات",
-    value=load_setting("ntfy", "xau_deep_channel"),
-)
+ntfy_channel = st.sidebar.text_input("قناة Ntfy للتنبيهات", value=load_setting("ntfy", "xau_deep_channel"))
 save_setting("ntfy", ntfy_channel)
-
 
 st.sidebar.markdown("---")
 st.sidebar.header("🧠 الرأي الثاني (Groq)")
-
-use_groq = st.sidebar.checkbox(
-    "تفعيل مراجعة Groq قبل فتح الصفقة",
-    value=(load_setting("use_groq", load_setting("use_claude", "1")) == "1"),
-)
+use_groq = st.sidebar.checkbox("تفعيل مراجعة Groq", value=(load_setting("use_groq", "1") == "1"))
 save_setting("use_groq", "1" if use_groq else "0")
 
 groq_secret = get_secret_value("GROQ_API_KEY", "")
-
 if "groq_key" not in st.session_state:
     st.session_state["groq_key"] = groq_secret or load_setting("groq_key", "")
-
-groq_key = st.sidebar.text_input(
-    "مفتاح Groq API",
-    type="password",
-    key="groq_key",
-)
-
+groq_key = st.sidebar.text_input("مفتاح Groq API", type="password", key="groq_key")
 if groq_key:
     save_setting("groq_key", groq_key)
 
-groq_model = st.sidebar.text_input(
-    "اسم نموذج Groq",
-    value=load_setting("groq_model", "openai/gpt-oss-120b"),
-)
+groq_model = st.sidebar.text_input("اسم نموذج Groq", value=load_setting("groq_model", "openai/gpt-oss-120b"))
 save_setting("groq_model", groq_model)
 
-st.sidebar.caption("تأكد من أن اسم النموذج متاح في Groq Console.")
-
-# تم تخفيف الحد الافتراضي الأدنى لثقة Groq — لم يعد رفض Groq يحظر
-# الصفقة بالكامل، بل يخفّض الثقة النهائية فقط (انظر ai_scanner).
-min_groq_conf = st.sidebar.slider("أدنى ثقة مطلوبة من Groq (%) للاعتماد الكامل", 30, 95, 50, 1)
+min_groq_conf = st.sidebar.slider("أدنى ثقة مطلوبة من Groq", 30, 95, 50, 1)
 save_setting("min_groq_conf", min_groq_conf)
-
 
 st.sidebar.markdown("---")
 st.sidebar.header("🎯 إدارة المخاطر")
-
 atr_mult = st.sidebar.slider("معامل الوقف ATR", 1.0, 3.0, 1.5, 0.1)
 save_setting("atr_mult", atr_mult)
-
 risk_reward = st.sidebar.slider("نسبة العائد R:R", 1.5, 4.0, 2.0, 0.5)
 save_setting("risk_reward", risk_reward)
-
-# تم تخفيف الحد الأدنى الافتراضي لثقة الشبكة العصبية (كان 75 -> أصبح 65)
-min_conf = st.sidebar.slider("أدنى ثقة نهائية مطلوبة لفتح صفقة (%)", 50, 95, 65, 1)
+min_conf = st.sidebar.slider("أدنى ثقة نهائية مطلوبة لفتح صفقة", 50, 95, 65, 1)
 save_setting("min_conf", min_conf)
-
-st.sidebar.caption(
-    "المحرك الخلفي يعمل باستمرار (كل "
-    f"{WORKER_LOOP_SECONDS} ثانية تقريبًا) بغض النظر عن هذه الصفحة."
-)
-
-
-st.sidebar.markdown("---")
 
 if st.sidebar.button("🔄 إعادة تدريب النموذج من الصفر"):
     for file_path in (MODEL_FILE, SCALER_FILE, TRAINING_LOCK_FILE):
@@ -440,7 +284,7 @@ if st.sidebar.button("🔄 إعادة تدريب النموذج من الصفر"
 
 
 # ============================================================
-# Ntfy
+# Ntfy & Data Functions
 # ============================================================
 
 def send_alert(msg, title="🧠 Deep AI Alert"):
@@ -451,83 +295,50 @@ def send_alert(msg, title="🧠 Deep AI Alert"):
     if not channel:
         return
     try:
-        requests.post(
-            f"https://ntfy.sh/{channel}",
-            data=msg.encode("utf-8"),
-            headers={"Title": title, "Priority": "high"},
-            timeout=5,
-        )
+        requests.post(f"https://ntfy.sh/{channel}", data=msg.encode("utf-8"), headers={"Title": title, "Priority": "high"}, timeout=5)
     except Exception:
         pass
 
 
-# ============================================================
-# Twelve Data
-# ============================================================
-
 def fetch_twelve_series(api_key, symbol="XAU/USD", interval="1h", outputsize=150):
     if not api_key:
         return pd.DataFrame()
-
     try:
-        params = {
-            "symbol": symbol,
-            "interval": interval,
-            "outputsize": min(int(outputsize), 5000),
-            "timezone": "UTC",
-            "apikey": api_key,
-        }
-
-        response = requests.get(
-            "https://api.twelvedata.com/time_series",
-            params=params,
-            timeout=10,
-        )
+        params = {"symbol": symbol, "interval": interval, "outputsize": min(int(outputsize), 5000), "timezone": "UTC", "apikey": api_key}
+        response = requests.get("https://api.twelvedata.com/time_series", params=params, timeout=10)
         response.raise_for_status()
         result = response.json()
-
         if "values" not in result:
-            APP_STATE_set("last_twelve_error", result.get("message", "استجابة غير متوقعة من Twelve Data."))
+            APP_STATE_set("last_twelve_error", result.get("message", "استجابة غير متوقعة"))
             return pd.DataFrame()
-
         values = result["values"]
         if not values:
             return pd.DataFrame()
-
         df = pd.DataFrame(values)
-
         required = ["datetime", "open", "high", "low", "close"]
         if not all(col in df.columns for col in required):
-            APP_STATE_set("last_twelve_error", "بيانات Twelve Data لا تحتوي الأعمدة المطلوبة.")
             return pd.DataFrame()
-
         df = df[required].copy()
         df["datetime"] = pd.to_datetime(df["datetime"], errors="coerce", utc=True)
-
         for col in ("open", "high", "low", "close"):
             df[col] = pd.to_numeric(df[col], errors="coerce")
-
         df.dropna(subset=["datetime", "open", "high", "low", "close"], inplace=True)
         df.sort_values("datetime", inplace=True)
         df.drop_duplicates(subset=["datetime"], keep="last", inplace=True)
         df.reset_index(drop=True, inplace=True)
-
         APP_STATE_set("last_twelve_error", None)
         return df
-
     except Exception as exc:
-        APP_STATE_set("last_twelve_error", f"تعذّر الاتصال بـ Twelve Data: {exc}")
+        APP_STATE_set("last_twelve_error", f"تعذّر الاتصال: {exc}")
         return pd.DataFrame()
 
 
 def keep_closed_candles(df, interval_hours=1):
     if df is None or df.empty or "datetime" not in df.columns:
         return pd.DataFrame()
-
     df = df.copy()
     now_utc = datetime.now(timezone.utc)
     candle_delta = timedelta(hours=interval_hours)
-
     mask = df["datetime"] + candle_delta <= pd.Timestamp(now_utc)
     closed = df.loc[mask].copy()
     return closed.reset_index(drop=True)
@@ -537,63 +348,32 @@ def fetch_training_data_twelve(api_key):
     return fetch_twelve_series(api_key, symbol="XAU/USD", interval="1h", outputsize=TRAINING_OUTPUT_SIZE)
 
 
-# ============================================================
-# مصدر بيانات مجاني وسريع — للتدريب فقط
-# (Yahoo Finance — لا يحتاج مفتاح API إطلاقًا)
-# Twelve Data يبقى المصدر الوحيد لتحليل السوق الحي وفتح/مراقبة
-# الصفقات كما كان تمامًا — هذا المصدر الجديد لا يُستخدم إلا لتغذية
-# تدريب الشبكة العصبية بسرعة وبدون أي تكلفة أو حد طلبات.
-# ============================================================
-
 def fetch_free_training_series(symbol="XAUUSD=X", interval="60m", range_="730d"):
     try:
         url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
-
-        response = requests.get(
-            url,
-            params={"interval": interval, "range": range_},
-            headers={"User-Agent": "Mozilla/5.0"},
-            timeout=15,
-        )
+        response = requests.get(url, params={"interval": interval, "range": range_}, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
         response.raise_for_status()
         payload = response.json()
-
         result_list = (payload.get("chart") or {}).get("result") or []
         if not result_list:
             return pd.DataFrame()
-
         result = result_list[0]
         timestamps = result.get("timestamp") or []
         quote = ((result.get("indicators") or {}).get("quote") or [{}])[0]
-
         opens = quote.get("open") or []
         highs = quote.get("high") or []
         lows = quote.get("low") or []
         closes = quote.get("close") or []
-
         if not timestamps or not closes:
             return pd.DataFrame()
-
-        df = pd.DataFrame(
-            {
-                "datetime": pd.to_datetime(timestamps, unit="s", utc=True),
-                "open": opens,
-                "high": highs,
-                "low": lows,
-                "close": closes,
-            }
-        )
-
+        df = pd.DataFrame({"datetime": pd.to_datetime(timestamps, unit="s", utc=True), "open": opens, "high": highs, "low": lows, "close": closes})
         for col in ("open", "high", "low", "close"):
             df[col] = pd.to_numeric(df[col], errors="coerce")
-
         df.dropna(subset=["datetime", "open", "high", "low", "close"], inplace=True)
         df.sort_values("datetime", inplace=True)
         df.drop_duplicates(subset=["datetime"], keep="last", inplace=True)
         df.reset_index(drop=True, inplace=True)
-
         return df
-
     except Exception:
         return pd.DataFrame()
 
@@ -603,48 +383,28 @@ def fetch_training_data_free():
 
 
 # ============================================================
-# Indicators
+# Indicators & Model
 # ============================================================
 
 def apply_deep_indicators(df):
     if df is None or df.empty:
         return pd.DataFrame()
-    # تم تخفيض الحد الأدنى (كان 210) حتى لا ننتظر دفعة بيانات ضخمة قبل
-    # أي تدريب أو إشارة — أي كمية بيانات كافية لحساب ATR/RSI (14) وEMA
-    # تُقبل الآن، والنموذج يتحسن تدريجيًا بعد ذلك من كل صفقة تُراقَب.
     if len(df) < 60:
         return pd.DataFrame()
-
     df = df.copy()
-
-    tr = pd.concat(
-        [
-            df["high"] - df["low"],
-            (df["high"] - df["close"].shift()).abs(),
-            (df["low"] - df["close"].shift()).abs(),
-        ],
-        axis=1,
-    ).max(axis=1)
-
+    tr = pd.concat([df["high"] - df["low"], (df["high"] - df["close"].shift()).abs(), (df["low"] - df["close"].shift()).abs()], axis=1).max(axis=1)
     df["atr"] = tr.rolling(14).mean()
     df["ema_50"] = df["close"].ewm(span=50, adjust=False).mean()
     df["ema_200"] = df["close"].ewm(span=200, adjust=False).mean()
-
     delta = df["close"].diff()
     gain = delta.where(delta > 0, 0.0).rolling(14).mean()
     loss = -delta.where(delta < 0, 0.0).rolling(14).mean()
     rs = gain / (loss + 1e-6)
     df["rsi"] = 100 - (100 / (1 + rs))
-
     df.replace([np.inf, -np.inf], np.nan, inplace=True)
     df.dropna(subset=FEATURES, inplace=True)
-
     return df.reset_index(drop=True)
 
-
-# ============================================================
-# Model Validation
-# ============================================================
 
 def model_is_ready(model_obj, scaler_obj):
     if model_obj is None or scaler_obj is None:
@@ -653,7 +413,6 @@ def model_is_ready(model_obj, scaler_obj):
         return False
     if not hasattr(model_obj, "classes_"):
         return False
-
     try:
         if len(model_obj.classes_) < 2:
             return False
@@ -661,86 +420,50 @@ def model_is_ready(model_obj, scaler_obj):
             return False
     except Exception:
         return False
-
     return True
 
 
 # ============================================================
-# Background Training  (تم رفع سعة الشبكة قليلاً "لأقصى جهد" مع
-# إبقاء early_stopping لمنع الإفراط في التخصيص)
+# Background Training
 # ============================================================
 
 def _background_train_and_save(api_key):
     try:
-        # المصدر المجاني والسريع أولاً — هو المصدر المخصص للتدريب فقط.
         df_train = fetch_training_data_free()
-
-        # خطة احتياطية فقط إن فشل المصدر المجاني (نادرًا) — تبقى
-        # Twelve Data متاحة كبديل ولا شيء يُحذف من القدرة الأصلية.
         if df_train.empty and api_key:
             df_train = fetch_training_data_twelve(api_key)
-
         df_train = keep_closed_candles(df_train, interval_hours=1)
         df_train = apply_deep_indicators(df_train)
-
-        # تم تخفيض حد بيانات التدريب (كان 250) — أي دفعة بيانات صغيرة
-        # كافية لإنتاج أول نموذج فعلي بدل انتظار دفعة ضخمة.
         if df_train.empty or len(df_train) < 60:
             return
-
         future_close = df_train["close"].shift(-1)
         valid_mask = future_close.notna()
         train_df = df_train.loc[valid_mask].copy()
-
         if len(train_df) < 30:
             return
-
         X = train_df[FEATURES].astype(float).values
         y = np.where(train_df["close"].shift(-1) > train_df["close"], 1, 0)
-
         X = X[:-1]
         y = y[:-1]
-
         if len(X) < 30 or len(y) < 30:
             return
         if len(np.unique(y)) < 2:
             return
-
         new_scaler = StandardScaler()
         X_scaled = new_scaler.fit_transform(X)
-
-        new_model = MLPClassifier(
-            hidden_layer_sizes=(128, 64, 32),
-            activation="relu",
-            solver="adam",
-            alpha=0.0001,
-            learning_rate_init=0.001,
-            max_iter=2000,
-            early_stopping=True,
-            validation_fraction=0.15,
-            n_iter_no_change=40,
-            random_state=42,
-        )
-
+        new_model = MLPClassifier(hidden_layer_sizes=(128, 64, 32), activation="relu", solver="adam", alpha=0.0001, learning_rate_init=0.001, max_iter=2000, early_stopping=True, validation_fraction=0.15, n_iter_no_change=40, random_state=42)
         new_model.fit(X_scaled, y)
-
         if not model_is_ready(new_model, new_scaler):
             return
-
         model_tmp = MODEL_FILE + ".tmp"
         scaler_tmp = SCALER_FILE + ".tmp"
-
         joblib.dump(new_model, model_tmp)
         joblib.dump(new_scaler, scaler_tmp)
-
         os.replace(model_tmp, MODEL_FILE)
         os.replace(scaler_tmp, SCALER_FILE)
-
         APP_STATE_set("last_train_time", datetime.now(timezone.utc).isoformat())
-
     except Exception:
         pass
-
     finally:
         if os.path.exists(TRAINING_LOCK_FILE):
             try:
@@ -761,20 +484,9 @@ def clean_stale_training_lock():
 
 
 def maybe_spawn_training(api_key, force=False):
-    """
-    يبدأ تدريبًا في الخلفية إذا: لا يوجد نموذج، أو النموذج قديم
-    (أعيد تدريبه دوريًا كل RETRAIN_INTERVAL_SECONDS لتحسينه باستمرار)،
-    أو force=True. لا يفعل شيئًا إن كان هناك تدريب جارٍ بالفعل.
-
-    ملاحظة: التدريب أصبح يعتمد على المصدر المجاني (Yahoo) فلا يشترط
-    وجود مفتاح Twelve Data لبدء التدريب — api_key يبقى فقط كخطة
-    احتياطية اختيارية داخل _background_train_and_save.
-    """
     if os.path.exists(TRAINING_LOCK_FILE):
         return
-
     needs_training = force or not (os.path.exists(MODEL_FILE) and os.path.exists(SCALER_FILE))
-
     if not needs_training:
         try:
             age = time.time() - os.path.getmtime(MODEL_FILE)
@@ -782,22 +494,13 @@ def maybe_spawn_training(api_key, force=False):
                 needs_training = True
         except OSError:
             needs_training = True
-
     if not needs_training:
         return
-
     try:
         with open(TRAINING_LOCK_FILE, "x", encoding="utf-8") as file:
             file.write(datetime.now(timezone.utc).isoformat())
-
-        thread = threading.Thread(
-            target=_background_train_and_save,
-            args=(api_key,),
-            daemon=True,
-            name="bg_trainer",
-        )
+        thread = threading.Thread(target=_background_train_and_save, args=(api_key,), daemon=True, name="bg_trainer")
         thread.start()
-
     except FileExistsError:
         pass
     except Exception:
@@ -820,57 +523,32 @@ clean_stale_training_lock()
 
 
 # ============================================================
-# Experience Layer
+# Experience Layer & Groq
 # ============================================================
 
 def get_experience_adjustment(direction, ai_conf):
     total = get_total_trades_count()
-
     if total < 20:
         return {"available": False, "confidence": ai_conf, "win_rate": None, "sample": total}
-
     normalized_direction = "BUY" if "BUY" in str(direction) else "SELL"
-
     conn = get_db_connection()
     try:
-        df = pd.read_sql(
-            "SELECT direction, win FROM trades WHERE direction LIKE ?",
-            conn,
-            params=(f"%{normalized_direction}%",),
-        )
+        df = pd.read_sql("SELECT direction, win FROM trades WHERE direction LIKE ?", conn, params=(f"%{normalized_direction}%",))
     finally:
         conn.close()
-
     if len(df) < 10:
         return {"available": False, "confidence": ai_conf, "win_rate": None, "sample": len(df)}
-
     wins = float(df["win"].sum())
     n = len(df)
-
-    # Bayesian smoothing: prior 50%, strength 10
     smoothed_rate = (wins + 5.0) / (n + 10.0) * 100
-
-    # لا نجعل الخبرة تتغلب بالكامل على AI
     adjusted = ai_conf * 0.70 + smoothed_rate * 0.30
+    return {"available": True, "confidence": round(float(adjusted), 1), "win_rate": round(smoothed_rate, 1), "sample": n}
 
-    return {
-        "available": True,
-        "confidence": round(float(adjusted), 1),
-        "win_rate": round(smoothed_rate, 1),
-        "sample": n,
-    }
-
-
-# ============================================================
-# Groq Review  (تمت إعادة صياغة الطلب ليكون "محلل متوازن" بدل
-# "محافظ" بشكل متعمد، بما يتماشى مع تخفيف الصرامة العامة)
-# ============================================================
 
 def get_groq_review(direction, last_row, ai_conf, api_key, model_name):
     if not api_key:
         APP_STATE_set("last_groq_error", "لم يتم إدخال مفتاح Groq API.")
         return None
-
     try:
         prompt = (
             "أنت محلل فني مساعد لصفقة محتملة على XAU/USD.\n"
@@ -886,109 +564,68 @@ def get_groq_review(direction, last_row, ai_conf, api_key, model_name):
             "لا تفترض أن نموذج AI صحيح، لكن أيضًا لا تكن متشددًا "
             "بلا داعٍ — إن كانت المؤشرات معقولة الدعم للاتجاه فوافق.\n"
             "\n"
-            "يجب أن يكون الرد JSON فقط بهذا الشكل:\n"
-            '{"agree": true, "confidence": 0, "reason": "..."}'
+            'يجب أن يكون الرد JSON فقط بهذا الشكل: {"agree": true, "confidence": 0, "reason": "..."}'
         )
-
-        response = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={
-                "model": model_name,
-                "temperature": 0,
-                "max_completion_tokens": 2000,
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": "أنت محلل فني متوازن. أعد JSON صالح فقط.",
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                "response_format": {"type": "json_object"},
-            },
-            timeout=20,
-        )
-
+        response = requests.post("https://api.groq.com/openai/v1/chat/completions", headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, json={"model": model_name, "temperature": 0, "max_completion_tokens": 2000, "messages": [{"role": "system", "content": "أنت محلل فني متوازن. أعد JSON صالح فقط."}, {"role": "user", "content": prompt}], "response_format": {"type": "json_object"}}, timeout=20)
         if not response.ok:
-            APP_STATE_set(
-                "last_groq_error",
-                f"HTTP {response.status_code} من Groq: {response.text[:400]}",
-            )
+            APP_STATE_set("last_groq_error", f"HTTP {response.status_code} من Groq: {response.text[:400]}")
             return None
-
         data = response.json()
-
         choices = data.get("choices", [])
         if not choices:
             APP_STATE_set("last_groq_error", f"رد Groq بلا choices: {json.dumps(data)[:400]}")
             return None
-
         message = choices[0].get("message", {})
         text = message.get("content", "")
         if not text:
-            APP_STATE_set("last_groq_error", "رد Groq وصل لكن بلا محتوى نصي (content فارغ).")
+            APP_STATE_set("last_groq_error", "رد Groq وصل لكن بلا محتوى نصي.")
             return None
-
         cleaned = str(text).replace("```json", "").replace("```", "").strip()
-
         try:
             parsed = json.loads(cleaned)
         except Exception as parse_exc:
-            APP_STATE_set(
-                "last_groq_error",
-                f"تعذّر تحليل رد Groq كـ JSON: {parse_exc} — النص: {cleaned[:400]}",
-            )
+            APP_STATE_set("last_groq_error", f"تعذّر تحليل رد Groq كـ JSON: {parse_exc} — النص: {cleaned[:400]}")
             return None
-
         agree = bool(parsed.get("agree", False))
         confidence = float(parsed.get("confidence", 0))
         confidence = max(0, min(100, confidence))
         reason = str(parsed.get("reason", ""))
-
         APP_STATE_set("last_groq_error", None)
         return {"agree": agree, "confidence": confidence, "reason": reason}
-
     except Exception as exc:
         APP_STATE_set("last_groq_error", f"استثناء أثناء الاتصال بـ Groq: {exc}")
         return None
 
 
 # ============================================================
-# ICT — كل الدوال محفوظة كما هي بالكامل
+# ICT Engine (كل الدوال كما هي)
 # ============================================================
 
 def find_swing_points(df, lookback=3):
     if df is None or df.empty:
         return [], []
-
     highs = df["high"].astype(float).values
     lows = df["low"].astype(float).values
     n = len(df)
-
     swing_highs = []
     swing_lows = []
-
     for i in range(lookback, n - lookback):
         high_window = highs[i - lookback:i + lookback + 1]
         low_window = lows[i - lookback:i + lookback + 1]
-
         if highs[i] == np.max(high_window):
             swing_highs.append((i, float(highs[i])))
         if lows[i] == np.min(low_window):
             swing_lows.append((i, float(lows[i])))
-
     return swing_highs, swing_lows
 
 
 def analyze_market_structure(swing_highs, swing_lows):
     events = [(i, "high", p) for i, p in swing_highs] + [(i, "low", p) for i, p in swing_lows]
     events.sort(key=lambda x: x[0])
-
     structure_breaks = []
     trend = None
     last_high = None
     last_low = None
-
     for i, kind, price in events:
         if kind == "high":
             if last_high is not None and price > last_high:
@@ -1002,7 +639,6 @@ def analyze_market_structure(swing_highs, swing_lows):
                 structure_breaks.append({"type": label, "direction": "BEARISH", "price": round(price, 2)})
                 trend = "bearish"
             last_low = price
-
     current_bias = structure_breaks[-1]["direction"] if structure_breaks else "NEUTRAL"
     return current_bias, structure_breaks[-8:]
 
@@ -1010,141 +646,94 @@ def analyze_market_structure(swing_highs, swing_lows):
 def detect_order_blocks(df, lookback=40, displacement_atr_mult=1.2):
     if df is None or df.empty or "atr" not in df.columns or len(df) < 5:
         return None, None
-
     recent = df.iloc[-lookback:].reset_index(drop=True)
     bullish_ob = None
     bearish_ob = None
-
     for i in range(1, len(recent)):
         atr_value = float(recent["atr"].iloc[i])
         if not np.isfinite(atr_value) or atr_value <= 0:
             continue
-
         body = recent["close"].iloc[i] - recent["open"].iloc[i]
         is_displacement = abs(body) > displacement_atr_mult * atr_value
         previous = recent.iloc[i - 1]
-
         if is_displacement and body > 0 and previous["close"] < previous["open"]:
-            bullish_ob = {
-                "top": round(float(previous["open"]), 2),
-                "bottom": round(float(previous["low"]), 2),
-                "bias": "BULLISH",
-                "strength": round(min((abs(body) / atr_value) * 100, 999), 1),
-            }
+            bullish_ob = {"top": round(float(previous["open"]), 2), "bottom": round(float(previous["low"]), 2), "bias": "BULLISH", "strength": round(min((abs(body) / atr_value) * 100, 999), 1)}
         elif is_displacement and body < 0 and previous["close"] > previous["open"]:
-            bearish_ob = {
-                "top": round(float(previous["high"]), 2),
-                "bottom": round(float(previous["open"]), 2),
-                "bias": "BEARISH",
-                "strength": round(min((abs(body) / atr_value) * 100, 999), 1),
-            }
-
+            bearish_ob = {"top": round(float(previous["high"]), 2), "bottom": round(float(previous["open"]), 2), "bias": "BEARISH", "strength": round(min((abs(body) / atr_value) * 100, 999), 1)}
     return bullish_ob, bearish_ob
 
 
 def detect_fvg(df, lookback=60):
     if df is None or df.empty or len(df) < 3:
         return None, None
-
     recent = df.iloc[-lookback:].reset_index(drop=True)
     bullish_fvg = None
     bearish_fvg = None
-
     for i in range(2, len(recent)):
         c1 = recent.iloc[i - 2]
         c3 = recent.iloc[i]
-
         if c1["high"] < c3["low"]:
             bullish_fvg = {"top": round(float(c3["low"]), 2), "bottom": round(float(c1["high"]), 2), "bias": "BULLISH"}
         if c1["low"] > c3["high"]:
             bearish_fvg = {"top": round(float(c1["low"]), 2), "bottom": round(float(c3["high"]), 2), "bias": "BEARISH"}
-
     return bullish_fvg, bearish_fvg
 
 
 def detect_liquidity_and_manipulation(df, swing_highs, swing_lows):
     if not swing_highs or not swing_lows or df is None or df.empty:
         return None, None, False, ""
-
     recent_highs = swing_highs[-5:]
     recent_lows = swing_lows[-5:]
-
     bsl_price = max(p for _, p in recent_highs)
     ssl_price = min(p for _, p in recent_lows)
-
     last = df.iloc[-1]
     manipulation = False
     note = ""
-
     if last["high"] > bsl_price and last["close"] < bsl_price:
         manipulation = True
         note = "BSL swept — احتمال انعكاس."
     elif last["low"] < ssl_price and last["close"] > ssl_price:
         manipulation = True
         note = "SSL swept — احتمال انعكاس."
-
     return round(bsl_price, 2), round(ssl_price, 2), manipulation, note
 
 
 def session_analyzer(df, session_len=24):
     if df is None or df.empty or len(df) < 5:
         return None
-
     window = df.iloc[-min(session_len, len(df)):]
     session_high = float(window["high"].max())
     session_low = float(window["low"].min())
     session_range = session_high - session_low
     net_change = float(window["close"].iloc[-1]) - float(window["open"].iloc[0])
-
     if net_change < 0:
         bias = "BEARISH"
     elif net_change > 0:
         bias = "BULLISH"
     else:
         bias = "NEUTRAL"
-
     main_score = round(min(abs(net_change) / (session_range + 1e-6) * 100, 100), 1)
-
-    return {
-        "bias": bias,
-        "main_score": main_score,
-        "range": round(session_range, 2),
-        "high": round(session_high, 2),
-        "low": round(session_low, 2),
-    }
+    return {"bias": bias, "main_score": main_score, "range": round(session_range, 2), "high": round(session_high, 2), "low": round(session_low, 2)}
 
 
 def compute_asian_session_levels(df):
     if df is None or df.empty or len(df) < 24:
         return None
-
     window = df.iloc[-24:]
-    return {
-        "asian_high": round(float(window["high"].max()), 2),
-        "asian_low": round(float(window["low"].min()), 2),
-    }
+    return {"asian_high": round(float(window["high"].max()), 2), "asian_low": round(float(window["low"].min()), 2)}
 
 
 def compute_fibonacci_extension(swing_low, swing_high, direction):
     diff = swing_high - swing_low
     if diff <= 0:
         return {}
-
-    ratios = [
-        (1.0, "100% EXTENSION"),
-        (1.27, "127% EXTENSION"),
-        (1.618, "161.8% EXTENSION"),
-        (2.0, "200% EXTENSION"),
-        (2.618, "261.8% EXTENSION"),
-    ]
-
+    ratios = [(1.0, "100% EXTENSION"), (1.27, "127% EXTENSION"), (1.618, "161.8% EXTENSION"), (2.0, "200% EXTENSION"), (2.618, "261.8% EXTENSION")]
     levels = {}
     for ratio, label in ratios:
         if direction == "BULLISH":
             levels[label] = round(swing_high + diff * (ratio - 1), 2)
         else:
             levels[label] = round(swing_low - diff * (ratio - 1), 2)
-
     levels["EQUILIBRIUM TARGET"] = round((swing_high + swing_low) / 2, 2)
     return levels
 
@@ -1153,36 +742,25 @@ def compute_ote_zone(swing_low, swing_high, direction, current_price):
     diff = swing_high - swing_low
     if diff <= 0:
         return None
-
     if direction == "BULLISH":
         top = swing_high - diff * 0.618
         bottom = swing_high - diff * 0.79
     else:
         top = swing_low + diff * 0.79
         bottom = swing_low + diff * 0.618
-
     lo = min(top, bottom)
     hi = max(top, bottom)
-
-    return {
-        "top": round(hi, 2),
-        "bottom": round(lo, 2),
-        "inside": lo <= current_price <= hi,
-        "direction": direction,
-    }
+    return {"top": round(hi, 2), "bottom": round(lo, 2), "inside": lo <= current_price <= hi, "direction": direction}
 
 
 def compute_volatility_risk(df):
     if df is None or df.empty or "atr" not in df.columns:
         return "N/A", 0, 0.0
-
     atr_series = df["atr"].dropna()
     if atr_series.empty:
         return "N/A", 0, 0.0
-
     current_atr = float(atr_series.iloc[-1])
     percentile = (atr_series < current_atr).mean() * 100
-
     if percentile >= 90:
         label, score = "CRISIS", 90
     elif percentile >= 65:
@@ -1191,36 +769,29 @@ def compute_volatility_risk(df):
         label, score = "MEDIUM", 50
     else:
         label, score = "LOW", 25
-
     return label, score, round(current_atr, 2)
 
 
 def detect_recent_displacement(df, lookback=10, atr_mult=1.3):
     if df is None or df.empty:
         return []
-
     recent = df.iloc[-lookback:]
     results = []
-
     for _, row in recent.iterrows():
         atr_value = row.get("atr", np.nan)
         if pd.isna(atr_value) or atr_value <= 0:
             continue
-
         body = row["close"] - row["open"]
         candle_range = row["high"] - row["low"]
         body_pct = round(abs(body) / (candle_range + 1e-6) * 100, 1)
-
         if abs(body) > atr_mult * atr_value:
             results.append({"bias": "BULLISH" if body > 0 else "BEARISH", "body_pct": body_pct})
-
     return results[-3:]
 
 
 def run_ict_engine(df_processed, swing_lookback=3, ob_mult=1.2):
     if df_processed is None or df_processed.empty or len(df_processed) < max(30, swing_lookback * 6):
         return None
-
     swing_highs, swing_lows = find_swing_points(df_processed, lookback=swing_lookback)
     bias, structure_breaks = analyze_market_structure(swing_highs, swing_lows)
     bull_ob, bear_ob = detect_order_blocks(df_processed, displacement_atr_mult=ob_mult)
@@ -1231,30 +802,22 @@ def run_ict_engine(df_processed, swing_lookback=3, ob_mult=1.2):
     vol_label, vol_score, atr_value = compute_volatility_risk(df_processed)
     displacements = detect_recent_displacement(df_processed)
     current_price = round(float(df_processed["close"].iloc[-1]), 2)
-
     fib_levels = {}
     ote = None
-
     if swing_highs and swing_lows:
         last_low_idx, last_low_price = swing_lows[-1]
         last_high_idx, last_high_price = swing_highs[-1]
-
         leg_direction = "BULLISH" if last_low_idx > last_high_idx else "BEARISH"
         lo_price = min(last_low_price, last_high_price)
         hi_price = max(last_low_price, last_high_price)
-
         fib_levels = compute_fibonacci_extension(lo_price, hi_price, leg_direction)
         ote = compute_ote_zone(lo_price, hi_price, leg_direction, current_price)
-
     matching_breaks = [brk for brk in structure_breaks if brk["direction"] == bias]
-
     if bias != "NEUTRAL":
         structure_score = min(100, 25 + len(matching_breaks) * 25)
     else:
         structure_score = 50
-
     liquidity_score = 80 if manipulation else 40
-
     if bias == "BULLISH":
         order_block_score = bull_ob["strength"] if bull_ob else 30
         fvg_score = 70 if bull_fvg else 35
@@ -1264,73 +827,23 @@ def run_ict_engine(df_processed, swing_lookback=3, ob_mult=1.2):
     else:
         order_block_score = 40
         fvg_score = 40
-
     order_block_score = min(100, order_block_score)
-
     confidence = round(np.mean([structure_score, liquidity_score, order_block_score, fvg_score]), 1)
-
-    return {
-        "bias": bias,
-        "structure_breaks": structure_breaks,
-        "bull_ob": bull_ob,
-        "bear_ob": bear_ob,
-        "bull_fvg": bull_fvg,
-        "bear_fvg": bear_fvg,
-        "bsl": bsl,
-        "ssl": ssl,
-        "manipulation": manipulation,
-        "manip_note": manip_note,
-        "session": session_info,
-        "asian_levels": asian_levels,
-        "vol_label": vol_label,
-        "vol_score": vol_score,
-        "atr": atr_value,
-        "displacements": displacements,
-        "fib_levels": fib_levels,
-        "ote": ote,
-        "current_price": current_price,
-        "scores": {
-            "structure": round(structure_score, 1),
-            "liquidity": round(liquidity_score, 1),
-            "order_block": round(order_block_score, 1),
-            "fvg": round(fvg_score, 1),
-        },
-        "confidence": confidence,
-    }
+    return {"bias": bias, "structure_breaks": structure_breaks, "bull_ob": bull_ob, "bear_ob": bear_ob, "bull_fvg": bull_fvg, "bear_fvg": bear_fvg, "bsl": bsl, "ssl": ssl, "manipulation": manipulation, "manip_note": manip_note, "session": session_info, "asian_levels": asian_levels, "vol_label": vol_label, "vol_score": vol_score, "atr": atr_value, "displacements": displacements, "fib_levels": fib_levels, "ote": ote, "current_price": current_price, "scores": {"structure": round(structure_score, 1), "liquidity": round(liquidity_score, 1), "order_block": round(order_block_score, 1), "fvg": round(fvg_score, 1)}, "confidence": confidence}
 
 
 # ============================================================
-# AI Scanner
-# محدّث: تم إضافة "تصفية الترند" متعدد الأطر الزمنية بناءً على طلبك:
-# 1. نأخذ اتجاه الترند من H1 (المتوسطات EMA50/EMA200)
-# 2. الـ Setup يأتي من M15 (ICT Engine)
-# 3. التأكيد الأخير يأتي من M5 (ICT Engine)
-# 
-# القاعدة الأساسية المنفذة الآن:
-# إذا كان الترند الهابط، نبحث فقط عن فرص بيع، وإذا كان الترند الصاعد، نبحث فقط عن فرص شراء.
+# AI Scanner (تم تعديله ليتوافق مع "الترند صديقك")
 # ============================================================
 
 def ai_scanner(df_h1_processed, df_m15_processed, df_m5_processed, model, scaler, ict_data_m15, ict_data_m5, cfg):
     result = {
-        "trade_exists": False,
-        "direction": None,
-        "ai_conf_before_groq": 0.0,
-        "experience_conf": 0.0,
-        "experience_available": False,
-        "experience_win_rate": None,
-        "experience_sample": 0,
-        "ict_confidence": None,
-        "ict_bias": None,
-        "h1_trend": None,
-        "m15_bias": None,
-        "m5_bias": None,
-        "groq_called": False,
-        "groq_available": False,
-        "groq_agree": None,
-        "groq_conf": None,
-        "groq_reason": "",
-        "final_confidence": 0.0,
-        "status": "",
+        "trade_exists": False, "direction": None, "ai_conf_before_groq": 0.0,
+        "experience_conf": 0.0, "experience_available": False, "experience_win_rate": None,
+        "experience_sample": 0, "ict_confidence": None, "ict_bias": None,
+        "h1_trend": None, "m15_bias": None, "m5_bias": None,
+        "groq_called": False, "groq_available": False, "groq_agree": None,
+        "groq_conf": None, "groq_reason": "", "final_confidence": 0.0, "status": "",
     }
 
     twelve_key_local = cfg["twelve_key"]
@@ -1357,15 +870,11 @@ def ai_scanner(df_h1_processed, df_m15_processed, df_m5_processed, model, scaler
         result["trade_exists"] = True
         result["direction"] = active["direction"]
         result["ai_conf_before_groq"] = float(active.get("ai_conf", 0) or 0)
-
         groq_conf = active.get("groq_conf", None)
         if pd.notna(groq_conf):
             result["groq_conf"] = float(groq_conf)
-
         result["groq_reason"] = str(active.get("groq_note", "") or "")
-        result["final_confidence"] = (
-            result["groq_conf"] if result["groq_conf"] is not None else result["ai_conf_before_groq"]
-        )
+        result["final_confidence"] = result["groq_conf"] if result["groq_conf"] is not None else result["ai_conf_before_groq"]
         result["status"] = "الذكاء الاصطناعي يدير صفقة نشطة حالياً."
         return result["status"], result
 
@@ -1383,32 +892,26 @@ def ai_scanner(df_h1_processed, df_m15_processed, df_m5_processed, model, scaler
 
     try:
         feature_values = last[FEATURES].astype(float).values.reshape(1, -1)
-
         if not np.isfinite(feature_values).all():
             result["status"] = "لا توجد صفقة: بيانات المؤشرات غير صالحة."
             return result["status"], result
-
         x_input = scaler.transform(feature_values)
         probabilities = model.predict_proba(x_input)[0]
         classes = np.asarray(model.classes_)
         best_index = int(np.argmax(probabilities))
         pred = int(classes[best_index])
         ai_conf = float(probabilities[best_index] * 100)
-
     except Exception as exc:
         result["status"] = f"تعذر تنفيذ تنبؤ الشبكة العصبية: {exc}"
         return result["status"], result
 
     result["ai_conf_before_groq"] = ai_conf
-
     direction = "BUY 🟢" if pred == 1 else "SELL 🔴"
     result["direction"] = direction
 
     # ============================================================
-    # تعديل جديد: فلاتر متعددة الأطر الزمنية (H1, M15, M5)
-    # القاعدة المنفذة (بدون أي تغيير/حذف لأي دالة أخرى):
-    # 1. الترند من فريم الساعة H1.
-    # 2. الترند الهابط => نبحث عن فرص بيع فقط؛ والترند الصاعد => نبحث عن فرص شراء فقط.
+    # تطبيق مبدأ "الترند صديقك" (Trend is your friend)
+    # (لا يوجد حظر! نعيد توجيه الاتجاه ليطابق الترند ونبحث عن تأكيد)
     # ============================================================
 
     # 1. تحديد الترند من H1
@@ -1416,32 +919,37 @@ def ai_scanner(df_h1_processed, df_m15_processed, df_m5_processed, model, scaler
     h1_trend = "BULLISH" if h1_last['ema_50'] > h1_last['ema_200'] else "BEARISH"
     result['h1_trend'] = h1_trend
 
-    # 2. منع إشارة الشراء في الترند الهابط (نبحث فقط عن فرص بيع)
+    # 2. إذا كان الترند هابطاً، نتجاهل إشارة الشراء من النموذج ونتجه للبيع
     if h1_trend == "BEARISH" and pred == 1:
-        result["status"] = "❌ الترند على فريم الساعة هابط، لا نبحث سوى عن فرص بيع. تم إلغاء إشارة الشراء."
-        return result["status"], result
+        direction = "SELL 🔴"
+        pred = 0  # نعدل الاتجاه المقترح ليصبح بيعاً
+        result["direction"] = direction
+        result["status"] = "ترند هابط: تم توجيه البحث نحو فرص البيع فقط (تجاهلنا إشارة الشراء)."
 
-    # 3. منع إشارة البيع في الترند الصاعد (نبحث فقط عن فرص شراء)
-    if h1_trend == "BULLISH" and pred == 0:
-        result["status"] = "❌ الترند على فريم الساعة صاعد، لا نبحث سوى عن فرص شراء. تم إلغاء إشارة البيع."
-        return result["status"], result
+    # 3. إذا كان الترند صاعداً، نتجاهل إشارة البيع من النموذج ونتجه للشراء
+    elif h1_trend == "BULLISH" and pred == 0:
+        direction = "BUY 🟢"
+        pred = 1  # نعدل الاتجاه المقترح ليصبح شراءً
+        result["direction"] = direction
+        result["status"] = "ترند صاعد: تم توجيه البحث نحو فرص الشراء فقط (تجاهلنا إشارة البيع)."
 
-    # 4. التأكد من توافق الـ Setup على M15 مع الاتجاه
+    # 4. ندرس المؤشرات (M15/M5) لتأكيد الاتجاه الجديد
     m15_bias = ict_data_m15.get("bias") if ict_data_m15 else "NEUTRAL"
     result['m15_bias'] = m15_bias
-    if m15_bias != "NEUTRAL" and m15_bias != h1_trend:
-        result["status"] = f"❌ الـ Setup على فريم الـ 15 دقيقة ({m15_bias}) معاكس لترند الساعة ({h1_trend})، تم الإلغاء للبحث عن التأكيدات الصحيحة."
-        return result["status"], result
 
-    # 5. التأكد من توافق التأكيد الأخير على M5 مع الاتجاه
     m5_bias = ict_data_m5.get("bias") if ict_data_m5 else "NEUTRAL"
     result['m5_bias'] = m5_bias
+
+    # إذا كانت المؤشرات (M15 و M5) توافق الترند، فهذا تأكيد قوي.
+    # وإذا عاكست الترند، نخفض الثقة جداً (بدلاً من الحظر).
+    confirmation_score = 1.0
+    if m15_bias != "NEUTRAL" and m15_bias != h1_trend:
+        confirmation_score -= 0.35 # خصم قوي لعدم توافق M15
     if m5_bias != "NEUTRAL" and m5_bias != h1_trend:
-        result["status"] = f"❌ تأكيد فريم الـ 5 دقائق ({m5_bias}) غير متوافق مع ترند الساعة ({h1_trend})، تم الإلغاء."
-        return result["status"], result
+        confirmation_score -= 0.35 # خصم قوي لعدم توافق M5
 
     # ============================================================
-    # نهاية التعديل الجديد
+    # نهاية تعديل "الترند صديقك"
     # ============================================================
 
     # ------------------------------------------------------
@@ -1452,50 +960,41 @@ def ai_scanner(df_h1_processed, df_m15_processed, df_m5_processed, model, scaler
     result["experience_conf"] = experience["confidence"]
     result["experience_win_rate"] = experience["win_rate"]
     result["experience_sample"] = experience["sample"]
-
     working_conf = experience["confidence"] if experience["available"] else ai_conf
 
     # ------------------------------------------------------
-    # ICT Engine كعامل تعديل ناعم (بدل تجاهله بالكامل)
-    # إن كان اتجاه ICT متوافقًا مع اتجاه AI نرفع الثقة قليلاً،
-    # وإن كان معاكسًا نخفضها قليلاً — بوزن محدود (15%) حتى لا
-    # يطغى على النموذج العصبي.
+    # ICT Engine كعامل تعديل
     # ------------------------------------------------------
     if ict_data_m15 is not None:
         ict_bias = ict_data_m15.get("bias")
         ict_conf = ict_data_m15.get("confidence", 50.0)
-
         result["ict_bias"] = ict_bias
         result["ict_confidence"] = ict_conf
-
         ai_direction_bias = "BULLISH" if pred == 1 else "BEARISH"
-
         if ict_bias == ai_direction_bias:
             ict_component = ict_conf
         elif ict_bias == "NEUTRAL":
             ict_component = 50.0
         else:
             ict_component = 100.0 - ict_conf
-
         working_conf = working_conf * 0.85 + ict_component * 0.15
 
+    # تطبيق خصم عدم توافق M15/M5 مع الترند
+    working_conf = working_conf * confirmation_score
+
     # ------------------------------------------------------
-    # Groq — رأي ثانٍ اختياري وناعم
+    # Groq
     # ------------------------------------------------------
     groq_result = None
-
     if use_groq_local:
         result["groq_called"] = True
         groq_result = get_groq_review(direction, last, working_conf, groq_key_local, groq_model_local)
-
         if groq_result is not None:
             result["groq_available"] = True
             result["groq_agree"] = groq_result["agree"]
             result["groq_conf"] = groq_result["confidence"]
             result["groq_reason"] = groq_result["reason"]
-
             if not groq_result["agree"] or groq_result["confidence"] < min_groq_conf_local:
-                # بدل الحظر الكامل: خصم ناعم يتناسب مع درجة عدم موافقة Groq
                 penalty_ratio = 0.35 if not groq_result["agree"] else 0.15
                 blended = working_conf * (1 - penalty_ratio) + groq_result["confidence"] * penalty_ratio
                 result["final_confidence"] = round(blended, 1)
@@ -1503,41 +1002,32 @@ def ai_scanner(df_h1_processed, df_m15_processed, df_m5_processed, model, scaler
                 result["final_confidence"] = round((working_conf + groq_result["confidence"]) / 2, 1)
         else:
             result["groq_available"] = False
-            # عدم استجابة Groq لم يعد يحظر الصفقة، فقط خصم ثقة بسيط تحفّظي
             result["final_confidence"] = round(working_conf * 0.92, 1)
     else:
         result["final_confidence"] = round(working_conf, 1)
 
-    # الشرط الوحيد المتبقي للحظر: الثقة النهائية بعد كل التعديلات
-    # ما زالت أقل من الحد الأدنى الذي يضبطه المستخدم صراحة.
+    # الشرط الوحيد: الثقة النهائية يجب أن تكون أعلى من العتبة.
     if result["final_confidence"] < min_conf_local:
-        result["status"] = (
-            f"🟡 إشارة موجودة لكن الثقة النهائية "
-            f"({result['final_confidence']:.1f}%) أقل من الحد الأدنى "
-            f"({min_conf_local}%) بعد كل التعديلات."
-        )
+        result["status"] = f"🟡 الاتجاه ({direction}) مطابق للترند، لكن لم تكتمل شروط التأكيد (الثقة {result['final_confidence']:.1f}% < {min_conf_local}%)"
         return result["status"], result
 
     # ------------------------------------------------------
-    # منع تكرار الإشارة على نفس الشمعة
+    # منع تكرار الإشارة
     # ------------------------------------------------------
     if signal_bar_time and last_signal_key == signal_bar_time:
         result["status"] = "لا توجد صفقة جديدة: تمت معالجة هذه الشمعة سابقاً."
         return result["status"], result
 
     # ------------------------------------------------------
-    # SL / TP
+    # حساب SL / TP
     # ------------------------------------------------------
     curr = round(float(last["close"]), 2)
     atr_value = float(last["atr"])
-
     if not np.isfinite(atr_value) or atr_value <= 0:
         result["status"] = "لا توجد صفقة: قيمة ATR غير صالحة."
         return result["status"], result
-
     sl_distance = round(atr_value * atr_mult_local, 2)
     tp_distance = round(sl_distance * risk_reward_local, 2)
-
     if pred == 1:
         sl_price = round(curr - sl_distance, 2)
         tp_price = round(curr + tp_distance, 2)
@@ -1552,57 +1042,20 @@ def ai_scanner(df_h1_processed, df_m15_processed, df_m5_processed, model, scaler
     try:
         c = conn.cursor()
         c.execute("DELETE FROM active_trade")
-        c.execute(
-            """
-            INSERT INTO active_trade
-            (id, symbol, direction, entry, sl, tp, time, features, ai_conf, groq_conf, groq_note, signal_bar_time)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                1,
-                "XAU/USD",
-                direction,
-                curr,
-                sl_price,
-                tp_price,
-                datetime.now(timezone.utc).isoformat(),
-                json.dumps({feature: float(last[feature]) for feature in FEATURES}),
-                ai_conf,
-                result["groq_conf"] if result["groq_conf"] is not None else None,
-                result["groq_reason"],
-                signal_bar_time,
-            ),
-        )
+        c.execute("""INSERT INTO active_trade (id, symbol, direction, entry, sl, tp, time, features, ai_conf, groq_conf, groq_note, signal_bar_time) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", (1, "XAU/USD", direction, curr, sl_price, tp_price, datetime.now(timezone.utc).isoformat(), json.dumps({feature: float(last[feature]) for feature in FEATURES}), ai_conf, result["groq_conf"] if result["groq_conf"] is not None else None, result["groq_reason"], signal_bar_time))
         conn.commit()
     finally:
         conn.close()
-
     save_setting("last_signal_key", signal_bar_time)
 
     # ------------------------------------------------------
     # Alert
     # ------------------------------------------------------
     groq_line = f"\nGroq: {result['groq_conf']:.1f}%" if result["groq_available"] else ""
-
-    send_alert(
-        (
-            "🧠 AI Trade Signal\n"
-            f"Direction: {direction}\n"
-            f"Entry: ${curr}\n"
-            f"SL: ${sl_price}\n"
-            f"TP: ${tp_price}\n"
-            f"AI Raw: {ai_conf:.1f}%\n"
-            f"Experience+ICT: {working_conf:.1f}%"
-            f"{groq_line}\n"
-            f"Final Confidence: {result['final_confidence']:.1f}%"
-        )
-    )
+    send_alert((f"🧠 AI Trade Signal\nDirection: {direction}\nEntry: ${curr}\nSL: ${sl_price}\nTP: ${tp_price}\nAI Raw: {ai_conf:.1f}%\nExperience+ICT: {working_conf:.1f}%{groq_line}\nFinal Confidence: {result['final_confidence']:.1f}%"))
 
     result["trade_exists"] = True
-    result["status"] = (
-        f"🟢 تم إطلاق الإشارة ({direction}) — "
-        f"AI: {ai_conf:.1f}% — Final: {result['final_confidence']:.1f}%"
-    )
+    result["status"] = (f"🟢 تم إطلاق الإشارة ({direction}) مطابقة للترند — AI: {ai_conf:.1f}% — Final: {result['final_confidence']:.1f}%")
 
     return result["status"], result
 
@@ -1610,40 +1063,10 @@ def ai_scanner(df_h1_processed, df_m15_processed, df_m5_processed, model, scaler
 # ============================================================
 # محرك الخلفية (Background Engine)
 # ============================================================
-# كل شيء هنا يعمل باستمرار في Thread مستقل عن دورة عرض Streamlit:
-# - جلب البيانات الحية (من 3 فريمات: H1, M15, M5)
-# - حساب كل المؤشرات (indicators)
-# - تشغيل محرك ICT الكامل
-# - تشغيل الشبكة العصبية والمسح (ai_scanner)
-# - إعادة التدريب الدورية
-# - مراقبة الصفقة المفتوحة (كشف الانعكاس + إغلاق عند SL/TP)
-# النتائج تُخزَّن في APP_STATE ليقرأها الجزء الخاص بالواجهة فقط.
-# ============================================================
 
 @st.cache_resource
 def _get_shared_engine_state():
-    """
-    Streamlit يُعيد تنفيذ ملف السكربت كاملاً (بمساحة أسماء جديدة) في كل
-    Rerun — لذلك أي متغير عام عادي مثل APP_STATE كان يُعاد إنشاؤه فارغًا
-    باستمرار، بينما الـ Thread الخلفي يستمر بالكتابة في نسخته القديمة
-    الأصلية فقط. st.cache_resource يضمن أن هذا الكائن يُنشأ مرة واحدة
-    فقط لكامل عمر العملية، ويبقى نفسه عبر كل عمليات إعادة التشغيل.
-    """
-    return {
-        "data": {
-            "last_twelve_error": None,
-            "last_groq_error": None,
-            "last_train_time": None,
-            "last_update_time": None,
-            "ai_result": None,
-            "scan_msg": "",
-            "ict_confidence": None,
-            "snapshot": None,
-            "engine_running": False,
-            "engine_error": None,
-        },
-        "lock": threading.Lock(),
-    }
+    return {"data": {"last_twelve_error": None, "last_groq_error": None, "last_train_time": None, "last_update_time": None, "ai_result": None, "scan_msg": "", "ict_confidence": None, "snapshot": None, "engine_running": False, "engine_error": None}, "lock": threading.Lock()}
 
 
 _shared_engine_state = _get_shared_engine_state()
@@ -1662,40 +1085,23 @@ def APP_STATE_get(key, default=None):
 
 
 def _read_worker_config():
-    return {
-        "twelve_key": load_setting("twelve_key", ""),
-        "use_groq": load_setting("use_groq", "1") == "1",
-        "groq_key": load_setting("groq_key", ""),
-        "groq_model": load_setting("groq_model", "openai/gpt-oss-120b"),
-        "min_groq_conf": float(load_setting("min_groq_conf", "50") or 50),
-        "min_conf": float(load_setting("min_conf", "65") or 65),
-        "atr_mult": float(load_setting("atr_mult", "1.5") or 1.5),
-        "risk_reward": float(load_setting("risk_reward", "2.0") or 2.0),
-    }
+    return {"twelve_key": load_setting("twelve_key", ""), "use_groq": load_setting("use_groq", "1") == "1", "groq_key": load_setting("groq_key", ""), "groq_model": load_setting("groq_model", "openai/gpt-oss-120b"), "min_groq_conf": float(load_setting("min_groq_conf", "50") or 50), "min_conf": float(load_setting("min_conf", "65") or 65), "atr_mult": float(load_setting("atr_mult", "1.5") or 1.5), "risk_reward": float(load_setting("risk_reward", "2.0") or 2.0)}
 
 
 def _monitor_active_trade(df_live_processed, model, scaler, cfg):
-    """كشف الانعكاس المحتمل ومراقبة SL/TP للصفقة النشطة — بالخلفية."""
-
     conn = get_db_connection()
     try:
         active_df = pd.read_sql("SELECT * FROM active_trade WHERE id = 1", conn)
     finally:
         conn.close()
-
     if active_df.empty or df_live_processed is None or df_live_processed.empty:
         return
-
     trade_row = active_df.iloc[0]
     last_row = df_live_processed.iloc[-1]
-
     is_buy_trade = "BUY" in str(trade_row["direction"])
     signal_bar_time = str(trade_row.get("signal_bar_time", "") or "")
     current_bar_time = str(last_row.get("datetime", ""))
-
     can_monitor_trade = current_bar_time != signal_bar_time
-
-    # --- كشف الانعكاس عبر الشبكة العصبية ---
     if can_monitor_trade and model_is_ready(model, scaler):
         try:
             x_current = scaler.transform(last_row[FEATURES].astype(float).values.reshape(1, -1))
@@ -1704,36 +1110,23 @@ def _monitor_active_trade(df_live_processed, model, scaler, cfg):
             current_index = int(np.argmax(current_probs))
             current_pred = int(classes[current_index])
             current_conf = float(current_probs[current_index] * 100)
-
             reversal_detected = False
             if is_buy_trade and current_pred == 0 and current_conf >= (cfg["min_conf"] - 5):
                 reversal_detected = True
             elif not is_buy_trade and current_pred == 1 and current_conf >= (cfg["min_conf"] - 5):
                 reversal_detected = True
-
             if reversal_detected:
-                send_alert(
-                    (
-                        "⚠️ تنبيه من الشبكة العصبية: رصد انعكاس محتمل ضد الصفقة "
-                        f"({trade_row['direction']}) بقوة ({current_conf:.1f}%)."
-                    ),
-                    "🚨 AI Reversal Warning",
-                )
+                send_alert((f"⚠️ تنبيه من الشبكة العصبية: رصد انعكاس محتمل ضد الصفقة ({trade_row['direction']}) بقوة ({current_conf:.1f}%)."), "🚨 AI Reversal Warning")
         except Exception:
             pass
-
-    # --- مراقبة SL / TP ---
     if not can_monitor_trade:
         return
-
     high_price = float(last_row["high"])
     low_price = float(last_row["low"])
     sl_price = float(trade_row["sl"])
     tp_price = float(trade_row["tp"])
-
     hit_sl = False
     hit_tp = False
-
     if is_buy_trade:
         if low_price <= sl_price:
             hit_sl = True
@@ -1744,169 +1137,70 @@ def _monitor_active_trade(df_live_processed, model, scaler, cfg):
             hit_sl = True
         if low_price <= tp_price:
             hit_tp = True
-
     both_hit = hit_sl and hit_tp
     if both_hit:
         hit_tp = False
         hit_sl = True
-
     if not (hit_sl or hit_tp):
         return
-
     win_value = 1 if hit_tp else 0
-
-    if both_hit:
-        note_str = "SL and TP touched in same candle; conservative SL outcome."
-    else:
-        note_str = "AI Target Reached (تم التعلم من النتيجة)" if hit_tp else "AI Stop Loss Hit (تم تسجيل النتيجة)"
-
+    note_str = "SL and TP touched in same candle; conservative SL outcome." if both_hit else ("AI Target Reached" if hit_tp else "AI Stop Loss Hit")
     conn = get_db_connection()
     try:
         c = conn.cursor()
-        c.execute(
-            """
-            INSERT INTO trades
-            (date, symbol, direction, entry, sl, tp, win, note,
-             claude_conf, claude_note, groq_conf, groq_note,
-             ai_conf_before_groq, ai_conf_after_groq)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                str(datetime.now(timezone.utc).date()),
-                trade_row["symbol"],
-                trade_row["direction"],
-                float(trade_row["entry"]),
-                float(trade_row["sl"]),
-                float(trade_row["tp"]),
-                win_value,
-                note_str,
-                None,
-                None,
-                float(trade_row.get("groq_conf")) if pd.notna(trade_row.get("groq_conf")) else None,
-                str(trade_row.get("groq_note", "") or ""),
-                float(trade_row.get("ai_conf", 0) or 0),
-                float(trade_row.get("groq_conf")) if pd.notna(trade_row.get("groq_conf"))
-                else float(trade_row.get("ai_conf", 0) or 0),
-            ),
-        )
+        c.execute("""INSERT INTO trades (date, symbol, direction, entry, sl, tp, win, note, claude_conf, claude_note, groq_conf, groq_note, ai_conf_before_groq, ai_conf_after_groq) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", (str(datetime.now(timezone.utc).date()), trade_row["symbol"], trade_row["direction"], float(trade_row["entry"]), float(trade_row["sl"]), float(trade_row["tp"]), win_value, note_str, None, None, float(trade_row.get("groq_conf")) if pd.notna(trade_row.get("groq_conf")) else None, str(trade_row.get("groq_note", "") or ""), float(trade_row.get("ai_conf", 0) or 0), float(trade_row.get("groq_conf")) if pd.notna(trade_row.get("groq_conf")) else float(trade_row.get("ai_conf", 0) or 0)))
         c.execute("DELETE FROM active_trade WHERE id = 1")
         conn.commit()
     finally:
         conn.close()
-
-    # --------------------------------------------------------
-    # تعلّم تراكمي فوري (partial_fit) من نتيجة هذه الصفقة تحديدًا —
-    # أي صفقة تُغلَق، مهما كانت صغيرة أو مبكرة، تُستخدم فورًا لتحديث
-    # الشبكة العصبية بدل انتظار دورة تدريب كاملة جديدة.
-    # التعيين: صفقة BUY رابحة أو SELL خاسرة => "صعود" (1)،
-    #          صفقة SELL رابحة أو BUY خاسرة => "هبوط" (0)،
-    # وهذا متسق تمامًا مع تعريف هدف النموذج الأصلي (1 = صعود السعر).
-    # --------------------------------------------------------
-
     if model_is_ready(model, scaler):
         try:
             feat_dict = json.loads(trade_row.get("features") or "{}")
-
             if feat_dict:
-                x_vec = np.array(
-                    [[float(feat_dict.get(f, np.nan)) for f in FEATURES]],
-                    dtype=float,
-                )
-
+                x_vec = np.array([[float(feat_dict.get(f, np.nan)) for f in FEATURES]], dtype=float)
                 if np.isfinite(x_vec).all():
                     x_scaled = scaler.transform(x_vec)
-
-                    outcome_up = (is_buy_trade and win_value == 1) or (
-                        (not is_buy_trade) and win_value == 0
-                    )
-
+                    outcome_up = (is_buy_trade and win_value == 1) or ((not is_buy_trade) and win_value == 0)
                     label = np.array([1 if outcome_up else 0])
-
                     model.partial_fit(x_scaled, label, classes=np.asarray(model.classes_))
-
                     joblib.dump(model, MODEL_FILE)
-
                     APP_STATE_set("last_train_time", datetime.now(timezone.utc).isoformat())
-
         except Exception:
             pass
-
-    send_alert(
-        f"Closed {trade_row['symbol']} {trade_row['direction']} -> {note_str}",
-        "🧠 AI Trade Settled",
-    )
+    send_alert(f"Closed {trade_row['symbol']} {trade_row['direction']} -> {note_str}", "🧠 AI Trade Settled")
 
 
 def _engine_cycle():
-    """دورة عمل واحدة كاملة للمحرك الخلفي."""
-
     cfg = _read_worker_config()
     twelve_key_local = cfg["twelve_key"]
-
-    # التدريب يعمل الآن دائمًا وبشكل مستقل عن مفتاح Twelve Data (يعتمد
-    # على المصدر المجاني)، حتى يصبح النموذج جاهزًا للبحث عن صفقة بأسرع
-    # وقت ممكن — تحليل السوق الحي وفتح/مراقبة الصفقات يبقيان حصرًا
-    # عبر Twelve Data كما كانا تمامًا.
     maybe_spawn_training(twelve_key_local)
-
     if not twelve_key_local:
         APP_STATE_set("scan_msg", "النظام متوقف: يرجى إدخال مفتاح Twelve Data API.")
         return
-
     model, scaler = load_current_model()
-
-    # [تعديل جديد] جلب البيانات من 3 فريمات: H1, M15, M5
+    # جلب البيانات من الفريمات الثلاثة
     df_live_raw_h1 = fetch_twelve_series(twelve_key_local, symbol="XAU/USD", interval="1h", outputsize=LIVE_OUTPUT_SIZE)
     df_live_raw_m15 = fetch_twelve_series(twelve_key_local, symbol="XAU/USD", interval="15min", outputsize=LIVE_OUTPUT_SIZE)
     df_live_raw_m5 = fetch_twelve_series(twelve_key_local, symbol="XAU/USD", interval="5min", outputsize=LIVE_OUTPUT_SIZE)
-
-    # معالجة الشموع المغلقة حسب الفريم
+    
     df_live_h1 = keep_closed_candles(df_live_raw_h1, interval_hours=1)
-    df_live_m15 = keep_closed_candles(df_live_raw_m15, interval_hours=0.25)  # 15 دقيقة = 0.25 ساعة
-    df_live_m5 = keep_closed_candles(df_live_raw_m5, interval_hours=5/60)   # 5 دقائق
-
-    # حساب المؤشرات لكل فريم
+    df_live_m15 = keep_closed_candles(df_live_raw_m15, interval_hours=0.25)
+    df_live_m5 = keep_closed_candles(df_live_raw_m5, interval_hours=5/60)
+    
     df_h1_processed = apply_deep_indicators(df_live_h1)
     df_m15_processed = apply_deep_indicators(df_live_m15)
     df_m5_processed = apply_deep_indicators(df_live_m5)
-
-    # تشغيل محرك ICT على فريم M15 (للـ Setup) و M5 (للتأكيد)
-    ict_data_m15 = (
-        run_ict_engine(df_m15_processed, swing_lookback=ICT_SWING_LOOKBACK, ob_mult=ICT_OB_DISPLACEMENT_MULT)
-        if not df_m15_processed.empty
-        else None
-    )
-    ict_data_m5 = (
-        run_ict_engine(df_m5_processed, swing_lookback=ICT_SWING_LOOKBACK, ob_mult=ICT_OB_DISPLACEMENT_MULT)
-        if not df_m5_processed.empty
-        else None
-    )
-
-    # تمرير البيانات متعددة الأطر إلى الـ Scanner
-    scan_msg, ai_result = ai_scanner(
-        df_h1_processed, 
-        df_m15_processed, 
-        df_m5_processed, 
-        model, 
-        scaler, 
-        ict_data_m15, 
-        ict_data_m5, 
-        cfg
-    )
-
+    
+    ict_data_m15 = run_ict_engine(df_m15_processed, swing_lookback=ICT_SWING_LOOKBACK, ob_mult=ICT_OB_DISPLACEMENT_MULT) if not df_m15_processed.empty else None
+    ict_data_m5 = run_ict_engine(df_m5_processed, swing_lookback=ICT_SWING_LOOKBACK, ob_mult=ICT_OB_DISPLACEMENT_MULT) if not df_m5_processed.empty else None
+    
+    scan_msg, ai_result = ai_scanner(df_h1_processed, df_m15_processed, df_m5_processed, model, scaler, ict_data_m15, ict_data_m5, cfg)
     _monitor_active_trade(df_h1_processed, model, scaler, cfg)
-
+    
     snapshot = None
     if not df_h1_processed.empty:
         last_snapshot = df_h1_processed.iloc[-1]
-        snapshot = {
-            "close": float(last_snapshot["close"]),
-            "rsi": float(last_snapshot["rsi"]),
-            "ema_50": float(last_snapshot["ema_50"]),
-            "ema_200": float(last_snapshot["ema_200"]),
-            "atr": float(last_snapshot["atr"]),
-            "datetime": str(last_snapshot.get("datetime", "")),
-        }
+        snapshot = {"close": float(last_snapshot["close"]), "rsi": float(last_snapshot["rsi"]), "ema_50": float(last_snapshot["ema_50"]), "ema_200": float(last_snapshot["ema_200"]), "atr": float(last_snapshot["atr"]), "datetime": str(last_snapshot.get("datetime", ""))}
 
     with _APP_STATE_LOCK:
         APP_STATE["ai_result"] = ai_result
@@ -1939,7 +1233,7 @@ ensure_background_worker_started()
 
 
 # ============================================================
-# UI  — مبسّطة: مستوى الثقة + الصفقات فقط
+# UI
 # ============================================================
 
 st.title("🧠 نظام التداول العميق — XAU/USD")
@@ -1959,135 +1253,60 @@ if last_update:
 else:
     st.caption("🟡 المحرك الخلفي بدأ للتو، بانتظار أول دورة تحليل...")
 
-# ------------------------------------------------------------
-# 🔧 تشخيص المحرك — قسم قابل للطي فقط، لا يُغيّر أي منطق، هدفه
-# توضيح السبب الدقيق وراء بقاء الثقة عند 0% إن حصل ذلك.
-# ------------------------------------------------------------
-
 with st.expander("🔧 حالة المحرك (تشخيص)"):
-
     diag_model, diag_scaler = load_current_model()
     model_ready_now = model_is_ready(diag_model, diag_scaler)
-
     d1, d2 = st.columns(2)
-
-    d1.write(
-        "🔑 مفتاح Twelve Data: "
-        + ("✅ موجود" if twelve_key else "❌ غير مُدخل")
-    )
-
-    d1.write(
-        "🧠 حالة النموذج: "
-        + ("✅ مُدرَّب وجاهز" if model_ready_now else "⏳ غير جاهز بعد")
-    )
-
-    d1.write(
-        "🔒 قفل تدريب نشط الآن: "
-        + ("نعم" if os.path.exists(TRAINING_LOCK_FILE) else "لا")
-    )
-
+    d1.write("🔑 مفتاح Twelve Data: " + ("✅ موجود" if twelve_key else "❌ غير مُدخل"))
+    d1.write("🧠 حالة النموذج: " + ("✅ مُدرَّب وجاهز" if model_ready_now else "⏳ غير جاهز بعد"))
+    d1.write("🔒 قفل تدريب نشط الآن: " + ("نعم" if os.path.exists(TRAINING_LOCK_FILE) else "لا"))
     last_train_time = APP_STATE_get("last_train_time")
     d2.write(f"🕒 آخر تدريب ناجح: {last_train_time or 'لم يحدث بعد'}")
-
     d2.write(f"🔄 آخر دورة تحليل: {last_update or 'لم تبدأ بعد'}")
-
     d2.write(f"📶 عدد صفقات في السجل: {get_total_trades_count()}")
-
-    diag_error = APP_STATE_get("last_twelve_error")
-    if diag_error:
-        st.error(f"⚠️ آخر خطأ من Twelve Data: {diag_error}")
-        st.caption(
-            "إذا كانت الرسالة تذكر أن هذا endpoint مدفوع أو أن الرمز "
-            "XAU/USD غير مدعوم على خطتك الحالية، فهذا يعني أن التدريب "
-            "لن يكتمل أبدًا حتى تُفعَّل خطة تدعم بيانات الذهب التاريخية "
-            "على حساب Twelve Data الخاص بك."
-        )
-
-    diag_engine_error = APP_STATE_get("engine_error")
-    if diag_engine_error:
-        st.error("⚠️ آخر استثناء (Exception) داخل دورة المحرك الخلفي:")
-        st.code(diag_engine_error)
-
-    if not model_ready_now and not diag_error and twelve_key:
-        st.caption(
-            "لا يوجد خطأ ظاهر من Twelve Data، لكن النموذج لم يجهز بعد — "
-            "هذا طبيعي في أول تشغيل ويحتاج بعض الوقت لجلب البيانات "
-            "التاريخية (حتى 5000 شمعة) وتدريب الشبكة العصبية. "
-            "إن استمر الأمر أكثر من بضع دقائق راجع الرسالة أعلاه بعد "
-            "إعادة تحميل الصفحة."
-        )
 
 ai_result = APP_STATE_get("ai_result") or {}
 scan_msg = APP_STATE_get("scan_msg") or ""
 
-# ------------------------------------------------------------
-# حالة الصفقة
-# ------------------------------------------------------------
-
 st.markdown("### 🎯 حالة الصفقة")
-
 trade_exists = bool(ai_result.get("trade_exists", False))
-
 if trade_exists:
     direction = ai_result.get("direction")
-    if direction and "BUY" in str(direction):
-        status_class, status_text = "trade-buy", "🟢 توجد صفقة"
-    elif direction and "SELL" in str(direction):
-        status_class, status_text = "trade-sell", "🔴 توجد صفقة"
-    else:
-        status_class, status_text = "trade-neutral", "🟡 توجد إشارة"
+    if direction and "BUY" in str(direction): status_class, status_text = "trade-buy", "🟢 توجد صفقة"
+    elif direction and "SELL" in str(direction): status_class, status_text = "trade-sell", "🔴 توجد صفقة"
+    else: status_class, status_text = "trade-neutral", "🟡 توجد إشارة"
 else:
     status_class, status_text = "trade-neutral", "⚪ لا توجد صفقة"
-
-render_html(
-    f"""
-<div class="trade-status-card">
-    <div class="trade-status-title">TRADE STATUS</div>
-    <div class="trade-status-value {status_class}">{status_text}</div>
-</div>
-"""
-)
-
-# ------------------------------------------------------------
-# عرض حالة الفريمات (تعديل جديد)
-# ------------------------------------------------------------
+render_html(f'<div class="trade-status-card"><div class="trade-status-title">TRADE STATUS</div><div class="trade-status-value {status_class}">{status_text}</div></div>')
 
 h1_trend = ai_result.get("h1_trend")
 m15_bias = ai_result.get("m15_bias")
 m5_bias = ai_result.get("m5_bias")
-
 if h1_trend or m15_bias or m5_bias:
     display_text = ""
-    if h1_trend:
-        display_text += f"📊 H1 Trend: **{h1_trend}**  |  "
-    if m15_bias:
-        display_text += f"⚙️ M15 Setup: **{m15_bias}**  |  "
-    if m5_bias:
-        display_text += f"✅ M5 Confirm: **{m5_bias}**"
+    if h1_trend: display_text += f"📊 H1 Trend: **{h1_trend}**  |  "
+    if m15_bias: display_text += f"⚙️ M15 Setup: **{m15_bias}**  |  "
+    if m5_bias: display_text += f"✅ M5 Confirm: **{m5_bias}**"
     st.info(display_text)
 
-# ------------------------------------------------------------
-# مستوى الثقة (فقط رقم واحد نهائي، هو خلاصة AI + Experience + ICT + Groq)
-# ------------------------------------------------------------
-
 st.markdown("### 🧠 مستوى الثقة")
-
 final_conf_raw = float(ai_result.get("final_confidence", 0) or 0)
 raw_ai_conf = float(ai_result.get("ai_conf_before_groq", 0) or 0)
 
-# إن لم تكتمل صفقة بعد (final_confidence ما زالت صفرًا افتراضيًا)
-# نعرض ثقة الشبكة العصبية الخام الفعلية بدل رقم صفر ثابت مُضلِّل،
-# حتى يظهر التقدّم الحقيقي دورة بعد دورة حتى قبل بلوغ عتبة الفتح.
 if final_conf_raw > 0:
     final_conf = final_conf_raw
     confidence_note = "كل المؤشرات (ICT, Experience, Groq) مدمجة في هذا الرقم"
+elif ai_result.get("h1_trend"):
+    final_conf = raw_ai_conf
+    confidence_note = "ثقة مؤقتة بانتظار تأكيد M15/M5 للاتجاه"
 else:
     final_conf = raw_ai_conf
-    confidence_note = (
-        "ثقة خام من الشبكة العصبية (لم تصل بعد لعتبة فتح صفقة)"
-        if raw_ai_conf > 0
-        else "بانتظار أول تنبؤ من الشبكة العصبية"
-    )
+    confidence_note = "بانتظار أول تنبؤ من الشبكة العصبية"
+
+snapshot = APP_STATE_get("snapshot")
+last_price_txt = ""
+if snapshot and snapshot.get("close"):
+    last_price_txt = f" | آخر سعر: ${snapshot.get('close')}"
 
 render_html(
     f"""
@@ -2096,32 +1315,26 @@ render_html(
     <div class="ai-level-value">{final_conf:.1f}%</div>
     <div class="ai-level-sub">
         Trades: {total_count} | Wins: {success_count} |
-        {confidence_note}
+        {confidence_note} {last_price_txt}
     </div>
 </div>
 """
 )
 
 if ai_result.get("direction"):
-    st.info(f"📌 الاتجاه المقترح: **{ai_result['direction']}**")
+    st.info(f"📌 الاتجاه المقترح (وفقاً للترند): **{ai_result['direction']}**")
 
-# رسالة صغيرة توضح قرار Groq تحديدًا (قبول/رفض/عدم استجابة) — بالإضافة
-# للتأثير الفعلي على الثقة النهائية، حتى تكون استشارة Groq مرئية دومًا.
 if ai_result.get("groq_called"):
     if ai_result.get("groq_available"):
         groq_conf_val = ai_result.get("groq_conf")
         groq_conf_txt = f"{groq_conf_val:.1f}%" if groq_conf_val is not None else "—"
-        if ai_result.get("groq_agree"):
-            st.success(f"✅ Groq وافق على الإشارة — ثقة Groq: {groq_conf_txt}")
-        else:
-            st.warning(f"❌ Groq لم يوافق على الإشارة — ثقة Groq: {groq_conf_txt}")
-        if ai_result.get("groq_reason"):
-            st.caption(f"🧠 رأي Groq: {ai_result['groq_reason']}")
+        if ai_result.get("groq_agree"): st.success(f"✅ Groq وافق على الإشارة — ثقة Groq: {groq_conf_txt}")
+        else: st.warning(f"❌ Groq لم يوافق على الإشارة — ثقة Groq: {groq_conf_txt}")
+        if ai_result.get("groq_reason"): st.caption(f"🧠 رأي Groq: {ai_result['groq_reason']}")
     else:
         st.warning("🟠 تم استدعاء Groq لكن لم تصل استجابة صالحة منه هذه الدورة.")
         groq_error_detail = APP_STATE_get("last_groq_error")
-        if groq_error_detail:
-            st.code(groq_error_detail)
+        if groq_error_detail: st.code(groq_error_detail)
 
 if scan_msg:
     st.caption(f"🔍 {scan_msg}")
@@ -2134,61 +1347,29 @@ engine_error = APP_STATE_get("engine_error")
 if engine_error:
     st.warning("⚠️ حدث خطأ داخلي في المحرك الخلفي، سيُعاد المحاولة تلقائيًا في الدورة القادمة.")
 
-# ------------------------------------------------------------
-# تفاصيل الصفقة النشطة (إن وجدت)
-# ------------------------------------------------------------
-
 conn = get_db_connection()
 try:
     df_active = pd.read_sql("SELECT * FROM active_trade WHERE id = 1", conn)
 finally:
     conn.close()
-
 if not df_active.empty and twelve_key:
     active_trade = df_active.iloc[0]
-    st.warning(
-        f"""
-🔒 **صفقة نشطة حالياً**
-
-الاتجاه: {active_trade['direction']}
-الدخول: ${active_trade['entry']}
-SL: ${active_trade['sl']}
-TP: ${active_trade['tp']}
-شمعة الإشارة: {active_trade.get('signal_bar_time', '')}
-"""
-    )
-
-# ------------------------------------------------------------
-# سجل الصفقات
-# ------------------------------------------------------------
+    st.warning(f"""🔒 **صفقة نشطة حالياً**\n\nالاتجاه: {active_trade['direction']}\nالدخول: ${active_trade['entry']}\nSL: ${active_trade['sl']}\nTP: ${active_trade['tp']}\nشمعة الإشارة: {active_trade.get('signal_bar_time', '')}""")
 
 st.markdown("### 📊 سجل الصفقات")
-
 conn = get_db_connection()
 try:
     df_log = pd.read_sql("SELECT * FROM trades ORDER BY id DESC", conn)
 finally:
     conn.close()
-
 if not df_log.empty:
     win_rate = df_log["win"].sum() / len(df_log) * 100
-
     m1, m2, m3 = st.columns(3)
     m1.metric("إجمالي الصفقات", len(df_log))
     m2.metric("نسبة الربح", f"{win_rate:.1f}%")
     m3.metric("الصفقات الرابحة", int(df_log["win"].sum()))
-
-    st.dataframe(
-        df_log[["date", "direction", "entry", "sl", "tp", "win", "note", "ai_conf_before_groq", "groq_conf"]],
-        use_container_width=True,
-    )
+    st.dataframe(df_log[["date", "direction", "entry", "sl", "tp", "win", "note", "ai_conf_before_groq", "groq_conf"]], use_container_width=True)
 else:
     st.info("لا توجد صفقات مغلقة مسجلة حتى الآن.")
-
-
-# ============================================================
-# Auto-refresh — فقط لتحديث الواجهة من الكاش الخلفي
-# (المحرك نفسه يعمل باستمرار بغض النظر عن هذا الريفريش)
-# ============================================================
 
 st_autorefresh(interval=20000, key="deep_ai_ui_refresh")
