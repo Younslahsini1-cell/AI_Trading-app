@@ -1994,6 +1994,21 @@ render_html(
 if ai_result.get("direction"):
     st.info(f"📌 الاتجاه المقترح: **{ai_result['direction']}**")
 
+# رسالة صغيرة توضح قرار Groq تحديدًا (قبول/رفض/عدم استجابة) — بالإضافة
+# للتأثير الفعلي على الثقة النهائية، حتى تكون استشارة Groq مرئية دومًا.
+if ai_result.get("groq_called"):
+    if ai_result.get("groq_available"):
+        groq_conf_val = ai_result.get("groq_conf")
+        groq_conf_txt = f"{groq_conf_val:.1f}%" if groq_conf_val is not None else "—"
+        if ai_result.get("groq_agree"):
+            st.success(f"✅ Groq وافق على الإشارة — ثقة Groq: {groq_conf_txt}")
+        else:
+            st.warning(f"❌ Groq لم يوافق على الإشارة — ثقة Groq: {groq_conf_txt}")
+        if ai_result.get("groq_reason"):
+            st.caption(f"🧠 رأي Groq: {ai_result['groq_reason']}")
+    else:
+        st.warning("🟠 تم استدعاء Groq لكن لم تصل استجابة صالحة منه هذه الدورة.")
+
 if scan_msg:
     st.caption(f"🔍 {scan_msg}")
 
