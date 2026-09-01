@@ -865,6 +865,7 @@ def get_experience_adjustment(direction, ai_conf):
 
 def get_groq_review(direction, last_row, ai_conf, api_key, model_name):
     if not api_key:
+        APP_STATE_set("last_groq_error", "لم يتم إدخال مفتاح Groq API.")
         return None
 
     try:
@@ -904,29 +905,48 @@ def get_groq_review(direction, last_row, ai_conf, api_key, model_name):
             },
             timeout=20,
         )
-        response.raise_for_status()
+
+        if not response.ok:
+            APP_STATE_set(
+                "last_groq_error",
+                f"HTTP {response.status_code} من Groq: {response.text[:400]}",
+            )
+            return None
+
         data = response.json()
 
         choices = data.get("choices", [])
         if not choices:
+            APP_STATE_set("last_groq_error", f"رد Groq بلا choices: {json.dumps(data)[:400]}")
             return None
 
         message = choices[0].get("message", {})
         text = message.get("content", "")
         if not text:
+            APP_STATE_set("last_groq_error", "رد Groq وصل لكن بلا محتوى نصي (content فارغ).")
             return None
 
         cleaned = str(text).replace("```json", "").replace("```", "").strip()
-        parsed = json.loads(cleaned)
+
+        try:
+            parsed = json.loads(cleaned)
+        except Exception as parse_exc:
+            APP_STATE_set(
+                "last_groq_error",
+                f"تعذّر تحليل رد Groq كـ JSON: {parse_exc} — النص: {cleaned[:400]}",
+            )
+            return None
 
         agree = bool(parsed.get("agree", False))
         confidence = float(parsed.get("confidence", 0))
         confidence = max(0, min(100, confidence))
         reason = str(parsed.get("reason", ""))
 
+        APP_STATE_set("last_groq_error", None)
         return {"agree": agree, "confidence": confidence, "reason": reason}
 
-    except Exception:
+    except Exception as exc:
+        APP_STATE_set("last_groq_error", f"استثناء أثناء الاتصال بـ Groq: {exc}")
         return None
 
 
@@ -1567,6 +1587,7 @@ def _get_shared_engine_state():
     return {
         "data": {
             "last_twelve_error": None,
+            "last_groq_error": None,
             "last_train_time": None,
             "last_update_time": None,
             "ai_result": None,
@@ -2008,6 +2029,9 @@ if ai_result.get("groq_called"):
             st.caption(f"🧠 رأي Groq: {ai_result['groq_reason']}")
     else:
         st.warning("🟠 تم استدعاء Groq لكن لم تصل استجابة صالحة منه هذه الدورة.")
+        groq_error_detail = APP_STATE_get("last_groq_error")
+        if groq_error_detail:
+            st.code(groq_error_detail)
 
 if scan_msg:
     st.caption(f"🔍 {scan_msg}")
