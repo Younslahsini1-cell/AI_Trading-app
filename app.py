@@ -3,18 +3,10 @@ XAU/USD Deep AI Engine — v3 (Background Engine Edition)
 =========================================================
 ICT / Smart Money + Neural Network + Groq Second Opinion
 
-هذه نسخة معدّلة من النظام الأصلي بناءً على طلب المستخدم:
-
-1) كل المؤشرات (ICT / Smart Money) والتدريب والمسح الحي ومراقبة
-   الصفقة المفتوحة تعمل الآن في Thread خلفي مستقل يعمل باستمرار.
-2) الشروط الصارمة (رفض Groq أو عدم استجابته) تحوّلت إلى تعديل ناعم.
-3) الواجهة تعرض فقط: مستوى الثقة وحالة الصفقات.
-
-4) [تعديل جديد بناءً على طلبك الأخير]:
-   - قاعدة "الترند صديقك" (Trend is your friend): لا يوجد حظر!
-   - إذا كان H1 هابطاً: نتجاهل اقتراح الشراء من النموذج، ونتجه للبحث عن تأكيدات بيع من M15/M5.
-   - إذا كان H1 صاعداً: نتجاهل اقتراح البيع من النموذج، ونتجه للبحث عن تأكيدات شراء من M15/M5.
-   - إذا أكدت M15/M5 الاتجاه، نفتح الصفقة ونحسب SL/TP، وإذا أكدت عكسه نخفض الثقة جداً.
+[قاعدة الترند صديقك]:
+- إذا كان الترند هابطاً: ندرس المؤشرات ونبحث عن فرص بيع فقط (SL/TP).
+- إذا كان الترند صاعداً: ندرس المؤشرات ونبحث عن فرص شراء فقط (SL/TP).
+- لا يوجد حظر إطلاقاً، فقط توجيه ذكي نحو اتجاه الترند.
 """
 
 from datetime import datetime, timezone, timedelta
@@ -97,13 +89,6 @@ render_html(
     .trade-sell { color: #ef4444; }
     .trade-neutral { color: #94a3b8; }
 
-    .confidence-card {
-        background: #0f172a; border: 1px solid #1e293b;
-        border-radius: 14px; padding: 18px; text-align: center;
-    }
-    .confidence-title { color: #94a3b8; font-size: 0.85rem; }
-    .confidence-value { color: #fbbf24; font-size: 2rem; font-weight: 900; }
-
     .engine-pulse {
         display: inline-block; width: 10px; height: 10px; border-radius: 50%;
         background: #22c55e; box-shadow: 0 0 10px #22c55e; margin-inline-end: 8px;
@@ -111,6 +96,20 @@ render_html(
 </style>
 """
 )
+
+
+# ============================================================
+# SECRETS (تم وضعها في الأعلى لمنع أي خطأ NameError)
+# ============================================================
+
+def get_secret_value(key, default=""):
+    try:
+        value = st.secrets.get(key, default)
+        if value is None:
+            return default
+        return str(value)
+    except Exception:
+        return default
 
 
 # ============================================================
@@ -232,6 +231,7 @@ def get_total_trades_count():
 # ============================================================
 
 st.sidebar.header("⚙️ إعدادات الذكاء الاصطناعي")
+
 twelve_secret = get_secret_value("TWELVE_DATA_API_KEY", "")
 if "twelve_key" not in st.session_state:
     st.session_state["twelve_key"] = twelve_secret or load_setting("twelve_key", "")
@@ -833,7 +833,7 @@ def run_ict_engine(df_processed, swing_lookback=3, ob_mult=1.2):
 
 
 # ============================================================
-# AI Scanner (تم تعديله ليتوافق مع "الترند صديقك")
+# AI Scanner (قاعدة: الترند صديقك - لا حظر، توجيه ذكي)
 # ============================================================
 
 def ai_scanner(df_h1_processed, df_m15_processed, df_m5_processed, model, scaler, ict_data_m15, ict_data_m5, cfg):
@@ -911,50 +911,41 @@ def ai_scanner(df_h1_processed, df_m15_processed, df_m5_processed, model, scaler
 
     # ============================================================
     # تطبيق مبدأ "الترند صديقك" (Trend is your friend)
-    # (لا يوجد حظر! نعيد توجيه الاتجاه ليطابق الترند ونبحث عن تأكيد)
     # ============================================================
 
-    # 1. تحديد الترند من H1
     h1_last = df_h1_processed.iloc[-1]
     h1_trend = "BULLISH" if h1_last['ema_50'] > h1_last['ema_200'] else "BEARISH"
     result['h1_trend'] = h1_trend
 
-    # 2. إذا كان الترند هابطاً، نتجاهل إشارة الشراء من النموذج ونتجه للبيع
+    # إذا كان الترند هابطاً، نتجاهل إشارة الشراء ونتجه للبيع
     if h1_trend == "BEARISH" and pred == 1:
         direction = "SELL 🔴"
-        pred = 0  # نعدل الاتجاه المقترح ليصبح بيعاً
+        pred = 0
         result["direction"] = direction
-        result["status"] = "ترند هابط: تم توجيه البحث نحو فرص البيع فقط (تجاهلنا إشارة الشراء)."
+        result["status"] = "ترند هابط: تم توجيه البحث نحو فرص البيع."
 
-    # 3. إذا كان الترند صاعداً، نتجاهل إشارة البيع من النموذج ونتجه للشراء
+    # إذا كان الترند صاعداً، نتجاهل إشارة البيع ونتجه للشراء
     elif h1_trend == "BULLISH" and pred == 0:
         direction = "BUY 🟢"
-        pred = 1  # نعدل الاتجاه المقترح ليصبح شراءً
+        pred = 1
         result["direction"] = direction
-        result["status"] = "ترند صاعد: تم توجيه البحث نحو فرص الشراء فقط (تجاهلنا إشارة البيع)."
+        result["status"] = "ترند صاعد: تم توجيه البحث نحو فرص الشراء."
 
-    # 4. ندرس المؤشرات (M15/M5) لتأكيد الاتجاه الجديد
     m15_bias = ict_data_m15.get("bias") if ict_data_m15 else "NEUTRAL"
     result['m15_bias'] = m15_bias
-
     m5_bias = ict_data_m5.get("bias") if ict_data_m5 else "NEUTRAL"
     result['m5_bias'] = m5_bias
 
-    # إذا كانت المؤشرات (M15 و M5) توافق الترند، فهذا تأكيد قوي.
-    # وإذا عاكست الترند، نخفض الثقة جداً (بدلاً من الحظر).
     confirmation_score = 1.0
     if m15_bias != "NEUTRAL" and m15_bias != h1_trend:
-        confirmation_score -= 0.35 # خصم قوي لعدم توافق M15
+        confirmation_score -= 0.35
     if m5_bias != "NEUTRAL" and m5_bias != h1_trend:
-        confirmation_score -= 0.35 # خصم قوي لعدم توافق M5
+        confirmation_score -= 0.35
 
     # ============================================================
-    # نهاية تعديل "الترند صديقك"
+    # نهاية قاعدة الترند
     # ============================================================
 
-    # ------------------------------------------------------
-    # Experience Layer
-    # ------------------------------------------------------
     experience = get_experience_adjustment(direction, ai_conf)
     result["experience_available"] = experience["available"]
     result["experience_conf"] = experience["confidence"]
@@ -962,9 +953,6 @@ def ai_scanner(df_h1_processed, df_m15_processed, df_m5_processed, model, scaler
     result["experience_sample"] = experience["sample"]
     working_conf = experience["confidence"] if experience["available"] else ai_conf
 
-    # ------------------------------------------------------
-    # ICT Engine كعامل تعديل
-    # ------------------------------------------------------
     if ict_data_m15 is not None:
         ict_bias = ict_data_m15.get("bias")
         ict_conf = ict_data_m15.get("confidence", 50.0)
@@ -979,12 +967,8 @@ def ai_scanner(df_h1_processed, df_m15_processed, df_m5_processed, model, scaler
             ict_component = 100.0 - ict_conf
         working_conf = working_conf * 0.85 + ict_component * 0.15
 
-    # تطبيق خصم عدم توافق M15/M5 مع الترند
     working_conf = working_conf * confirmation_score
 
-    # ------------------------------------------------------
-    # Groq
-    # ------------------------------------------------------
     groq_result = None
     if use_groq_local:
         result["groq_called"] = True
@@ -1006,21 +990,14 @@ def ai_scanner(df_h1_processed, df_m15_processed, df_m5_processed, model, scaler
     else:
         result["final_confidence"] = round(working_conf, 1)
 
-    # الشرط الوحيد: الثقة النهائية يجب أن تكون أعلى من العتبة.
     if result["final_confidence"] < min_conf_local:
         result["status"] = f"🟡 الاتجاه ({direction}) مطابق للترند، لكن لم تكتمل شروط التأكيد (الثقة {result['final_confidence']:.1f}% < {min_conf_local}%)"
         return result["status"], result
 
-    # ------------------------------------------------------
-    # منع تكرار الإشارة
-    # ------------------------------------------------------
     if signal_bar_time and last_signal_key == signal_bar_time:
         result["status"] = "لا توجد صفقة جديدة: تمت معالجة هذه الشمعة سابقاً."
         return result["status"], result
 
-    # ------------------------------------------------------
-    # حساب SL / TP
-    # ------------------------------------------------------
     curr = round(float(last["close"]), 2)
     atr_value = float(last["atr"])
     if not np.isfinite(atr_value) or atr_value <= 0:
@@ -1035,9 +1012,6 @@ def ai_scanner(df_h1_processed, df_m15_processed, df_m5_processed, model, scaler
         sl_price = round(curr + sl_distance, 2)
         tp_price = round(curr - tp_distance, 2)
 
-    # ------------------------------------------------------
-    # تخزين الصفقة
-    # ------------------------------------------------------
     conn = get_db_connection()
     try:
         c = conn.cursor()
@@ -1048,9 +1022,6 @@ def ai_scanner(df_h1_processed, df_m15_processed, df_m5_processed, model, scaler
         conn.close()
     save_setting("last_signal_key", signal_bar_time)
 
-    # ------------------------------------------------------
-    # Alert
-    # ------------------------------------------------------
     groq_line = f"\nGroq: {result['groq_conf']:.1f}%" if result["groq_available"] else ""
     send_alert((f"🧠 AI Trade Signal\nDirection: {direction}\nEntry: ${curr}\nSL: ${sl_price}\nTP: ${tp_price}\nAI Raw: {ai_conf:.1f}%\nExperience+ICT: {working_conf:.1f}%{groq_line}\nFinal Confidence: {result['final_confidence']:.1f}%"))
 
@@ -1178,7 +1149,6 @@ def _engine_cycle():
         APP_STATE_set("scan_msg", "النظام متوقف: يرجى إدخال مفتاح Twelve Data API.")
         return
     model, scaler = load_current_model()
-    # جلب البيانات من الفريمات الثلاثة
     df_live_raw_h1 = fetch_twelve_series(twelve_key_local, symbol="XAU/USD", interval="1h", outputsize=LIVE_OUTPUT_SIZE)
     df_live_raw_m15 = fetch_twelve_series(twelve_key_local, symbol="XAU/USD", interval="15min", outputsize=LIVE_OUTPUT_SIZE)
     df_live_raw_m5 = fetch_twelve_series(twelve_key_local, symbol="XAU/USD", interval="5min", outputsize=LIVE_OUTPUT_SIZE)
