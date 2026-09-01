@@ -1371,9 +1371,10 @@ def ai_scanner(df_live_processed, model, scaler, ict_data, cfg):
 
     result["ai_conf_before_groq"] = ai_conf
 
-    if ai_conf < min_conf_local:
-        result["status"] = f"لا توجد صفقة: ثقة AI ({ai_conf:.1f}%) أقل من المطلوب ({min_conf_local}%)."
-        return result["status"], result
+    # تمت إزالة الحاجز المبكر الذي كان يوقف كل شيء هنا إن كانت ثقة
+    # الشبكة الخام أقل من الحد الأدنى — هذا كان يمنع Groq وICT والخبرة
+    # من مراجعة الإشارة إطلاقًا حتى لو كانت قادرة على رفعها فوق العتبة.
+    # الحاجز الوحيد المتبقي الآن هو على الثقة النهائية المدمجة (أدناه).
 
     direction = "BUY 🟢" if pred == 1 else "SELL 🔴"
     result["direction"] = direction
