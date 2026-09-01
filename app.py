@@ -389,7 +389,7 @@ if groq_key:
 
 groq_model = st.sidebar.text_input(
     "اسم نموذج Groq",
-    value=load_setting("groq_model", "llama-3.3-70b-versatile"),
+    value=load_setting("groq_model", "openai/gpt-oss-120b"),
 )
 save_setting("groq_model", groq_model)
 
@@ -1621,7 +1621,7 @@ def _read_worker_config():
         "twelve_key": load_setting("twelve_key", ""),
         "use_groq": load_setting("use_groq", "1") == "1",
         "groq_key": load_setting("groq_key", ""),
-        "groq_model": load_setting("groq_model", "llama-3.3-70b-versatile"),
+        "groq_model": load_setting("groq_model", "openai/gpt-oss-120b"),
         "min_groq_conf": float(load_setting("min_groq_conf", "50") or 50),
         "min_conf": float(load_setting("min_conf", "65") or 65),
         "atr_mult": float(load_setting("atr_mult", "1.5") or 1.5),
