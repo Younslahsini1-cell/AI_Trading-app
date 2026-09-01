@@ -1960,7 +1960,22 @@ render_html(
 
 st.markdown("### 🧠 مستوى الثقة")
 
-final_conf = float(ai_result.get("final_confidence", 0) or 0)
+final_conf_raw = float(ai_result.get("final_confidence", 0) or 0)
+raw_ai_conf = float(ai_result.get("ai_conf_before_groq", 0) or 0)
+
+# إن لم تكتمل صفقة بعد (final_confidence ما زالت صفرًا افتراضيًا)
+# نعرض ثقة الشبكة العصبية الخام الفعلية بدل رقم صفر ثابت مُضلِّل،
+# حتى يظهر التقدّم الحقيقي دورة بعد دورة حتى قبل بلوغ عتبة الفتح.
+if final_conf_raw > 0:
+    final_conf = final_conf_raw
+    confidence_note = "كل المؤشرات (ICT, Experience, Groq) مدمجة في هذا الرقم"
+else:
+    final_conf = raw_ai_conf
+    confidence_note = (
+        "ثقة خام من الشبكة العصبية (لم تصل بعد لعتبة فتح صفقة)"
+        if raw_ai_conf > 0
+        else "بانتظار أول تنبؤ من الشبكة العصبية"
+    )
 
 render_html(
     f"""
@@ -1969,7 +1984,7 @@ render_html(
     <div class="ai-level-value">{final_conf:.1f}%</div>
     <div class="ai-level-sub">
         Trades: {total_count} | Wins: {success_count} |
-        كل المؤشرات (ICT, Experience, Groq) مدمجة في هذا الرقم
+        {confidence_note}
     </div>
 </div>
 """
