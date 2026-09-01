@@ -541,7 +541,10 @@ def fetch_training_data_twelve(api_key):
 def apply_deep_indicators(df):
     if df is None or df.empty:
         return pd.DataFrame()
-    if len(df) < 210:
+    # تم تخفيض الحد الأدنى (كان 210) حتى لا ننتظر دفعة بيانات ضخمة قبل
+    # أي تدريب أو إشارة — أي كمية بيانات كافية لحساب ATR/RSI (14) وEMA
+    # تُقبل الآن، والنموذج يتحسن تدريجيًا بعد ذلك من كل صفقة تُراقَب.
+    if len(df) < 60:
         return pd.DataFrame()
 
     df = df.copy()
@@ -605,14 +608,16 @@ def _background_train_and_save(api_key):
         df_train = keep_closed_candles(df_train, interval_hours=1)
         df_train = apply_deep_indicators(df_train)
 
-        if df_train.empty or len(df_train) < 250:
+        # تم تخفيض حد بيانات التدريب (كان 250) — أي دفعة بيانات صغيرة
+        # كافية لإنتاج أول نموذج فعلي بدل انتظار دفعة ضخمة.
+        if df_train.empty or len(df_train) < 60:
             return
 
         future_close = df_train["close"].shift(-1)
         valid_mask = future_close.notna()
         train_df = df_train.loc[valid_mask].copy()
 
-        if len(train_df) < 100:
+        if len(train_df) < 30:
             return
 
         X = train_df[FEATURES].astype(float).values
@@ -621,7 +626,7 @@ def _background_train_and_save(api_key):
         X = X[:-1]
         y = y[:-1]
 
-        if len(X) < 100 or len(y) < 100:
+        if len(X) < 30 or len(y) < 30:
             return
         if len(np.unique(y)) < 2:
             return
@@ -1632,6 +1637,43 @@ def _monitor_active_trade(df_live_processed, model, scaler, cfg):
         conn.commit()
     finally:
         conn.close()
+
+    # --------------------------------------------------------
+    # تعلّم تراكمي فوري (partial_fit) من نتيجة هذه الصفقة تحديدًا —
+    # أي صفقة تُغلَق، مهما كانت صغيرة أو مبكرة، تُستخدم فورًا لتحديث
+    # الشبكة العصبية بدل انتظار دورة تدريب كاملة جديدة.
+    # التعيين: صفقة BUY رابحة أو SELL خاسرة => "صعود" (1)،
+    #          صفقة SELL رابحة أو BUY خاسرة => "هبوط" (0)،
+    # وهذا متسق تمامًا مع تعريف هدف النموذج الأصلي (1 = صعود السعر).
+    # --------------------------------------------------------
+
+    if model_is_ready(model, scaler):
+        try:
+            feat_dict = json.loads(trade_row.get("features") or "{}")
+
+            if feat_dict:
+                x_vec = np.array(
+                    [[float(feat_dict.get(f, np.nan)) for f in FEATURES]],
+                    dtype=float,
+                )
+
+                if np.isfinite(x_vec).all():
+                    x_scaled = scaler.transform(x_vec)
+
+                    outcome_up = (is_buy_trade and win_value == 1) or (
+                        (not is_buy_trade) and win_value == 0
+                    )
+
+                    label = np.array([1 if outcome_up else 0])
+
+                    model.partial_fit(x_scaled, label, classes=np.asarray(model.classes_))
+
+                    joblib.dump(model, MODEL_FILE)
+
+                    APP_STATE_set("last_train_time", datetime.now(timezone.utc).isoformat())
+
+        except Exception:
+            pass
 
     send_alert(
         f"Closed {trade_row['symbol']} {trade_row['direction']} -> {note_str}",
