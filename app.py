@@ -893,7 +893,7 @@ def get_groq_review(direction, last_row, ai_conf, api_key, model_name):
             json={
                 "model": model_name,
                 "temperature": 0,
-                "max_completion_tokens": 300,
+                "max_completion_tokens": 2000,
                 "messages": [
                     {
                         "role": "system",
