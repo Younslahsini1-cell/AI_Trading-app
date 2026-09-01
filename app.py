@@ -1554,18 +1554,34 @@ def ai_scanner(df_live_processed, model, scaler, ict_data, cfg):
 # النتائج تُخزَّن في APP_STATE ليقرأها الجزء الخاص بالواجهة فقط.
 # ============================================================
 
-APP_STATE = {
-    "last_twelve_error": None,
-    "last_train_time": None,
-    "last_update_time": None,
-    "ai_result": None,
-    "scan_msg": "",
-    "ict_confidence": None,
-    "snapshot": None,
-    "engine_running": False,
-    "engine_error": None,
-}
-_APP_STATE_LOCK = threading.Lock()
+@st.cache_resource
+def _get_shared_engine_state():
+    """
+    Streamlit يُعيد تنفيذ ملف السكربت كاملاً (بمساحة أسماء جديدة) في كل
+    Rerun — لذلك أي متغير عام عادي مثل APP_STATE كان يُعاد إنشاؤه فارغًا
+    باستمرار، بينما الـ Thread الخلفي يستمر بالكتابة في نسخته القديمة
+    الأصلية فقط. st.cache_resource يضمن أن هذا الكائن يُنشأ مرة واحدة
+    فقط لكامل عمر العملية، ويبقى نفسه عبر كل عمليات إعادة التشغيل.
+    """
+    return {
+        "data": {
+            "last_twelve_error": None,
+            "last_train_time": None,
+            "last_update_time": None,
+            "ai_result": None,
+            "scan_msg": "",
+            "ict_confidence": None,
+            "snapshot": None,
+            "engine_running": False,
+            "engine_error": None,
+        },
+        "lock": threading.Lock(),
+    }
+
+
+_shared_engine_state = _get_shared_engine_state()
+APP_STATE = _shared_engine_state["data"]
+_APP_STATE_LOCK = _shared_engine_state["lock"]
 
 
 def APP_STATE_set(key, value):
@@ -1892,6 +1908,11 @@ with st.expander("🔧 حالة المحرك (تشخيص)"):
             "لن يكتمل أبدًا حتى تُفعَّل خطة تدعم بيانات الذهب التاريخية "
             "على حساب Twelve Data الخاص بك."
         )
+
+    diag_engine_error = APP_STATE_get("engine_error")
+    if diag_engine_error:
+        st.error("⚠️ آخر استثناء (Exception) داخل دورة المحرك الخلفي:")
+        st.code(diag_engine_error)
 
     if not model_ready_now and not diag_error and twelve_key:
         st.caption(
