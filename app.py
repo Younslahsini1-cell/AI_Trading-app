@@ -17,6 +17,12 @@ ICT / Smart Money + Neural Network + Groq Second Opinion
    زالت تُحسب بالكامل في الخلفية وتُستخدم لتعديل الثقة النهائية،
    لكنها لم تعد تُعرض كلوحة منفصلة.
 
+4) [تعديل جديد بناءً على طلبك]: تم إضافة منطق التداول متعدد الأطر الزمنية:
+   - الترند من فريم الساعة (H1)
+   - الـ Setup من فريم 15 دقيقة (M15)
+   - التأكيد الأخير من فريم 5 دقائق (M5)
+   مع منع إشارات الشراء في حال كان الترند على H1 هابطاً، والعكس.
+
 لم يتم حذف أي دالة أو منطق من الكود الأصلي — فقط أُعيد تنظيم كيفية
 استدعائها (من الخلفية بدل الواجهة) وتم تخفيف نقاط الحظر الصارمة.
 """
@@ -860,7 +866,7 @@ def get_experience_adjustment(direction, ai_conf):
 
 # ============================================================
 # Groq Review  (تمت إعادة صياغة الطلب ليكون "محلل متوازن" بدل
-# "محافظ" بشكل متعمّد، بما يتماشى مع تخفيف الصرامة العامة)
+# "محافظ" بشكل متعمد، بما يتماشى مع تخفيف الصرامة العامة)
 # ============================================================
 
 def get_groq_review(direction, last_row, ai_conf, api_key, model_name):
@@ -1298,12 +1304,13 @@ def run_ict_engine(df_processed, swing_lookback=3, ob_mult=1.2):
 
 # ============================================================
 # AI Scanner
-# محدّث: الشروط الصارمة (رفض/عدم استجابة Groq) لم تعد تحظر
-# الصفقة بالكامل — أصبحت خصمًا ناعمًا (soft-penalty) على الثقة
-# النهائية، ودُمج تأثير محرك ICT كعامل تعديل إضافي بدل تجاهله.
+# محدّث: تم إضافة "تصفية الترند" متعدد الأطر الزمنية بناءً على طلبك:
+# 1. نأخذ اتجاه الترند من H1 (المتوسطات EMA50/EMA200)
+# 2. الـ Setup يأتي من M15 (ICT Engine)
+# 3. التأكيد الأخير يأتي من M5 (ICT Engine)
 # ============================================================
 
-def ai_scanner(df_live_processed, model, scaler, ict_data, cfg):
+def ai_scanner(df_h1_processed, df_m15_processed, df_m5_processed, model, scaler, ict_data_m15, ict_data_m5, cfg):
     result = {
         "trade_exists": False,
         "direction": None,
@@ -1314,6 +1321,9 @@ def ai_scanner(df_live_processed, model, scaler, ict_data, cfg):
         "experience_sample": 0,
         "ict_confidence": None,
         "ict_bias": None,
+        "h1_trend": None,
+        "m15_bias": None,
+        "m5_bias": None,
         "groq_called": False,
         "groq_available": False,
         "groq_agree": None,
@@ -1359,7 +1369,7 @@ def ai_scanner(df_live_processed, model, scaler, ict_data, cfg):
         result["status"] = "الذكاء الاصطناعي يدير صفقة نشطة حالياً."
         return result["status"], result
 
-    if df_live_processed is None or df_live_processed.empty:
+    if df_h1_processed is None or df_h1_processed.empty:
         result["status"] = "لا توجد صفقة: بيانات السوق غير كافية."
         return result["status"], result
 
@@ -1367,7 +1377,7 @@ def ai_scanner(df_live_processed, model, scaler, ict_data, cfg):
         result["status"] = "الشبكة العصبية قيد التهيئة والتدريب."
         return result["status"], result
 
-    last = df_live_processed.iloc[-1]
+    last = df_h1_processed.iloc[-1]
     signal_bar_time = str(last.get("datetime", ""))
     last_signal_key = load_setting("last_signal_key", "")
 
@@ -1391,13 +1401,49 @@ def ai_scanner(df_live_processed, model, scaler, ict_data, cfg):
 
     result["ai_conf_before_groq"] = ai_conf
 
-    # تمت إزالة الحاجز المبكر الذي كان يوقف كل شيء هنا إن كانت ثقة
-    # الشبكة الخام أقل من الحد الأدنى — هذا كان يمنع Groq وICT والخبرة
-    # من مراجعة الإشارة إطلاقًا حتى لو كانت قادرة على رفعها فوق العتبة.
-    # الحاجز الوحيد المتبقي الآن هو على الثقة النهائية المدمجة (أدناه).
-
     direction = "BUY 🟢" if pred == 1 else "SELL 🔴"
     result["direction"] = direction
+
+    # ============================================================
+    # تعديل جديد: فلاتر متعددة الأطر الزمنية (H1, M15, M5)
+    # ============================================================
+
+    # 1. الترند من فريم الساعة (H1): نستخدم EMA50 مقابل EMA200
+    h1_last = df_h1_processed.iloc[-1]
+    h1_trend = "BULLISH" if h1_last['ema_50'] > h1_last['ema_200'] else "BEARISH"
+    result['h1_trend'] = h1_trend
+
+    # في حال كان الترند هابطاً على H1، يُمنع فتح صفقة شراء (BUY)
+    # والعكس: في حال كان الترند صاعداً، يُمنع فتح صفقة بيع (SELL)
+    if h1_trend == "BEARISH" and pred == 1:
+        result["status"] = "❌ H1 Trend هابط (Bearish)، تم إلغاء إشارة الشراء (BUY) بسبب منع عكس الترند."
+        return result["status"], result
+
+    if h1_trend == "BULLISH" and pred == 0:
+        result["status"] = "❌ H1 Trend صاعد (Bullish)، تم إلغاء إشارة البيع (SELL) بسبب منع عكس الترند."
+        return result["status"], result
+
+    # 2. الـ Setup من فريم 15 دقيقة (M15): نستخدم نتائج ICT Engine
+    m15_bias = ict_data_m15.get("bias") if ict_data_m15 else "NEUTRAL"
+    result['m15_bias'] = m15_bias
+
+    # إذا كان الـ Setup على M15 معاكساً للترند على H1، نلغي الصفقة
+    if m15_bias != "NEUTRAL" and m15_bias != h1_trend:
+        result["status"] = f"❌ M15 Setup ({m15_bias}) معاكس لترند H1 ({h1_trend})، تم إلغاء الإشارة."
+        return result["status"], result
+
+    # 3. التأكيد الأخير من فريم 5 دقائق (M5): نستخدم نتائج ICT Engine
+    m5_bias = ict_data_m5.get("bias") if ict_data_m5 else "NEUTRAL"
+    result['m5_bias'] = m5_bias
+
+    # التأكيد النهائي يجب أن يتوافق مع الترند العام
+    if m5_bias != "NEUTRAL" and m5_bias != h1_trend:
+        result["status"] = f"❌ تأكيد M5 ({m5_bias}) غير متوافق مع ترند H1 ({h1_trend})، تم إلغاء الإشارة."
+        return result["status"], result
+
+    # ============================================================
+    # نهاية التعديل الجديد
+    # ============================================================
 
     # ------------------------------------------------------
     # Experience Layer
@@ -1416,9 +1462,9 @@ def ai_scanner(df_live_processed, model, scaler, ict_data, cfg):
     # وإن كان معاكسًا نخفضها قليلاً — بوزن محدود (15%) حتى لا
     # يطغى على النموذج العصبي.
     # ------------------------------------------------------
-    if ict_data is not None:
-        ict_bias = ict_data.get("bias")
-        ict_conf = ict_data.get("confidence", 50.0)
+    if ict_data_m15 is not None:
+        ict_bias = ict_data_m15.get("bias")
+        ict_conf = ict_data_m15.get("confidence", 50.0)
 
         result["ict_bias"] = ict_bias
         result["ict_confidence"] = ict_conf
@@ -1566,7 +1612,7 @@ def ai_scanner(df_live_processed, model, scaler, ict_data, cfg):
 # محرك الخلفية (Background Engine)
 # ============================================================
 # كل شيء هنا يعمل باستمرار في Thread مستقل عن دورة عرض Streamlit:
-# - جلب البيانات الحية
+# - جلب البيانات الحية (من 3 فريمات: H1, M15, M5)
 # - حساب كل المؤشرات (indicators)
 # - تشغيل محرك ICT الكامل
 # - تشغيل الشبكة العصبية والمسح (ai_scanner)
@@ -1810,23 +1856,50 @@ def _engine_cycle():
 
     model, scaler = load_current_model()
 
-    df_live_raw = fetch_twelve_series(twelve_key_local, symbol="XAU/USD", interval="1h", outputsize=LIVE_OUTPUT_SIZE)
-    df_live_closed = keep_closed_candles(df_live_raw, interval_hours=1)
-    df_live_processed = apply_deep_indicators(df_live_closed)
+    # [تعديل جديد] جلب البيانات من 3 فريمات: H1, M15, M5
+    df_live_raw_h1 = fetch_twelve_series(twelve_key_local, symbol="XAU/USD", interval="1h", outputsize=LIVE_OUTPUT_SIZE)
+    df_live_raw_m15 = fetch_twelve_series(twelve_key_local, symbol="XAU/USD", interval="15min", outputsize=LIVE_OUTPUT_SIZE)
+    df_live_raw_m5 = fetch_twelve_series(twelve_key_local, symbol="XAU/USD", interval="5min", outputsize=LIVE_OUTPUT_SIZE)
 
-    ict_data = (
-        run_ict_engine(df_live_processed, swing_lookback=ICT_SWING_LOOKBACK, ob_mult=ICT_OB_DISPLACEMENT_MULT)
-        if not df_live_processed.empty
+    # معالجة الشموع المغلقة حسب الفريم
+    df_live_h1 = keep_closed_candles(df_live_raw_h1, interval_hours=1)
+    df_live_m15 = keep_closed_candles(df_live_raw_m15, interval_hours=0.25)  # 15 دقيقة = 0.25 ساعة
+    df_live_m5 = keep_closed_candles(df_live_raw_m5, interval_hours=5/60)   # 5 دقائق
+
+    # حساب المؤشرات لكل فريم
+    df_h1_processed = apply_deep_indicators(df_live_h1)
+    df_m15_processed = apply_deep_indicators(df_live_m15)
+    df_m5_processed = apply_deep_indicators(df_live_m5)
+
+    # تشغيل محرك ICT على فريم M15 (للـ Setup) و M5 (للتأكيد)
+    ict_data_m15 = (
+        run_ict_engine(df_m15_processed, swing_lookback=ICT_SWING_LOOKBACK, ob_mult=ICT_OB_DISPLACEMENT_MULT)
+        if not df_m15_processed.empty
+        else None
+    )
+    ict_data_m5 = (
+        run_ict_engine(df_m5_processed, swing_lookback=ICT_SWING_LOOKBACK, ob_mult=ICT_OB_DISPLACEMENT_MULT)
+        if not df_m5_processed.empty
         else None
     )
 
-    scan_msg, ai_result = ai_scanner(df_live_processed, model, scaler, ict_data, cfg)
+    # تمرير البيانات متعددة الأطر إلى الـ Scanner
+    scan_msg, ai_result = ai_scanner(
+        df_h1_processed, 
+        df_m15_processed, 
+        df_m5_processed, 
+        model, 
+        scaler, 
+        ict_data_m15, 
+        ict_data_m5, 
+        cfg
+    )
 
-    _monitor_active_trade(df_live_processed, model, scaler, cfg)
+    _monitor_active_trade(df_h1_processed, model, scaler, cfg)
 
     snapshot = None
-    if not df_live_processed.empty:
-        last_snapshot = df_live_processed.iloc[-1]
+    if not df_h1_processed.empty:
+        last_snapshot = df_h1_processed.iloc[-1]
         snapshot = {
             "close": float(last_snapshot["close"]),
             "rsi": float(last_snapshot["rsi"]),
@@ -1839,7 +1912,7 @@ def _engine_cycle():
     with _APP_STATE_LOCK:
         APP_STATE["ai_result"] = ai_result
         APP_STATE["scan_msg"] = scan_msg
-        APP_STATE["ict_confidence"] = ict_data.get("confidence") if ict_data else None
+        APP_STATE["ict_confidence"] = ict_data_m15.get("confidence") if ict_data_m15 else None
         APP_STATE["snapshot"] = snapshot
         APP_STATE["last_update_time"] = datetime.now(timezone.utc).isoformat()
         APP_STATE["engine_error"] = None
@@ -1975,6 +2048,24 @@ render_html(
 </div>
 """
 )
+
+# ------------------------------------------------------------
+# عرض حالة الفريمات (تعديل جديد)
+# ------------------------------------------------------------
+
+h1_trend = ai_result.get("h1_trend")
+m15_bias = ai_result.get("m15_bias")
+m5_bias = ai_result.get("m5_bias")
+
+if h1_trend or m15_bias or m5_bias:
+    display_text = ""
+    if h1_trend:
+        display_text += f"📊 H1 Trend: **{h1_trend}**  |  "
+    if m15_bias:
+        display_text += f"⚙️ M15 Setup: **{m15_bias}**  |  "
+    if m5_bias:
+        display_text += f"✅ M5 Confirm: **{m5_bias}**"
+    st.info(display_text)
 
 # ------------------------------------------------------------
 # مستوى الثقة (فقط رقم واحد نهائي، هو خلاصة AI + Experience + ICT + Groq)
