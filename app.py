@@ -21,12 +21,48 @@ import joblib
 import numpy as np
 import pandas as pd
 import requests
+from requests.adapters import HTTPAdapter
+try:
+    from urllib3.util.retry import Retry
+except Exception:
+    from requests.packages.urllib3.util.retry import Retry
 import streamlit as st
 
 from streamlit_autorefresh import st_autorefresh
 
 from sklearn.neural_network import MLPClassifier
 from sklearn.preprocessing import StandardScaler
+
+
+# ============================================================
+# جلسة HTTP مشتركة (Connection Pooling + Retry) لتسريع الاتصال
+# ============================================================
+
+def _build_http_session():
+    """
+    جلسة requests واحدة يعاد استخدامها لكل الاتصالات الخارجية
+    (Twelve Data, Yahoo, Groq, Ntfy) بدلاً من فتح اتصال TCP/TLS جديد
+    في كل نداء. هذا يقلل زمن الاستجابة بشكل ملحوظ خصوصاً أن المحرك
+    الخلفي يستدعي هذه الخدمات كل 45 ثانية.
+    """
+    session = requests.Session()
+    retry_strategy = Retry(
+        total=3,
+        connect=3,
+        read=2,
+        backoff_factor=0.4,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET", "POST"],
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(pool_connections=20, pool_maxsize=20, max_retries=retry_strategy)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    session.headers.update({"Connection": "keep-alive"})
+    return session
+
+
+HTTP_SESSION = _build_http_session()
 
 
 # ============================================================
@@ -295,9 +331,28 @@ def send_alert(msg, title="🧠 Deep AI Alert"):
     if not channel:
         return
     try:
-        requests.post(f"https://ntfy.sh/{channel}", data=msg.encode("utf-8"), headers={"Title": title, "Priority": "high"}, timeout=5)
+        HTTP_SESSION.post(f"https://ntfy.sh/{channel}", data=msg.encode("utf-8"), headers={"Title": title, "Priority": "high"}, timeout=5)
     except Exception:
         pass
+
+
+def send_trade_confirmation_alert(direction, entry, sl, tp, final_confidence, risk_reward_ratio, ai_conf, groq_conf=None):
+    """
+    إشعار Ntfy مخصص يُرسل فور تأكيد فتح الصفقة (بعد اجتياز كل شروط
+    الترند + ICT + الخبرة + Groq). منفصل عن تنبيه الإشارة الأساسي.
+    """
+    groq_line = f"\nGroq Confidence: {groq_conf:.1f}%" if groq_conf is not None else ""
+    msg = (
+        f"✅ تم تأكيد الصفقة (Trade Confirmed)\n"
+        f"الاتجاه: {direction}\n"
+        f"الدخول: ${entry}\n"
+        f"وقف الخسارة (SL): ${sl}\n"
+        f"جني الأرباح (TP): ${tp}\n"
+        f"نسبة R:R = 1:{risk_reward_ratio}\n"
+        f"ثقة AI الخام: {ai_conf:.1f}%{groq_line}\n"
+        f"الثقة النهائية: {final_confidence:.1f}%"
+    )
+    send_alert(msg, title="✅ Trade Confirmed — XAU/USD")
 
 
 def fetch_twelve_series(api_key, symbol="XAU/USD", interval="1h", outputsize=150):
@@ -305,7 +360,7 @@ def fetch_twelve_series(api_key, symbol="XAU/USD", interval="1h", outputsize=150
         return pd.DataFrame()
     try:
         params = {"symbol": symbol, "interval": interval, "outputsize": min(int(outputsize), 5000), "timezone": "UTC", "apikey": api_key}
-        response = requests.get("https://api.twelvedata.com/time_series", params=params, timeout=10)
+        response = HTTP_SESSION.get("https://api.twelvedata.com/time_series", params=params, timeout=10)
         response.raise_for_status()
         result = response.json()
         if "values" not in result:
@@ -351,7 +406,7 @@ def fetch_training_data_twelve(api_key):
 def fetch_free_training_series(symbol="XAUUSD=X", interval="60m", range_="730d"):
     try:
         url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
-        response = requests.get(url, params={"interval": interval, "range": range_}, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        response = HTTP_SESSION.get(url, params={"interval": interval, "range": range_}, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
         response.raise_for_status()
         payload = response.json()
         result_list = (payload.get("chart") or {}).get("result") or []
@@ -566,7 +621,7 @@ def get_groq_review(direction, last_row, ai_conf, api_key, model_name):
             "\n"
             'يجب أن يكون الرد JSON فقط بهذا الشكل: {"agree": true, "confidence": 0, "reason": "..."}'
         )
-        response = requests.post("https://api.groq.com/openai/v1/chat/completions", headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, json={"model": model_name, "temperature": 0, "max_completion_tokens": 2000, "messages": [{"role": "system", "content": "أنت محلل فني متوازن. أعد JSON صالح فقط."}, {"role": "user", "content": prompt}], "response_format": {"type": "json_object"}}, timeout=20)
+        response = HTTP_SESSION.post("https://api.groq.com/openai/v1/chat/completions", headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, json={"model": model_name, "temperature": 0, "max_completion_tokens": 2000, "messages": [{"role": "system", "content": "أنت محلل فني متوازن. أعد JSON صالح فقط."}, {"role": "user", "content": prompt}], "response_format": {"type": "json_object"}}, timeout=20)
         if not response.ok:
             APP_STATE_set("last_groq_error", f"HTTP {response.status_code} من Groq: {response.text[:400]}")
             return None
@@ -1024,6 +1079,18 @@ def ai_scanner(df_h1_processed, df_m15_processed, df_m5_processed, model, scaler
 
     groq_line = f"\nGroq: {result['groq_conf']:.1f}%" if result["groq_available"] else ""
     send_alert((f"🧠 AI Trade Signal\nDirection: {direction}\nEntry: ${curr}\nSL: ${sl_price}\nTP: ${tp_price}\nAI Raw: {ai_conf:.1f}%\nExperience+ICT: {working_conf:.1f}%{groq_line}\nFinal Confidence: {result['final_confidence']:.1f}%"))
+
+    # إشعار Ntfy مستقل يؤكد فتح الصفقة فعلياً بعد اجتياز كل الفلاتر
+    send_trade_confirmation_alert(
+        direction=direction,
+        entry=curr,
+        sl=sl_price,
+        tp=tp_price,
+        final_confidence=result["final_confidence"],
+        risk_reward_ratio=risk_reward_local,
+        ai_conf=ai_conf,
+        groq_conf=result["groq_conf"] if result["groq_available"] else None,
+    )
 
     result["trade_exists"] = True
     result["status"] = (f"🟢 تم إطلاق الإشارة ({direction}) مطابقة للترند — AI: {ai_conf:.1f}% — Final: {result['final_confidence']:.1f}%")
