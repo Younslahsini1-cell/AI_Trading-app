@@ -29,6 +29,7 @@ except Exception:
 import streamlit as st
 
 from streamlit_autorefresh import st_autorefresh
+from streamlit_local_storage import LocalStorage
 
 from sklearn.neural_network import MLPClassifier
 from sklearn.preprocessing import StandardScaler
@@ -162,6 +163,7 @@ LIVE_OUTPUT_SIZE = 220
 TRAINING_LOCK_MAX_AGE = 60 * 60
 RETRAIN_INTERVAL_SECONDS = 6 * 60 * 60
 WORKER_LOOP_SECONDS = 45
+HEARTBEAT_INTERVAL_SECONDS = 6 * 60 * 60
 
 FEATURES = ["atr", "ema_50", "ema_200", "rsi"]
 ICT_SWING_LOOKBACK = 3
@@ -268,12 +270,19 @@ def get_total_trades_count():
 
 st.sidebar.header("⚙️ إعدادات الذكاء الاصطناعي")
 
+# مخزن محلي في متصفح المستخدم — يبقى محفوظاً حتى بعد إعادة تشغيل (reboot)
+# التطبيق على الخادم، لأن قاعدة البيانات المحلية (sqlite) تُمسح عند كل ريبوت
+# على Streamlit Community Cloud بينما تخزين المتصفح لا يتأثر بذلك إطلاقاً.
+localS = LocalStorage()
+
 twelve_secret = get_secret_value("TWELVE_DATA_API_KEY", "")
 if "twelve_key" not in st.session_state:
-    st.session_state["twelve_key"] = twelve_secret or load_setting("twelve_key", "")
+    stored_twelve_key = localS.getItem("twelve_key_ls") or load_setting("twelve_key", "")
+    st.session_state["twelve_key"] = twelve_secret or stored_twelve_key
 twelve_key = st.sidebar.text_input("مفتاح Twelve Data API", type="password", key="twelve_key")
 if twelve_key:
     save_setting("twelve_key", twelve_key)
+    localS.setItem("twelve_key_ls", twelve_key)
 
 ntfy_channel = st.sidebar.text_input("قناة Ntfy للتنبيهات", value=load_setting("ntfy", "xau_deep_channel"))
 save_setting("ntfy", ntfy_channel)
@@ -285,10 +294,12 @@ save_setting("use_groq", "1" if use_groq else "0")
 
 groq_secret = get_secret_value("GROQ_API_KEY", "")
 if "groq_key" not in st.session_state:
-    st.session_state["groq_key"] = groq_secret or load_setting("groq_key", "")
+    stored_groq_key = localS.getItem("groq_key_ls") or load_setting("groq_key", "")
+    st.session_state["groq_key"] = groq_secret or stored_groq_key
 groq_key = st.sidebar.text_input("مفتاح Groq API", type="password", key="groq_key")
 if groq_key:
     save_setting("groq_key", groq_key)
+    localS.setItem("groq_key_ls", groq_key)
 
 groq_model = st.sidebar.text_input("اسم نموذج Groq", value=load_setting("groq_model", "openai/gpt-oss-120b"))
 save_setting("groq_model", groq_model)
@@ -1208,6 +1219,33 @@ def _monitor_active_trade(df_live_processed, model, scaler, cfg):
     send_alert(f"Closed {trade_row['symbol']} {trade_row['direction']} -> {note_str}", "🧠 AI Trade Settled")
 
 
+def _maybe_send_heartbeat(ai_result, snapshot):
+    """
+    ينبض المحرك دورياً (كل HEARTBEAT_INTERVAL_SECONDS) عبر Ntfy حتى لو كان
+    الموقع مغلقاً عند المستخدم. هذا يثبت أن العملية الخلفية لا تزال حية،
+    وإذا توقفت النبضات فهذا يعني أن التطبيق دخل في وضع السكون على المنصة.
+    """
+    last_heartbeat_raw = load_setting("last_heartbeat_time", "")
+    now = datetime.now(timezone.utc)
+    should_send = True
+    if last_heartbeat_raw:
+        try:
+            last_heartbeat = datetime.fromisoformat(last_heartbeat_raw)
+            if (now - last_heartbeat).total_seconds() < HEARTBEAT_INTERVAL_SECONDS:
+                should_send = False
+        except Exception:
+            should_send = True
+    if not should_send:
+        return
+    price_txt = f"${snapshot['close']}" if snapshot and snapshot.get("close") else "—"
+    trade_txt = ai_result.get("direction") if ai_result and ai_result.get("trade_exists") else "لا توجد صفقة نشطة حالياً"
+    send_alert(
+        f"❤️ المحرك يعمل بشكل طبيعي\nآخر سعر: {price_txt}\nالحالة: {trade_txt}\nالوقت: {now.strftime('%Y-%m-%d %H:%M UTC')}",
+        title="❤️ Engine Heartbeat",
+    )
+    save_setting("last_heartbeat_time", now.isoformat())
+
+
 def _engine_cycle():
     cfg = _read_worker_config()
     twelve_key_local = cfg["twelve_key"]
@@ -1246,6 +1284,8 @@ def _engine_cycle():
         APP_STATE["snapshot"] = snapshot
         APP_STATE["last_update_time"] = datetime.now(timezone.utc).isoformat()
         APP_STATE["engine_error"] = None
+
+    _maybe_send_heartbeat(ai_result, snapshot)
 
 
 def background_worker_loop():
