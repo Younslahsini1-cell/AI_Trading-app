@@ -25,6 +25,7 @@ ICT / Smart Money + Institutional Liquidity + Neural Network + Groq
 كل صفقة تحفظ اسم الاستراتيجية التي اكتشفتها.
 """
 
+
 from datetime import datetime, timezone, timedelta
 import json
 import os
@@ -51,6 +52,7 @@ from streamlit_local_storage import LocalStorage
 
 from sklearn.neural_network import MLPClassifier
 from sklearn.preprocessing import StandardScaler
+
 
 # ============================================================
 # جلسة HTTP مشتركة
@@ -81,7 +83,9 @@ def _build_http_session():
 
     return session
 
+
 HTTP_SESSION = _build_http_session()
+
 
 # ============================================================
 # إعدادات الصفحة
@@ -92,6 +96,7 @@ st.set_page_config(
     layout="wide",
     page_icon="🧠",
 )
+
 
 # ============================================================
 # HTML Renderer
@@ -111,6 +116,7 @@ def render_html(html_content):
             html_content,
             unsafe_allow_html=True,
         )
+
 
 # ============================================================
 # CSS
@@ -225,6 +231,7 @@ render_html(
 """
 )
 
+
 # ============================================================
 # SECRETS
 # ============================================================
@@ -240,6 +247,7 @@ def get_secret_value(key, default=""):
 
     except Exception:
         return default
+
 
 # ============================================================
 # الملفات والثوابت
@@ -282,6 +290,7 @@ MODEL_IO_LOCK = threading.RLock()
 # يمنع تشغيل عمليتي حفظ متداخلتين للصفقات
 TRADE_DB_LOCK = threading.RLock()
 
+
 # ============================================================
 # Database
 # ============================================================
@@ -292,6 +301,7 @@ def get_db_connection():
         timeout=20,
         check_same_thread=False,
     )
+
 
 def init_db():
     conn = get_db_connection()
@@ -412,7 +422,9 @@ def init_db():
     finally:
         conn.close()
 
+
 init_db()
+
 
 # ============================================================
 # Settings
@@ -453,6 +465,7 @@ def save_setting(key, val):
         finally:
             conn.close()
 
+
 def load_setting(key, default=""):
     conn = get_db_connection()
 
@@ -479,6 +492,7 @@ def load_setting(key, default=""):
     finally:
         conn.close()
 
+
 def get_successful_trades_count():
     conn = get_db_connection()
 
@@ -500,6 +514,7 @@ def get_successful_trades_count():
     finally:
         conn.close()
 
+
 def get_total_trades_count():
     conn = get_db_connection()
 
@@ -520,6 +535,7 @@ def get_total_trades_count():
     finally:
         conn.close()
 
+
 def get_active_trades_df():
     conn = get_db_connection()
 
@@ -537,6 +553,7 @@ def get_active_trades_df():
 
     finally:
         conn.close()
+
 
 def get_active_trade_for_strategy(strategy):
     conn = get_db_connection()
@@ -559,12 +576,14 @@ def get_active_trade_for_strategy(strategy):
     finally:
         conn.close()
 
+
 def has_active_trade_for_strategy(strategy):
     df = get_active_trade_for_strategy(
         strategy
     )
 
     return not df.empty
+
 
 def get_next_active_trade_id(conn):
     c = conn.cursor()
@@ -581,6 +600,7 @@ def get_next_active_trade_id(conn):
     return int(
         row[0] if row else 1
     )
+
 
 # ============================================================
 # Sidebar
@@ -623,6 +643,7 @@ if "twelve_key" not in st.session_state:
         or stored_twelve_key
     )
 
+
 twelve_key = st.sidebar.text_input(
     "مفتاح Twelve Data API",
     type="password",
@@ -644,6 +665,7 @@ if twelve_key:
     except Exception:
         pass
 
+
 ntfy_channel = st.sidebar.text_input(
     "قناة Ntfy للتنبيهات",
     value=load_setting(
@@ -657,10 +679,12 @@ save_setting(
     ntfy_channel,
 )
 
+
 st.sidebar.markdown("---")
 st.sidebar.header(
     "🧠 الرأي الثاني (Groq)"
 )
+
 
 use_groq = st.sidebar.checkbox(
     "تفعيل مراجعة Groq",
@@ -677,6 +701,7 @@ save_setting(
     "use_groq",
     "1" if use_groq else "0",
 )
+
 
 groq_secret = get_secret_value(
     "GROQ_API_KEY",
@@ -709,6 +734,7 @@ if "groq_key" not in st.session_state:
         or stored_groq_key
     )
 
+
 groq_key = st.sidebar.text_input(
     "مفتاح Groq API",
     type="password",
@@ -730,6 +756,7 @@ if groq_key:
     except Exception:
         pass
 
+
 groq_model = st.sidebar.text_input(
     "اسم نموذج Groq",
     value=load_setting(
@@ -742,6 +769,7 @@ save_setting(
     "groq_model",
     groq_model,
 )
+
 
 min_groq_conf = st.sidebar.slider(
     "أدنى ثقة مطلوبة من Groq",
@@ -756,10 +784,12 @@ save_setting(
     min_groq_conf,
 )
 
+
 st.sidebar.markdown("---")
 st.sidebar.header(
     "🎯 إدارة المخاطر"
 )
+
 
 atr_mult = st.sidebar.slider(
     "معامل الوقف ATR",
@@ -774,6 +804,7 @@ save_setting(
     atr_mult,
 )
 
+
 risk_reward = st.sidebar.slider(
     "نسبة العائد R:R",
     1.5,
@@ -787,6 +818,7 @@ save_setting(
     risk_reward,
 )
 
+
 min_conf = st.sidebar.slider(
     "أدنى ثقة نهائية مطلوبة لفتح صفقة",
     50,
@@ -799,6 +831,7 @@ save_setting(
     "min_conf",
     min_conf,
 )
+
 
 if st.sidebar.button(
     "🔄 إعادة تدريب النموذج من الصفر"
@@ -827,6 +860,7 @@ if st.sidebar.button(
         pass
 
     st.rerun()
+
 
 # ============================================================
 # Ntfy & Data Functions
@@ -868,6 +902,7 @@ def send_alert(
     except Exception:
         pass
 
+
 def send_trade_confirmation_alert(
     direction,
     entry,
@@ -906,6 +941,7 @@ def send_trade_confirmation_alert(
             f"✅ {strategy} — XAU/USD"
         ),
     )
+
 
 def fetch_twelve_series(
     api_key,
@@ -1032,6 +1068,7 @@ def fetch_twelve_series(
 
         return pd.DataFrame()
 
+
 def keep_closed_candles(
     df,
     interval_hours=1,
@@ -1070,6 +1107,7 @@ def keep_closed_candles(
         drop=True
     )
 
+
 def fetch_training_data_twelve(
     api_key,
 ):
@@ -1079,6 +1117,7 @@ def fetch_training_data_twelve(
         interval="1h",
         outputsize=TRAINING_OUTPUT_SIZE,
     )
+
 
 def fetch_free_training_series(
     symbol="XAUUSD=X",
@@ -1220,12 +1259,14 @@ def fetch_free_training_series(
     except Exception:
         return pd.DataFrame()
 
+
 def fetch_training_data_free():
     return fetch_free_training_series(
         symbol="XAUUSD=X",
         interval="60m",
         range_="730d",
     )
+
 
 def fetch_live_series(
     symbol_twelve,
@@ -1275,6 +1316,7 @@ def fetch_live_series(
         )
 
     return df
+
 
 # ============================================================
 # Indicators & Model
@@ -1373,6 +1415,7 @@ def apply_deep_indicators(df):
         drop=True
     )
 
+
 def model_is_ready(
     model_obj,
     scaler_obj,
@@ -1433,6 +1476,7 @@ def model_is_ready(
 
     return True
 
+
 def _atomic_joblib_dump(
     obj,
     target_file,
@@ -1467,6 +1511,7 @@ def _atomic_joblib_dump(
                 )
             except OSError:
                 pass
+
 
 # ============================================================
 # Background Training
@@ -1653,6 +1698,7 @@ def _background_train_and_save(
             except OSError:
                 pass
 
+
 def clean_stale_training_lock():
     if not os.path.exists(
         TRAINING_LOCK_FILE
@@ -1678,6 +1724,7 @@ def clean_stale_training_lock():
 
     except Exception:
         pass
+
 
 def maybe_spawn_training(
     api_key,
@@ -1752,6 +1799,7 @@ def maybe_spawn_training(
     except Exception:
         pass
 
+
 def load_current_model():
     if not (
         os.path.exists(
@@ -1794,7 +1842,9 @@ def load_current_model():
 
     return None, None
 
+
 clean_stale_training_lock()
+
 
 # ============================================================
 # Experience Layer & Groq
@@ -1882,6 +1932,7 @@ def get_experience_adjustment(
         "sample": n,
     }
 
+
 def _parse_groq_bool(value):
     if isinstance(
         value,
@@ -1931,6 +1982,7 @@ def _parse_groq_bool(value):
             return False
 
     return False
+
 
 def get_groq_review(
     direction,
@@ -2151,6 +2203,7 @@ def get_groq_review(
 
         return None
 
+
 # ============================================================
 # ICT Engine
 # ============================================================
@@ -2227,6 +2280,7 @@ def find_swing_points(
         swing_highs,
         swing_lows,
     )
+
 
 def analyze_market_structure(
     swing_highs,
@@ -2333,6 +2387,7 @@ def analyze_market_structure(
         current_bias,
         structure_breaks[-8:],
     )
+
 
 def detect_order_blocks(
     df,
@@ -2460,6 +2515,7 @@ def detect_order_blocks(
         bearish_ob,
     )
 
+
 def detect_fvg(
     df,
     lookback=60,
@@ -2536,6 +2592,7 @@ def detect_fvg(
         bullish_fvg,
         bearish_fvg,
     )
+
 
 def detect_liquidity_and_manipulation(
     df,
@@ -2617,6 +2674,7 @@ def detect_liquidity_and_manipulation(
         note,
     )
 
+
 def session_analyzer(
     df,
     session_len=24,
@@ -2694,6 +2752,7 @@ def session_analyzer(
         ),
     }
 
+
 def compute_asian_session_levels(
     df,
 ):
@@ -2720,6 +2779,7 @@ def compute_asian_session_levels(
             2,
         ),
     }
+
 
 def compute_fibonacci_extension(
     swing_low,
@@ -2792,6 +2852,7 @@ def compute_fibonacci_extension(
 
     return levels
 
+
 def compute_ote_zone(
     swing_low,
     swing_high,
@@ -2856,6 +2917,7 @@ def compute_ote_zone(
         ),
         "direction": direction,
     }
+
 
 def compute_volatility_risk(
     df,
@@ -2925,6 +2987,7 @@ def compute_volatility_risk(
         ),
     )
 
+
 def detect_recent_displacement(
     df,
     lookback=10,
@@ -2993,6 +3056,7 @@ def detect_recent_displacement(
             )
 
     return results[-3:]
+
 
 def run_ict_engine(
     df_processed,
@@ -3250,6 +3314,7 @@ def run_ict_engine(
         "confidence": confidence,
     }
 
+
 # ============================================================
 # Institutional Strategy
 # ============================================================
@@ -3282,6 +3347,7 @@ def _get_h1_trend(
 
     except Exception:
         return None
+
 
 def _get_previous_day_levels(
     df,
@@ -3358,6 +3424,7 @@ def _get_previous_day_levels(
         ),
     }
 
+
 def _get_asian_range_for_latest_day(
     df,
 ):
@@ -3423,6 +3490,7 @@ def _get_asian_range_for_latest_day(
         ),
     }
 
+
 def _institutional_session_allowed(
     timestamp,
 ):
@@ -3467,6 +3535,7 @@ def _institutional_session_allowed(
             False,
             "UNKNOWN",
         )
+
 
 def _find_institutional_sweep(
     df,
@@ -3613,6 +3682,7 @@ def _find_institutional_sweep(
 
     return candidates[-1]
 
+
 def _institutional_mss_confirmed(
     df,
     sweep,
@@ -3737,6 +3807,7 @@ def _institutional_mss_confirmed(
 
     return False, None
 
+
 def _institutional_displacement(
     df,
     direction,
@@ -3840,6 +3911,7 @@ def _institutional_displacement(
 
     return False, None
 
+
 def _institutional_latest_fvg(
     df,
     direction,
@@ -3907,6 +3979,7 @@ def _institutional_latest_fvg(
 
     return None
 
+
 def _institutional_entry_zone(
     df,
     direction,
@@ -3960,6 +4033,7 @@ def _institutional_entry_zone(
     except Exception:
         return False
 
+
 def _institutional_score(
     trend,
     session_name,
@@ -4001,6 +4075,7 @@ def _institutional_score(
         ),
         1,
     )
+
 
 def institutional_scanner(
     df_h1_processed,
@@ -5136,6 +5211,7 @@ def institutional_scanner(
         result,
     )
 
+
 # ============================================================
 # AI Scanner — ICT / SMC
 # ============================================================
@@ -6147,6 +6223,7 @@ def ai_scanner(
         result,
     )
 
+
 # ============================================================
 # Background Engine State
 # ============================================================
@@ -6172,6 +6249,7 @@ def _get_shared_engine_state():
         "lock": threading.Lock(),
     }
 
+
 _shared_engine_state = (
     _get_shared_engine_state()
 )
@@ -6184,12 +6262,14 @@ _APP_STATE_LOCK = (
     _shared_engine_state["lock"]
 )
 
+
 def APP_STATE_set(
     key,
     value,
 ):
     with _APP_STATE_LOCK:
         APP_STATE[key] = value
+
 
 def APP_STATE_get(
     key,
@@ -6200,6 +6280,7 @@ def APP_STATE_get(
             key,
             default,
         )
+
 
 def _read_worker_config():
     def safe_float(
@@ -6258,6 +6339,7 @@ def _read_worker_config():
             2.0,
         ),
     }
+
 
 # ============================================================
 # مراقبة جميع الصفقات النشطة
@@ -6321,6 +6403,7 @@ def _monitor_active_trade(
 
         except Exception:
             continue
+
 
 def _monitor_single_active_trade(
     trade_row,
@@ -6778,7 +6861,7 @@ def _monitor_single_active_trade(
                             x_scaled,
                             label,
                             classes=np.asarray(
-                                model.classes_,
+                                model.classes_
                             ),
                         )
 
@@ -6806,6 +6889,7 @@ def _monitor_single_active_trade(
         ),
         "🧠 AI Trade Settled",
     )
+
 
 # ============================================================
 # Heartbeat
@@ -6843,6 +6927,7 @@ def _maybe_send_heartbeat(
                 (now - last_heartbeat).total_seconds()
                 < HEARTBEAT_INTERVAL_SECONDS
             ):
+
                 should_send = False
 
         except Exception:
@@ -6905,6 +6990,7 @@ def _maybe_send_heartbeat(
         "last_heartbeat_time",
         now.isoformat(),
     )
+
 
 # ============================================================
 # Engine Cycle
@@ -7203,6 +7289,7 @@ def _engine_cycle():
         snapshot,
     )
 
+
 # ============================================================
 # Background Worker
 # ============================================================
@@ -7234,6 +7321,7 @@ def background_worker_loop():
             WORKER_LOOP_SECONDS
         )
 
+
 def ensure_background_worker_started():
 
     for t in threading.enumerate():
@@ -7249,7 +7337,9 @@ def ensure_background_worker_started():
 
     worker.start()
 
+
 ensure_background_worker_started()
+
 
 # ============================================================
 # UI
@@ -7310,6 +7400,7 @@ else:
         "🟡 المحرك الخلفي بدأ للتو، "
         "بانتظار أول دورة تحليل..."
     )
+
 
 # ============================================================
 # Diagnostics
@@ -7400,6 +7491,7 @@ with st.expander(
         f"{len(active_diag)}"
     )
 
+
 # ============================================================
 # Strategy Results
 # ============================================================
@@ -7425,9 +7517,11 @@ scan_msg = (
     or ""
 )
 
+
 st.markdown(
     "### 🎯 حالة الاستراتيجيات"
 )
+
 
 strategy_results = [
     (
@@ -7439,6 +7533,7 @@ strategy_results = [
         institutional_result,
     ),
 ]
+
 
 for strategy_name, strategy_result in (
     strategy_results
@@ -7539,6 +7634,7 @@ for strategy_name, strategy_result in (
 """
     )
 
+
 # ============================================================
 # H1 / M15 / M5 Overview
 # ============================================================
@@ -7593,6 +7689,7 @@ if (
         display_text
     )
 
+
 # ============================================================
 # Confidence
 # ============================================================
@@ -7601,6 +7698,7 @@ st.markdown(
     "### 🧠 مستوى الثقة"
 )
 
+
 all_confidences = []
 
 for _, strategy_result in (
@@ -7608,3 +7706,512 @@ for _, strategy_result in (
 ):
 
     try:
+
+        value = float(
+            strategy_result.get(
+                "final_confidence",
+                0,
+            )
+            or 0
+        )
+
+        if value > 0:
+            all_confidences.append(
+                value
+            )
+
+    except Exception:
+        pass
+
+
+if all_confidences:
+
+    final_conf = max(
+        all_confidences
+    )
+
+    confidence_note = (
+        "أعلى ثقة حالية بين "
+        "الاستراتيجيتين"
+    )
+
+else:
+
+    try:
+
+        final_conf = float(
+            ai_result.get(
+                "ai_conf_before_groq",
+                0,
+            )
+            or 0
+        )
+
+    except Exception:
+        final_conf = 0.0
+
+    confidence_note = (
+        "بانتظار تأكيد الإشارات"
+    )
+
+
+snapshot = APP_STATE_get(
+    "snapshot"
+)
+
+last_price_txt = ""
+
+if (
+    snapshot
+    and snapshot.get(
+        "close"
+    )
+):
+
+    last_price_txt = (
+        f" | آخر سعر: "
+        f"${snapshot.get('close')}"
+    )
+
+
+render_html(
+    f"""
+<div class="ai-level-card">
+    <div class="ai-level-title">
+        AI CONFIDENCE LEVEL
+    </div>
+
+    <div class="ai-level-value">
+        {final_conf:.1f}%
+    </div>
+
+    <div class="ai-level-sub">
+        Trades: {total_count}
+        |
+        Wins: {success_count}
+        |
+        {confidence_note}
+        {last_price_txt}
+    </div>
+</div>
+"""
+)
+
+
+# ============================================================
+# Active Trade UI
+# ============================================================
+
+st.markdown(
+    "### 🔒 الصفقات النشطة"
+)
+
+conn = get_db_connection()
+
+try:
+
+    df_active = pd.read_sql(
+        """
+        SELECT *
+        FROM active_trade
+        ORDER BY id ASC
+        """,
+        conn,
+    )
+
+finally:
+    conn.close()
+
+
+if not df_active.empty:
+
+    for _, active_trade in (
+        df_active.iterrows()
+    ):
+
+        strategy_label = str(
+            active_trade.get(
+                "strategy",
+                "ICT / SMC",
+            )
+            or "ICT / SMC"
+        )
+
+        final_value = float(
+            active_trade.get(
+                "final_confidence",
+                0,
+            )
+            or 0
+        )
+
+        st.warning(
+            f"""
+🔒 **صفقة نشطة — {strategy_label}**
+
+الاتجاه: {active_trade['direction']}
+
+الدخول: ${active_trade['entry']}
+
+SL: ${active_trade['sl']}
+
+TP: ${active_trade['tp']}
+
+الثقة النهائية:
+{final_value:.1f}%
+
+شمعة الإشارة:
+{active_trade.get('signal_bar_time', '')}
+"""
+        )
+
+else:
+
+    st.info(
+        "لا توجد صفقات نشطة حالياً."
+    )
+
+
+# ============================================================
+# Strategy Details
+# ============================================================
+
+if institutional_result:
+
+    with st.expander(
+        "🏦 تفاصيل استراتيجية Institutional Liquidity"
+    ):
+
+        st.write(
+            "الجلسة:",
+            institutional_result.get(
+                "session",
+                "—",
+            ),
+        )
+
+        st.write(
+            "H1 Trend:",
+            institutional_result.get(
+                "h1_trend",
+                "—",
+            ),
+        )
+
+        st.write(
+            "Institutional Score:",
+            f"{float(institutional_result.get('institutional_score', 0) or 0):.1f}%",
+        )
+
+        st.write(
+            "PDH:",
+            institutional_result.get(
+                "pdh",
+                "—",
+            ),
+        )
+
+        st.write(
+            "PDL:",
+            institutional_result.get(
+                "pdl",
+                "—",
+            ),
+        )
+
+        st.write(
+            "Asian High:",
+            institutional_result.get(
+                "asian_high",
+                "—",
+            ),
+        )
+
+        st.write(
+            "Asian Low:",
+            institutional_result.get(
+                "asian_low",
+                "—",
+            ),
+        )
+
+        sweep = (
+            institutional_result.get(
+                "sweep"
+            )
+        )
+
+        if sweep:
+
+            st.success(
+                f"💧 Liquidity Sweep: "
+                f"{sweep.get('type', '—')}"
+            )
+
+        mss = (
+            institutional_result.get(
+                "mss"
+            )
+        )
+
+        if mss:
+
+            st.success(
+                f"📐 MSS: "
+                f"{mss.get('type', '—')}"
+            )
+
+        displacement = (
+            institutional_result.get(
+                "displacement"
+            )
+        )
+
+        if displacement:
+
+            st.success(
+                "⚡ Displacement: "
+                f"{displacement.get('body_pct', 0):.1f}% "
+                "body"
+            )
+
+        fvg = (
+            institutional_result.get(
+                "fvg"
+            )
+        )
+
+        if fvg:
+
+            st.success(
+                "🧲 FVG: موجودة"
+            )
+
+        elif (
+            institutional_result.get(
+                "trade_exists"
+            )
+        ):
+
+            st.info(
+                "FVG: غير موجودة في آخر 3 شموع."
+            )
+
+
+# ============================================================
+# Groq UI
+# ============================================================
+
+for strategy_name, strategy_result in (
+    strategy_results
+):
+
+    if not strategy_result.get(
+        "groq_called"
+    ):
+        continue
+
+    with st.expander(
+        f"🧠 Groq — {strategy_name}"
+    ):
+
+        if strategy_result.get(
+            "groq_available"
+        ):
+
+            groq_conf_val = (
+                strategy_result.get(
+                    "groq_conf"
+                )
+            )
+
+            groq_conf_txt = (
+                f"{groq_conf_val:.1f}%"
+                if groq_conf_val
+                is not None
+                else "—"
+            )
+
+            if strategy_result.get(
+                "groq_agree"
+            ):
+
+                st.success(
+                    "✅ Groq وافق على الإشارة "
+                    "— ثقة Groq: "
+                    f"{groq_conf_txt}"
+                )
+
+            else:
+
+                st.warning(
+                    "❌ Groq لم يوافق على الإشارة "
+                    "— ثقة Groq: "
+                    f"{groq_conf_txt}"
+                )
+
+            if strategy_result.get(
+                "groq_reason"
+            ):
+
+                st.caption(
+                    "🧠 رأي Groq: "
+                    f"{strategy_result['groq_reason']}"
+                )
+
+        else:
+
+            st.warning(
+                "🟠 تم استدعاء Groq لكن لم تصل "
+                "استجابة صالحة منه هذه الدورة."
+            )
+
+
+# ============================================================
+# Scan Message
+# ============================================================
+
+if scan_msg:
+
+    with st.expander(
+        "🔍 آخر رسائل التحليل"
+    ):
+
+        st.write(
+            scan_msg
+        )
+
+
+# ============================================================
+# Errors
+# ============================================================
+
+twelve_error = (
+    APP_STATE_get(
+        "last_twelve_error"
+    )
+)
+
+if (
+    twelve_error
+    and twelve_key
+):
+
+    st.error(
+        "⚠️ Twelve Data: "
+        f"{twelve_error}"
+    )
+
+
+engine_error = (
+    APP_STATE_get(
+        "engine_error"
+    )
+)
+
+if engine_error:
+
+    st.warning(
+        "⚠️ حدث خطأ داخلي في المحرك "
+        "الخلفي، سيُعاد المحاولة تلقائياً "
+        "في الدورة القادمة."
+    )
+
+
+# ============================================================
+# Trade Log
+# ============================================================
+
+st.markdown(
+    "### 📊 سجل الصفقات"
+)
+
+conn = get_db_connection()
+
+try:
+
+    df_log = pd.read_sql(
+        """
+        SELECT *
+        FROM trades
+        ORDER BY id DESC
+        """,
+        conn,
+    )
+
+finally:
+    conn.close()
+
+
+if not df_log.empty:
+
+    win_rate = (
+        df_log["win"].sum()
+        / len(df_log)
+        * 100
+    )
+
+    m1, m2, m3 = (
+        st.columns(3)
+    )
+
+    m1.metric(
+        "إجمالي الصفقات",
+        len(df_log),
+    )
+
+    m2.metric(
+        "نسبة الربح",
+        f"{win_rate:.1f}%",
+    )
+
+    m3.metric(
+        "الصفقات الرابحة",
+        int(
+            df_log["win"].sum()
+        ),
+    )
+
+    columns_to_show = [
+        "date",
+        "strategy",
+        "direction",
+        "entry",
+        "sl",
+        "tp",
+        "win",
+        "note",
+        "ai_conf_before_groq",
+        "groq_conf",
+        "final_confidence",
+    ]
+
+    available_columns = [
+        col
+        for col in columns_to_show
+        if col in df_log.columns
+    ]
+
+    st.dataframe(
+        df_log[
+            available_columns
+        ],
+        use_container_width=True,
+    )
+
+else:
+
+    st.info(
+        "لا توجد صفقات مغلقة "
+        "مسجلة حتى الآن."
+    )
+
+
+# ============================================================
+# Auto Refresh
+# ============================================================
+
+st_autorefresh(
+    interval=20000,
+    key="deep_ai_ui_refresh",
+)
