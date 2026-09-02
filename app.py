@@ -6578,4 +6578,690 @@ def _monitor_single_active_trade(
             saved_groq
         ):
 
-            final_confidence = float
+            final_confidence = float(
+                saved_groq
+            )
+
+        else:
+
+            final_confidence = float(
+                trade_row.get(
+                    "ai_conf",
+                    0,
+                )
+                or 0
+            )
+
+    # --------------------------------------------------------
+    # تسجيل الصفقة المغلقة
+    # --------------------------------------------------------
+
+    with TRADE_DB_LOCK:
+
+        conn = get_db_connection()
+
+        try:
+
+            c = conn.cursor()
+
+            c.execute(
+                """
+                INSERT INTO trades (
+                    date,
+                    symbol,
+                    direction,
+                    entry,
+                    sl,
+                    tp,
+                    win,
+                    note,
+                    claude_conf,
+                    claude_note,
+                    groq_conf,
+                    groq_note,
+                    ai_conf_before_groq,
+                    ai_conf_after_groq,
+                    final_confidence,
+                    strategy
+                )
+                VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?, ?, ?
+                )
+                """,
+                (
+                    str(
+                        datetime.now(
+                            timezone.utc
+                        ).date()
+                    ),
+                    trade_row[
+                        "symbol"
+                    ],
+                    trade_row[
+                        "direction"
+                    ],
+                    float(
+                        trade_row[
+                            "entry"
+                        ]
+                    ),
+                    float(
+                        trade_row[
+                            "sl"
+                        ]
+                    ),
+                    float(
+                        trade_row[
+                            "tp"
+                        ]
+                    ),
+                    win_value,
+                    note_str,
+                    None,
+                    None,
+                    (
+                        float(
+                            trade_row.get(
+                                "groq_conf"
+                            )
+                        )
+                        if pd.notna(
+                            trade_row.get(
+                                "groq_conf"
+                            )
+                        )
+                        else None
+                    ),
+                    str(
+                        trade_row.get(
+                            "groq_note",
+                            "",
+                        )
+                        or ""
+                    ),
+                    float(
+                        trade_row.get(
+                            "ai_conf",
+                            0,
+                        )
+                        or 0
+                    ),
+                    final_confidence,
+                    final_confidence,
+                    strategy_name,
+                ),
+            )
+
+            c.execute(
+                """
+                DELETE FROM active_trade
+                WHERE id = ?
+                """,
+                (
+                    trade_id,
+                ),
+            )
+
+            conn.commit()
+
+        finally:
+            conn.close()
+
+    # --------------------------------------------------------
+    # Online Learning
+    # --------------------------------------------------------
+
+    if model_is_ready(
+        model,
+        scaler,
+    ):
+
+        try:
+
+            feat_dict = json.loads(
+                trade_row.get(
+                    "features"
+                )
+                or "{}"
+            )
+
+            if feat_dict:
+
+                x_vec = np.array(
+                    [
+                        [
+                            float(
+                                feat_dict.get(
+                                    f,
+                                    np.nan,
+                                )
+                            )
+                            for f in FEATURES
+                        ]
+                    ],
+                    dtype=float,
+                )
+
+                if np.isfinite(
+                    x_vec
+                ).all():
+
+                    x_scaled = (
+                        scaler.transform(
+                            x_vec
+                        )
+                    )
+
+                    outcome_up = (
+                        (
+                            is_buy_trade
+                            and win_value == 1
+                        )
+                        or (
+                            not is_buy_trade
+                            and win_value == 0
+                        )
+                    )
+
+                    label = np.array(
+                        [
+                            1
+                            if outcome_up
+                            else 0
+                        ]
+                    )
+
+                    with MODEL_IO_LOCK:
+
+                        model.partial_fit(
+                            x_scaled,
+                            label,
+                            classes=np.asarray(
+                                model.classes_,
+                            ),
+                        )
+
+                        _atomic_joblib_dump(
+                            model,
+                            MODEL_FILE,
+                        )
+
+                    APP_STATE_set(
+                        "last_train_time",
+                        datetime.now(
+                            timezone.utc
+                        ).isoformat(),
+                    )
+
+        except Exception:
+            pass
+
+    send_alert(
+        (
+            f"Closed {trade_row['symbol']} "
+            f"{trade_row['direction']}\n"
+            f"Strategy: {strategy_name}\n"
+            f"-> {note_str}"
+        ),
+        "🧠 AI Trade Settled",
+    )
+
+# ============================================================
+# Heartbeat
+# ============================================================
+
+def _maybe_send_heartbeat(
+    ai_result,
+    institutional_result,
+    snapshot,
+):
+    last_heartbeat_raw = (
+        load_setting(
+            "last_heartbeat_time",
+            "",
+        )
+    )
+
+    now = datetime.now(
+        timezone.utc
+    )
+
+    should_send = True
+
+    if last_heartbeat_raw:
+
+        try:
+
+            last_heartbeat = (
+                datetime.fromisoformat(
+                    last_heartbeat_raw
+                )
+            )
+
+            if (
+                (now - last_heartbeat).total_seconds()
+                < HEARTBEAT_INTERVAL_SECONDS
+            ):
+                should_send = False
+
+        except Exception:
+            should_send = True
+
+    if not should_send:
+        return
+
+    price_txt = (
+        f"${snapshot['close']}"
+        if snapshot
+        and snapshot.get(
+            "close"
+        )
+        else "—"
+    )
+
+    active_df = (
+        get_active_trades_df()
+    )
+
+    if active_df.empty:
+
+        trade_txt = (
+            "لا توجد صفقات نشطة حالياً"
+        )
+
+    else:
+
+        parts = []
+
+        for _, row in (
+            active_df.iterrows()
+        ):
+
+            parts.append(
+                (
+                    f"{row.get('strategy', 'ICT / SMC')}: "
+                    f"{row.get('direction', '')}"
+                )
+            )
+
+        trade_txt = "\n".join(
+            parts
+        )
+
+    send_alert(
+        (
+            "❤️ المحرك يعمل بشكل طبيعي\n"
+            f"آخر سعر: {price_txt}\n"
+            f"الصفقات النشطة:\n"
+            f"{trade_txt}\n"
+            f"الوقت: "
+            f"{now.strftime('%Y-%m-%d %H:%M UTC')}"
+        ),
+        title="❤️ Engine Heartbeat",
+    )
+
+    save_setting(
+        "last_heartbeat_time",
+        now.isoformat(),
+    )
+
+# ============================================================
+# Engine Cycle
+# ============================================================
+
+def _engine_cycle():
+    cfg = (
+        _read_worker_config()
+    )
+
+    twelve_key_local = (
+        cfg["twelve_key"]
+    )
+
+    maybe_spawn_training(
+        twelve_key_local
+    )
+
+    model, scaler = (
+        load_current_model()
+    )
+
+    # --------------------------------------------------------
+    # H1
+    # --------------------------------------------------------
+
+    df_live_raw_h1 = (
+        fetch_live_series(
+            symbol_twelve="XAU/USD",
+            symbol_yahoo="XAUUSD=X",
+            interval_twelve="1h",
+            interval_yahoo="60m",
+            range_yahoo="60d",
+            outputsize_twelve=LIVE_OUTPUT_SIZE,
+            twelve_api_key=twelve_key_local,
+        )
+    )
+
+    # --------------------------------------------------------
+    # M15
+    # --------------------------------------------------------
+
+    df_live_raw_m15 = (
+        fetch_live_series(
+            symbol_twelve="XAU/USD",
+            symbol_yahoo="XAUUSD=X",
+            interval_twelve="15min",
+            interval_yahoo="15m",
+            range_yahoo="5d",
+            outputsize_twelve=LIVE_OUTPUT_SIZE,
+            twelve_api_key=twelve_key_local,
+        )
+    )
+
+    # --------------------------------------------------------
+    # M5
+    # --------------------------------------------------------
+
+    df_live_raw_m5 = (
+        fetch_live_series(
+            symbol_twelve="XAU/USD",
+            symbol_yahoo="XAUUSD=X",
+            interval_twelve="5min",
+            interval_yahoo="5m",
+            range_yahoo="5d",
+            outputsize_twelve=LIVE_OUTPUT_SIZE,
+            twelve_api_key=twelve_key_local,
+        )
+    )
+
+    df_live_h1 = (
+        keep_closed_candles(
+            df_live_raw_h1,
+            interval_hours=1,
+        )
+    )
+
+    df_live_m15 = (
+        keep_closed_candles(
+            df_live_raw_m15,
+            interval_hours=0.25,
+        )
+    )
+
+    df_live_m5 = (
+        keep_closed_candles(
+            df_live_raw_m5,
+            interval_hours=5 / 60,
+        )
+    )
+
+    df_h1_processed = (
+        apply_deep_indicators(
+            df_live_h1
+        )
+    )
+
+    df_m15_processed = (
+        apply_deep_indicators(
+            df_live_m15
+        )
+    )
+
+    df_m5_processed = (
+        apply_deep_indicators(
+            df_live_m5
+        )
+    )
+
+    # --------------------------------------------------------
+    # ICT M15
+    # --------------------------------------------------------
+
+    ict_data_m15 = (
+        run_ict_engine(
+            df_m15_processed,
+            swing_lookback=(
+                ICT_SWING_LOOKBACK
+            ),
+            ob_mult=(
+                ICT_OB_DISPLACEMENT_MULT
+            ),
+        )
+        if not df_m15_processed.empty
+        else None
+    )
+
+    # --------------------------------------------------------
+    # ICT M5
+    # --------------------------------------------------------
+
+    ict_data_m5 = (
+        run_ict_engine(
+            df_m5_processed,
+            swing_lookback=(
+                ICT_SWING_LOOKBACK
+            ),
+            ob_mult=(
+                ICT_OB_DISPLACEMENT_MULT
+            ),
+        )
+        if not df_m5_processed.empty
+        else None
+    )
+
+    # ========================================================
+    # الاستراتيجية الأولى
+    # ========================================================
+
+    scan_msg_ict, ai_result = (
+        ai_scanner(
+            df_h1_processed,
+            df_m15_processed,
+            df_m5_processed,
+            model,
+            scaler,
+            ict_data_m15,
+            ict_data_m5,
+            cfg,
+        )
+    )
+
+    # ========================================================
+    # الاستراتيجية الثانية
+    # تعمل بشكل مستقل
+    # ========================================================
+
+    scan_msg_institutional, institutional_result = (
+        institutional_scanner(
+            df_h1_processed,
+            df_m15_processed,
+            df_m5_processed,
+            model,
+            scaler,
+            cfg,
+        )
+    )
+
+    # ========================================================
+    # مراقبة جميع الصفقات
+    # ========================================================
+
+    _monitor_active_trade(
+        df_h1_processed,
+        model,
+        scaler,
+        cfg,
+    )
+
+    # ========================================================
+    # Snapshot
+    # ========================================================
+
+    snapshot = None
+
+    if not df_h1_processed.empty:
+
+        last_snapshot = (
+            df_h1_processed.iloc[-1]
+        )
+
+        snapshot = {
+            "close": float(
+                last_snapshot[
+                    "close"
+                ]
+            ),
+            "rsi": float(
+                last_snapshot[
+                    "rsi"
+                ]
+            ),
+            "ema_50": float(
+                last_snapshot[
+                    "ema_50"
+                ]
+            ),
+            "ema_200": float(
+                last_snapshot[
+                    "ema_200"
+                ]
+            ),
+            "atr": float(
+                last_snapshot[
+                    "atr"
+                ]
+            ),
+            "datetime": str(
+                last_snapshot.get(
+                    "datetime",
+                    "",
+                )
+            ),
+        }
+
+    # ========================================================
+    # حفظ الحالة
+    # ========================================================
+
+    strategy_results = {
+        "ICT / SMC": ai_result,
+        "Institutional Liquidity": (
+            institutional_result
+        ),
+    }
+
+    with _APP_STATE_LOCK:
+
+        APP_STATE[
+            "ai_result"
+        ] = ai_result
+
+        APP_STATE[
+            "institutional_result"
+        ] = institutional_result
+
+        APP_STATE[
+            "strategy_results"
+        ] = strategy_results
+
+        APP_STATE[
+            "scan_msg"
+        ] = (
+            f"ICT: {scan_msg_ict} | "
+            f"Institutional: "
+            f"{scan_msg_institutional}"
+        )
+
+        APP_STATE[
+            "ict_confidence"
+        ] = (
+            ict_data_m15.get(
+                "confidence"
+            )
+            if ict_data_m15
+            else None
+        )
+
+        APP_STATE[
+            "snapshot"
+        ] = snapshot
+
+        APP_STATE[
+            "last_update_time"
+        ] = datetime.now(
+            timezone.utc
+        ).isoformat()
+
+        APP_STATE[
+            "engine_error"
+        ] = None
+
+    _maybe_send_heartbeat(
+        ai_result,
+        institutional_result,
+        snapshot,
+    )
+
+# ============================================================
+# Background Worker
+# ============================================================
+
+def background_worker_loop():
+
+    APP_STATE_set(
+        "engine_running",
+        True,
+    )
+
+    while True:
+
+        try:
+
+            _engine_cycle()
+
+        except Exception as exc:
+
+            APP_STATE_set(
+                "engine_error",
+                (
+                    f"{exc}\n"
+                    f"{traceback.format_exc()}"
+                ),
+            )
+
+        time.sleep(
+            WORKER_LOOP_SECONDS
+        )
+
+def ensure_background_worker_started():
+
+    for t in threading.enumerate():
+
+        if t.name == "bg_worker_loop":
+            return
+
+    worker = threading.Thread(
+        target=background_worker_loop,
+        daemon=True,
+        name="bg_worker_loop",
+    )
+
+    worker.start()
+
+ensure_background_worker_started()
+
+# ============================================================
+# UI
+# ============================================================
+
+st.title(
+    "🧠 نظام التداول العميق — XAU/USD"
+)
+
+success_count = (
+    get_successful_trades_count()
+)
+
+total_count = (
+    get
