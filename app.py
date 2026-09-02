@@ -223,8 +223,8 @@ LIVE_OUTPUT_SIZE = 220
 TRAINING_LOCK_MAX_AGE = 60 * 60
 RETRAIN_INTERVAL_SECONDS = 6 * 60 * 60
 
-# [تم التعديل]: تغيير المدة من 45 ثانية إلى 120 ثانية (دقيقتين)
-WORKER_LOOP_SECONDS = 120
+# [تم التعديل]: إعادة المدة إلى 45 ثانية
+WORKER_LOOP_SECONDS = 45
 
 HEARTBEAT_INTERVAL_SECONDS = 6 * 60 * 60
 
