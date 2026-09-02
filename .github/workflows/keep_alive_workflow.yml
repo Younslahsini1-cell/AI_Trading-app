@@ -1,0 +1,29 @@
+name: Keep Streamlit App Awake
+
+on:
+  schedule:
+    # كل 6 ساعات — أقل من حد الـ 12 ساعة الذي تفرضه Streamlit Cloud قبل تفعيل وضع السكون
+    - cron: '0 */6 * * *'
+  workflow_dispatch: {}
+
+jobs:
+  wake-up:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Playwright
+        run: |
+          pip install playwright
+          playwright install --with-deps chromium
+
+      - name: Visit the Streamlit app (real browser session)
+        env:
+          STREAMLIT_APP_URL: ${{ secrets.STREAMLIT_APP_URL }}
+        run: python keep_alive_ping.py
