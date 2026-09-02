@@ -2,8 +2,8 @@ name: Keep Streamlit App Awake
 
 on:
   schedule:
-    # كل 6 ساعات — أقل من حد الـ 12 ساعة الذي تفرضه Streamlit Cloud قبل تفعيل وضع السكون
-    - cron: '0 */6 * * *'
+    # كل 5 دقائق — الحد الأدنى المسموح به من GitHub Actions
+    - cron: '*/5 * * * *'
   workflow_dispatch: {}
 
 jobs:
