@@ -920,6 +920,53 @@ def fetch_training_data_free():
     )
 
 
+def fetch_live_series(
+    symbol_twelve,
+    symbol_yahoo,
+    interval_twelve,
+    interval_yahoo,
+    range_yahoo,
+    outputsize_twelve,
+    twelve_api_key,
+):
+    """
+    مصدر بيانات مباشر بأولوية مزدوجة:
+    1) Yahoo Finance (مجاني بالكامل، بدون مفتاح، بدون حد يومي صارم)
+    2) Twelve Data كخطة احتياطية فقط إذا فشلت Yahoo أو كان
+       مفتاح Twelve Data متوفراً ونريد تأكيداً إضافياً.
+    """
+    df = fetch_free_training_series(
+        symbol=symbol_yahoo,
+        interval=interval_yahoo,
+        range_=range_yahoo,
+    )
+
+    if df is not None and not df.empty:
+        APP_STATE_set(
+            "last_data_source",
+            f"Yahoo Finance ({interval_yahoo})",
+        )
+        return df
+
+    if not twelve_api_key:
+        return pd.DataFrame()
+
+    df = fetch_twelve_series(
+        twelve_api_key,
+        symbol=symbol_twelve,
+        interval=interval_twelve,
+        outputsize=outputsize_twelve,
+    )
+
+    if df is not None and not df.empty:
+        APP_STATE_set(
+            "last_data_source",
+            f"Twelve Data ({interval_twelve})",
+        )
+
+    return df
+
+
 # ============================================================
 # Indicators & Model
 # ============================================================
@@ -2673,13 +2720,6 @@ def ai_scanner(
     atr_mult_local = cfg["atr_mult"]
     risk_reward_local = cfg["risk_reward"]
 
-    if not twelve_key_local:
-        result["status"] = (
-            "النظام متوقف: يرجى إدخال "
-            "مفتاح Twelve Data API."
-        )
-        return result["status"], result
-
     # --------------------------------------------------------
     # ICT/H1 معلومات العرض
     # --------------------------------------------------------
@@ -3455,6 +3495,7 @@ def _get_shared_engine_state():
             "snapshot": None,
             "engine_running": False,
             "engine_error": None,
+            "last_data_source": None,
         },
         "lock": threading.Lock(),
     }
@@ -4089,43 +4130,38 @@ def _engine_cycle():
         twelve_key_local
     )
 
-    if not twelve_key_local:
-        APP_STATE_set(
-            "scan_msg",
-            "النظام متوقف: يرجى إدخال "
-            "مفتاح Twelve Data API.",
-        )
-        return
-
     model, scaler = (
         load_current_model()
     )
 
-    df_live_raw_h1 = (
-        fetch_twelve_series(
-            twelve_key_local,
-            symbol="XAU/USD",
-            interval="1h",
-            outputsize=LIVE_OUTPUT_SIZE,
-        )
+    df_live_raw_h1 = fetch_live_series(
+        symbol_twelve="XAU/USD",
+        symbol_yahoo="XAUUSD=X",
+        interval_twelve="1h",
+        interval_yahoo="60m",
+        range_yahoo="60d",
+        outputsize_twelve=LIVE_OUTPUT_SIZE,
+        twelve_api_key=twelve_key_local,
     )
 
-    df_live_raw_m15 = (
-        fetch_twelve_series(
-            twelve_key_local,
-            symbol="XAU/USD",
-            interval="15min",
-            outputsize=LIVE_OUTPUT_SIZE,
-        )
+    df_live_raw_m15 = fetch_live_series(
+        symbol_twelve="XAU/USD",
+        symbol_yahoo="XAUUSD=X",
+        interval_twelve="15min",
+        interval_yahoo="15m",
+        range_yahoo="5d",
+        outputsize_twelve=LIVE_OUTPUT_SIZE,
+        twelve_api_key=twelve_key_local,
     )
 
-    df_live_raw_m5 = (
-        fetch_twelve_series(
-            twelve_key_local,
-            symbol="XAU/USD",
-            interval="5min",
-            outputsize=LIVE_OUTPUT_SIZE,
-        )
+    df_live_raw_m5 = fetch_live_series(
+        symbol_twelve="XAU/USD",
+        symbol_yahoo="XAUUSD=X",
+        interval_twelve="5min",
+        interval_yahoo="5m",
+        range_yahoo="5d",
+        outputsize_twelve=LIVE_OUTPUT_SIZE,
+        twelve_api_key=twelve_key_local,
     )
 
     df_live_h1 = (
@@ -4339,11 +4375,11 @@ total_count = (
     get_total_trades_count()
 )
 
-if not twelve_key:
-    st.warning(
-        "⚠️ النظام نائم: أدخل مفتاح "
-        "Twelve Data API في الشريط الجانبي."
-    )
+st.caption(
+    "📡 مصدر البيانات المباشر: "
+    "Yahoo Finance (مجاني، بلا مفتاح) "
+    "مع Twelve Data كخطة احتياطية اختيارية."
+)
 
 if os.path.exists(
     TRAINING_LOCK_FILE
@@ -4357,11 +4393,22 @@ last_update = APP_STATE_get(
     "last_update_time"
 )
 
+last_data_source = APP_STATE_get(
+    "last_data_source"
+)
+
 if last_update:
+
+    source_txt = (
+        f" — المصدر: {last_data_source}"
+        if last_data_source
+        else ""
+    )
 
     st.caption(
         "🟢 المحرك الخلفي يعمل — "
         f"آخر تحديث: {last_update}"
+        f"{source_txt}"
     )
 
 else:
@@ -4394,11 +4441,19 @@ with st.expander(
     d1, d2 = st.columns(2)
 
     d1.write(
-        "🔑 مفتاح Twelve Data: "
+        "📡 مصدر البيانات الحالي: "
+        + (
+            last_data_source
+            or "لم يُحدَّد بعد"
+        )
+    )
+
+    d1.write(
+        "🔑 مفتاح Twelve Data (احتياطي): "
         + (
             "✅ موجود"
             if twelve_key
-            else "❌ غير مُدخل"
+            else "➖ غير مُدخل (Yahoo يعمل بدونه)"
         )
     )
 
@@ -4825,10 +4880,7 @@ finally:
     conn.close()
 
 
-if (
-    not df_active.empty
-    and twelve_key
-):
+if not df_active.empty:
 
     active_trade = (
         df_active.iloc[0]
