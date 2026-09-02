@@ -2,11 +2,6 @@
 XAU/USD Deep AI Engine — v3 (Background Engine Edition)
 =========================================================
 ICT / Smart Money + Neural Network + Groq Second Opinion
-
-[قاعدة الترند صديقك]:
-- إذا كان الترند هابطاً: ندرس المؤشرات ونبحث عن فرص بيع فقط (SL/TP).
-- إذا كان الترند صاعداً: ندرس المؤشرات ونبحث عن فرص شراء فقط (SL/TP).
-- لا يوجد حظر إطلاقاً، فقط توجيه ذكي نحو اتجاه الترند.
 """
 
 from datetime import datetime, timezone, timedelta
@@ -222,7 +217,10 @@ TRAINING_OUTPUT_SIZE = 5000
 LIVE_OUTPUT_SIZE = 220
 TRAINING_LOCK_MAX_AGE = 60 * 60
 RETRAIN_INTERVAL_SECONDS = 6 * 60 * 60
-WORKER_LOOP_SECONDS = 45
+
+# [تعديل] تم رفع الوقت من 45 إلى 120 ثانية لتقليل استهلاك حصة Twelve Data API
+WORKER_LOOP_SECONDS = 120 
+
 HEARTBEAT_INTERVAL_SECONDS = 6 * 60 * 60
 
 FEATURES = ["atr", "ema_50", "ema_200", "rsi"]
@@ -661,6 +659,15 @@ def fetch_twelve_series(
             params=params,
             timeout=10,
         )
+
+        # [تعديل]: معالجة خطأ تجاوز حد الطلبات (429) تلقائياً
+        if response.status_code == 429:
+            time.sleep(60)  # انتظر 60 ثانية ثم أعد المحاولة مرة واحدة
+            response = HTTP_SESSION.get(
+                "https://api.twelvedata.com/time_series",
+                params=params,
+                timeout=10,
+            )
 
         response.raise_for_status()
 
