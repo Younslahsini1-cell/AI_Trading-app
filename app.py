@@ -7264,4 +7264,347 @@ success_count = (
 )
 
 total_count = (
-    get
+    get_total_trades_count()
+)
+
+st.caption(
+    "📡 مصدر البيانات المباشر: "
+    "Yahoo Finance (مجاني، بلا مفتاح) "
+    "مع Twelve Data كخطة احتياطية اختيارية."
+)
+
+if os.path.exists(
+    TRAINING_LOCK_FILE
+):
+
+    st.info(
+        "🧠 النموذج يتدرب حالياً "
+        "في الخلفية على البيانات التاريخية."
+    )
+
+last_update = APP_STATE_get(
+    "last_update_time"
+)
+
+last_data_source = APP_STATE_get(
+    "last_data_source"
+)
+
+if last_update:
+
+    source_txt = (
+        f" — المصدر: {last_data_source}"
+        if last_data_source
+        else ""
+    )
+
+    st.caption(
+        "🟢 المحرك الخلفي يعمل — "
+        f"آخر تحديث: {last_update}"
+        f"{source_txt}"
+    )
+
+else:
+
+    st.caption(
+        "🟡 المحرك الخلفي بدأ للتو، "
+        "بانتظار أول دورة تحليل..."
+    )
+
+# ============================================================
+# Diagnostics
+# ============================================================
+
+with st.expander(
+    "🔧 حالة المحرك (تشخيص)"
+):
+
+    diag_model, diag_scaler = (
+        load_current_model()
+    )
+
+    model_ready_now = (
+        model_is_ready(
+            diag_model,
+            diag_scaler,
+        )
+    )
+
+    d1, d2 = st.columns(2)
+
+    d1.write(
+        "📡 مصدر البيانات الحالي: "
+        + (
+            last_data_source
+            or "لم يُحدَّد بعد"
+        )
+    )
+
+    d1.write(
+        "🔑 مفتاح Twelve Data (احتياطي): "
+        + (
+            "✅ موجود"
+            if twelve_key
+            else "➖ غير مُدخل "
+            "(Yahoo يعمل بدونه)"
+        )
+    )
+
+    d1.write(
+        "🧠 حالة النموذج: "
+        + (
+            "✅ مُدرَّب وجاهز"
+            if model_ready_now
+            else "⏳ غير جاهز بعد"
+        )
+    )
+
+    d1.write(
+        "🔒 قفل تدريب نشط الآن: "
+        + (
+            "نعم"
+            if os.path.exists(
+                TRAINING_LOCK_FILE
+            )
+            else "لا"
+        )
+    )
+
+    last_train_time = (
+        APP_STATE_get(
+            "last_train_time"
+        )
+    )
+
+    d2.write(
+        f"🕒 آخر تدريب ناجح: "
+        f"{last_train_time or 'لم يحدث بعد'}"
+    )
+
+    d2.write(
+        f"🔄 آخر دورة تحليل: "
+        f"{last_update or 'لم تبدأ بعد'}"
+    )
+
+    d2.write(
+        f"📶 عدد الصفقات في السجل: "
+        f"{get_total_trades_count()}"
+    )
+
+    active_diag = (
+        get_active_trades_df()
+    )
+
+    d2.write(
+        "🔒 الصفقات النشطة الآن: "
+        f"{len(active_diag)}"
+    )
+
+# ============================================================
+# Strategy Results
+# ============================================================
+
+ai_result = (
+    APP_STATE_get(
+        "ai_result"
+    )
+    or {}
+)
+
+institutional_result = (
+    APP_STATE_get(
+        "institutional_result"
+    )
+    or {}
+)
+
+scan_msg = (
+    APP_STATE_get(
+        "scan_msg"
+    )
+    or ""
+)
+
+st.markdown(
+    "### 🎯 حالة الاستراتيجيات"
+)
+
+strategy_results = [
+    (
+        "ICT / SMC",
+        ai_result,
+    ),
+    (
+        "Institutional Liquidity",
+        institutional_result,
+    ),
+]
+
+for strategy_name, strategy_result in (
+    strategy_results
+):
+
+    if not strategy_result:
+        continue
+
+    trade_exists = bool(
+        strategy_result.get(
+            "trade_exists",
+            False,
+        )
+    )
+
+    direction = (
+        strategy_result.get(
+            "direction"
+        )
+    )
+
+    if trade_exists:
+
+        if (
+            direction
+            and "BUY"
+            in str(direction)
+        ):
+
+            status_class = (
+                "trade-buy"
+            )
+
+            status_text = (
+                "🟢 صفقة نشطة"
+            )
+
+        elif (
+            direction
+            and "SELL"
+            in str(direction)
+        ):
+
+            status_class = (
+                "trade-sell"
+            )
+
+            status_text = (
+                "🔴 صفقة نشطة"
+            )
+
+        else:
+
+            status_class = (
+                "trade-neutral"
+            )
+
+            status_text = (
+                "🟡 إشارة نشطة"
+            )
+
+    else:
+
+        status_class = (
+            "trade-neutral"
+        )
+
+        status_text = (
+            "⚪ لا توجد صفقة"
+        )
+
+    final_conf = float(
+        strategy_result.get(
+            "final_confidence",
+            0,
+        )
+        or 0
+    )
+
+    render_html(
+        f"""
+<div class="strategy-card">
+    <div class="strategy-title">
+        {strategy_name}
+    </div>
+    <div class="trade-status-value {status_class}">
+        {status_text}
+    </div>
+    <div>
+        الاتجاه:
+        <b>{direction or "—"}</b>
+    </div>
+    <div>
+        Final Confidence:
+        <b>{final_conf:.1f}%</b>
+    </div>
+</div>
+"""
+    )
+
+# ============================================================
+# H1 / M15 / M5 Overview
+# ============================================================
+
+h1_trend = (
+    ai_result.get(
+        "h1_trend"
+    )
+    or institutional_result.get(
+        "h1_trend"
+    )
+)
+
+m15_bias = ai_result.get(
+    "m15_bias"
+)
+
+m5_bias = ai_result.get(
+    "m5_bias"
+)
+
+if (
+    h1_trend
+    or m15_bias
+    or m5_bias
+):
+
+    display_text = ""
+
+    if h1_trend:
+
+        display_text += (
+            f"📊 H1 Trend: "
+            f"**{h1_trend}**  |  "
+        )
+
+    if m15_bias:
+
+        display_text += (
+            f"⚙️ M15 Setup: "
+            f"**{m15_bias}**  |  "
+        )
+
+    if m5_bias:
+
+        display_text += (
+            f"✅ M5 Confirm: "
+            f"**{m5_bias}**"
+        )
+
+    st.info(
+        display_text
+    )
+
+# ============================================================
+# Confidence
+# ============================================================
+
+st.markdown(
+    "### 🧠 مستوى الثقة"
+)
+
+all_confidences = []
+
+for _, strategy_result in (
+    strategy_results
+):
+
+    try:
