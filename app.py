@@ -7256,11 +7256,4 @@ ensure_background_worker_started()
 # ============================================================
 
 st.title(
-    "🧠 نظام التداول العميق — XAU/USD"
-)
-
-success_count = (
-    get_successful_trades_count()
-)
-
-total_count
+    "🧠 نظام التداول العميق —
