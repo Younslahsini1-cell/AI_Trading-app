@@ -2988,6 +2988,129 @@ def compute_volatility_risk(
     )
 
 
+# ============================================================
+# Market Regime (ADX) & Trend Strength — إضافات جديدة
+# ============================================================
+
+def compute_adx(df, period=14):
+    """
+    مؤشر ADX لقياس قوة/جودة الترند (بغض النظر عن اتجاهه).
+    ADX منخفض = سوق متذبذب/رينج. ADX مرتفع = ترند واضح وقوي.
+    """
+    if (
+        df is None
+        or df.empty
+        or len(df) < period * 2
+    ):
+        return None
+
+    high = df["high"].astype(float)
+    low = df["low"].astype(float)
+    close = df["close"].astype(float)
+
+    up_move = high.diff()
+    down_move = -low.diff()
+
+    plus_dm = np.where(
+        (up_move > down_move) & (up_move > 0),
+        up_move,
+        0.0,
+    )
+
+    minus_dm = np.where(
+        (down_move > up_move) & (down_move > 0),
+        down_move,
+        0.0,
+    )
+
+    tr = pd.concat(
+        [
+            high - low,
+            (high - close.shift()).abs(),
+            (low - close.shift()).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+
+    atr = tr.rolling(period).mean()
+
+    plus_di = (
+        100
+        * pd.Series(plus_dm, index=df.index).rolling(period).mean()
+        / (atr + 1e-9)
+    )
+
+    minus_di = (
+        100
+        * pd.Series(minus_dm, index=df.index).rolling(period).mean()
+        / (atr + 1e-9)
+    )
+
+    dx = (
+        (plus_di - minus_di).abs()
+        / (plus_di + minus_di + 1e-9)
+    ) * 100
+
+    adx = dx.rolling(period).mean()
+
+    if adx.empty or pd.isna(adx.iloc[-1]):
+        return None
+
+    return float(adx.iloc[-1])
+
+
+def compute_market_regime(df):
+    """
+    يصنّف حالة السوق الحالية إلى TRENDING / TRANSITION / RANGING
+    ويُرجع عامل تخفيض للثقة (0.0 - 1.0) يُستخدم لضرب الثقة النهائية.
+    """
+    adx = compute_adx(df)
+
+    if adx is None:
+        return "UNKNOWN", 1.0
+
+    if adx >= 25:
+        return "TRENDING", 1.0
+
+    elif adx >= 18:
+        return "TRANSITION", 0.85
+
+    else:
+        # سوق متذبذب/رينج واضح — نخفّض الثقة بقوة
+        return "RANGING", 0.55
+
+
+def compute_trend_strength(last_row):
+    """
+    فرق EMA50/EMA200 كنسبة من ATR — بديل عن الاعتماد فقط
+    على تقاطع EMA الثنائي (فوق/تحت) الذي لا يميّز بين
+    ترند قوي وترند ضعيف جداً قريب من التقاطع.
+    """
+    try:
+
+        ema_50 = float(
+            last_row["ema_50"]
+        )
+
+        ema_200 = float(
+            last_row["ema_200"]
+        )
+
+        atr = float(
+            last_row["atr"]
+        )
+
+        if atr <= 0:
+            return 0.0
+
+        return abs(
+            ema_50 - ema_200
+        ) / atr
+
+    except Exception:
+        return 0.0
+
+
 def detect_recent_displacement(
     df,
     lookback=10,
@@ -4099,6 +4222,8 @@ def institutional_scanner(
         "experience_win_rate": None,
         "experience_sample": 0,
         "h1_trend": None,
+        "regime": None,
+        "trend_strength": 0.0,
         "session": None,
         "sweep": None,
         "mss": None,
@@ -4243,6 +4368,29 @@ def institutional_scanner(
 
     result["h1_trend"] = (
         h1_trend
+    )
+
+    # ------------------------------------------------------
+    # Market Regime + Trend Strength (إضافة جديدة)
+    # ------------------------------------------------------
+
+    regime_label, regime_factor = (
+        compute_market_regime(
+            df_h1_processed
+        )
+    )
+
+    trend_strength = (
+        compute_trend_strength(
+            df_h1_processed.iloc[-1]
+        )
+    )
+
+    result["regime"] = regime_label
+
+    result["trend_strength"] = round(
+        trend_strength,
+        2,
     )
 
     if h1_trend is None:
@@ -4659,9 +4807,25 @@ def institutional_scanner(
     ] = institutional_score
 
     # دمج AI مع شروط المؤسسة
+    # + خفض الثقة تلقائياً في حال كان
+    # السوق رينج/متذبذب أو الترند ضعيفاً
+    # (regime_factor و strength_factor)
+
+    strength_factor = min(
+        1.0,
+        max(
+            0.5,
+            trend_strength / 1.5,
+        ),
+    )
+
     working_conf = (
-        working_ai_conf * 0.45
-        + institutional_score * 0.55
+        (
+            working_ai_conf * 0.45
+            + institutional_score * 0.55
+        )
+        * regime_factor
+        * strength_factor
     )
 
     # --------------------------------------------------------
@@ -4719,6 +4883,8 @@ def institutional_scanner(
         extra_context = (
             "\nالاستراتيجية: Institutional Liquidity.\n"
             f"الجلسة: {session_name}.\n"
+            f"نظام السوق (Regime): {regime_label}.\n"
+            f"قوة الترند (EMA/ATR): {trend_strength:.2f}.\n"
             f"Previous Day High: "
             f"{result['pdh']}.\n"
             f"Previous Day Low: "
@@ -4863,7 +5029,9 @@ def institutional_scanner(
             "Institutional: "
             "الشروط موجودة لكن الثقة "
             f"{result['final_confidence']:.1f}% "
-            f"< {cfg['min_conf']}%."
+            f"< {cfg['min_conf']}% "
+            f"(Regime: {regime_label}، "
+            f"Trend Strength: {trend_strength:.2f})."
         )
 
         return (
@@ -5149,6 +5317,8 @@ def institutional_scanner(
             f"Strategy: {strategy_name}\n"
             f"Direction: {direction}\n"
             f"Session: {session_name}\n"
+            f"Regime: {regime_label} | "
+            f"Trend Strength: {trend_strength:.2f}\n"
             f"Sweep: {sweep['type']}\n"
             f"MSS: {mss_data['type']}\n"
             f"Displacement: "
@@ -5240,6 +5410,8 @@ def ai_scanner(
         "ict_confidence": None,
         "ict_bias": None,
         "h1_trend": None,
+        "regime": None,
+        "trend_strength": 0.0,
         "m15_bias": None,
         "m5_bias": None,
         "groq_called": False,
@@ -5300,6 +5472,38 @@ def ai_scanner(
             > h1_last["ema_200"]
             else "BEARISH"
         )
+
+        # ---------------------------------------------------
+        # Market Regime + Trend Strength (إضافة جديدة)
+        # ---------------------------------------------------
+
+        regime_label, regime_factor = (
+            compute_market_regime(
+                df_h1_processed
+            )
+        )
+
+        trend_strength = (
+            compute_trend_strength(
+                h1_last
+            )
+        )
+
+        result["regime"] = regime_label
+
+        result["trend_strength"] = round(
+            trend_strength,
+            2,
+        )
+
+    else:
+
+        regime_label, regime_factor = (
+            "UNKNOWN",
+            1.0,
+        )
+
+        trend_strength = 0.0
 
     result["m15_bias"] = (
         ict_data_m15.get(
@@ -5789,8 +5993,23 @@ def ai_scanner(
             + ict_component * 0.15
         )
 
+    # ------------------------------------------------------
+    # تطبيق تخفيض الثقة بحسب نظام السوق وقوة الترند
+    # (إضافة جديدة — يمنع الإفراط في الثقة أثناء الرينج)
+    # ------------------------------------------------------
+
+    strength_factor = min(
+        1.0,
+        max(
+            0.5,
+            trend_strength / 1.5,
+        ),
+    )
+
     working_conf *= (
         confirmation_score
+        * regime_factor
+        * strength_factor
     )
 
     # --------------------------------------------------------
@@ -5839,6 +6058,12 @@ def ai_scanner(
                 working_conf,
                 groq_key_local,
                 groq_model_local,
+                extra_context=(
+                    f"\nنظام السوق (Regime): "
+                    f"{regime_label}.\n"
+                    f"قوة الترند (EMA/ATR): "
+                    f"{trend_strength:.2f}.\n"
+                ),
             )
         )
 
@@ -5957,7 +6182,9 @@ def ai_scanner(
             "تكتمل شروط التأكيد "
             f"(الثقة "
             f"{result['final_confidence']:.1f}% "
-            f"< {min_conf_local}%)."
+            f"< {min_conf_local}% — "
+            f"Regime: {regime_label}، "
+            f"Trend Strength: {trend_strength:.2f})."
         )
 
         return (
@@ -6172,6 +6399,8 @@ def ai_scanner(
             "🧠 ICT / SMC Trade Signal\n"
             f"Strategy: {strategy_name}\n"
             f"Direction: {direction}\n"
+            f"Regime: {regime_label} | "
+            f"Trend Strength: {trend_strength:.2f}\n"
             f"Entry: ${curr}\n"
             f"SL: ${sl_price}\n"
             f"TP: ${tp_price}\n"
@@ -7613,6 +7842,19 @@ for strategy_name, strategy_result in (
         or 0
     )
 
+    regime_txt = str(
+        strategy_result.get(
+            "regime"
+        )
+        or "—"
+    )
+
+    trend_strength_txt = (
+        strategy_result.get(
+            "trend_strength"
+        )
+    )
+
     render_html(
         f"""
 <div class="strategy-card">
@@ -7629,6 +7871,13 @@ for strategy_name, strategy_result in (
     <div>
         Final Confidence:
         <b>{final_conf:.1f}%</b>
+    </div>
+    <div>
+        نظام السوق (Regime):
+        <b>{regime_txt}</b>
+        |
+        قوة الترند:
+        <b>{trend_strength_txt if trend_strength_txt is not None else "—"}</b>
     </div>
 </div>
 """
@@ -7894,6 +8143,22 @@ if institutional_result:
             "H1 Trend:",
             institutional_result.get(
                 "h1_trend",
+                "—",
+            ),
+        )
+
+        st.write(
+            "نظام السوق (Regime):",
+            institutional_result.get(
+                "regime",
+                "—",
+            ),
+        )
+
+        st.write(
+            "قوة الترند (EMA/ATR):",
+            institutional_result.get(
+                "trend_strength",
                 "—",
             ),
         )
