@@ -1,28 +1,27 @@
 """
-XAU/USD Deep AI Engine — v4 (Background Engine Edition)
-=========================================================
-ICT / Smart Money + Institutional Liquidity + Neural Network + Groq
+XAU/USD Deep AI Engine — v6 (ICT + Order Flow Proxy Only)
+==========================================================
+استراتيجية واحدة متكاملة:
+ICT (Smart Money Concepts) + Order Flow Proxy (تقديري من OHLCV + Volume)
 
 [قاعدة الترند صديقك]:
-- إذا كان الترند هابطاً: نبحث عن فرص SELL فقط.
-- إذا كان الترند صاعداً: نبحث عن فرص BUY فقط.
-- لا يوجد حظر إطلاقاً، فقط توجيه ذكي نحو اتجاه الترند.
+- ترند صاعد → BUY فقط.
+- ترند هابط → SELL فقط.
 
-[الاستراتيجيات]:
-1) ICT / SMC
-2) Institutional Liquidity
-   - HTF Trend
-   - Previous Day High / Low
-   - Asian Liquidity
-   - Liquidity Sweep
-   - Market Structure Shift (MSS)
-   - Displacement
-   - Fair Value Gap (FVG)
-   - Institutional Risk / Reward
-
-كل استراتيجية تعمل بشكل مستقل.
-يمكن أن تكون هناك صفقة ICT وصفقة Institutional في نفس الوقت.
-كل صفقة تحفظ اسم الاستراتيجية التي اكتشفتها.
+[المكونات]:
+- HTF Bias (H1)
+- Market Structure (BOS, CHoCH)
+- Liquidity (BSL, SSL, Sweeps)
+- Fair Value Gap (FVG)
+- Order Blocks
+- Premium / Discount
+- Equal Highs / Lows
+- Displacement
+- Order Flow Proxy (Estimated Delta, CVD, Volume Imbalance, Absorption, Exhaustion)
+- Neural Network (MLP)
+- Groq (رأي ثانٍ)
+- Experience Layer
+- Risk Management (ATR-based SL/TP)
 """
 
 
@@ -92,7 +91,7 @@ HTTP_SESSION = _build_http_session()
 # ============================================================
 
 st.set_page_config(
-    page_title="XAU/USD Deep AI Engine",
+    page_title="XAU/USD Deep AI Engine v6",
     layout="wide",
     page_icon="🧠",
 )
@@ -278,17 +277,14 @@ FEATURES = [
 ICT_SWING_LOOKBACK = 3
 ICT_OB_DISPLACEMENT_MULT = 1.2
 
-# Institutional settings
-INSTITUTIONAL_SWEEP_LOOKBACK = 12
-INSTITUTIONAL_MSS_LOOKBACK = 5
-INSTITUTIONAL_DISPLACEMENT_ATR = 1.10
-INSTITUTIONAL_BODY_PERCENT = 55.0
-INSTITUTIONAL_SIGNAL_LOOKBACK = 10
-
 MODEL_IO_LOCK = threading.RLock()
-
-# يمنع تشغيل عمليتي حفظ متداخلتين للصفقات
 TRADE_DB_LOCK = threading.RLock()
+
+# إعدادات Order Flow Proxy
+OF_VOLUME_SPIKE_MULT = 2.0
+OF_IMBALANCE_BODY_THRESHOLD = 60.0
+OF_ABSORPTION_WICK_RATIO = 0.4
+OF_DELTA_SMOOTH = 3
 
 
 # ============================================================
@@ -391,26 +387,27 @@ def init_db():
             except sqlite3.OperationalError:
                 pass
 
-        # ----------------------------------------------------
-        # ترحيل الصفقات القديمة إلى ICT / SMC
-        # ----------------------------------------------------
-
+        # ترحيل الصفقات القديمة إلى الاستراتيجية الجديدة
         try:
             c.execute(
                 """
                 UPDATE trades
-                SET strategy = 'ICT / SMC'
+                SET strategy = 'ICT + Order Flow'
                 WHERE strategy IS NULL
                    OR TRIM(strategy) = ''
+                   OR strategy = 'ICT / SMC'
+                   OR strategy = 'Institutional Liquidity'
                 """
             )
 
             c.execute(
                 """
                 UPDATE active_trade
-                SET strategy = 'ICT / SMC'
+                SET strategy = 'ICT + Order Flow'
                 WHERE strategy IS NULL
                    OR TRIM(strategy) = ''
+                   OR strategy = 'ICT / SMC'
+                   OR strategy = 'Institutional Liquidity'
                 """
             )
 
@@ -833,6 +830,39 @@ save_setting(
 )
 
 
+# إعدادات Order Flow
+st.sidebar.markdown("---")
+st.sidebar.header(
+    "📊 إعدادات Order Flow Proxy"
+)
+
+of_weight = st.sidebar.slider(
+    "وزن Order Flow في النتيجة النهائية (%)",
+    10,
+    50,
+    35,
+    5,
+)
+
+save_setting(
+    "of_weight",
+    of_weight,
+)
+
+of_volume_threshold = st.sidebar.slider(
+    "عتبة حجم التداول (% من المتوسط)",
+    150,
+    300,
+    200,
+    10,
+)
+
+save_setting(
+    "of_volume_threshold",
+    of_volume_threshold,
+)
+
+
 if st.sidebar.button(
     "🔄 إعادة تدريب النموذج من الصفر"
 ):
@@ -912,7 +942,7 @@ def send_trade_confirmation_alert(
     risk_reward_ratio,
     ai_conf,
     groq_conf=None,
-    strategy="ICT / SMC",
+    strategy="ICT + Order Flow",
 ):
     groq_line = (
         f"\nGroq Confidence: "
@@ -1001,13 +1031,18 @@ def fetch_twelve_series(
             "high",
             "low",
             "close",
+            "volume",
         ]
 
         if not all(
             col in df.columns
             for col in required
         ):
-            return pd.DataFrame()
+            required_without_vol = [c for c in required if c != "volume"]
+            if all(c in df.columns for c in required_without_vol):
+                df["volume"] = np.nan
+            else:
+                return pd.DataFrame()
 
         df = df[
             required
@@ -1024,6 +1059,7 @@ def fetch_twelve_series(
             "high",
             "low",
             "close",
+            "volume",
         ):
 
             df[col] = pd.to_numeric(
@@ -1032,7 +1068,7 @@ def fetch_twelve_series(
             )
 
         df.dropna(
-            subset=required,
+            subset=["datetime", "open", "high", "low", "close"],
             inplace=True,
         )
 
@@ -1195,6 +1231,11 @@ def fetch_free_training_series(
             or []
         )
 
+        volumes = (
+            quote.get("volume")
+            or []
+        )
+
         if (
             not timestamps
             or not closes
@@ -1212,6 +1253,7 @@ def fetch_free_training_series(
                 "high": highs,
                 "low": lows,
                 "close": closes,
+                "volume": volumes,
             }
         )
 
@@ -1220,6 +1262,7 @@ def fetch_free_training_series(
             "high",
             "low",
             "close",
+            "volume",
         ):
 
             df[col] = pd.to_numeric(
@@ -1237,6 +1280,8 @@ def fetch_free_training_series(
             ],
             inplace=True,
         )
+
+        df["volume"] = df["volume"].fillna(0)
 
         df.sort_values(
             "datetime",
@@ -1400,6 +1445,8 @@ def apply_deep_indicators(df):
         )
     )
 
+    df["volume_ma"] = df["volume"].rolling(20).mean()
+
     df.replace(
         [np.inf, -np.inf],
         np.nan,
@@ -1407,7 +1454,7 @@ def apply_deep_indicators(df):
     )
 
     df.dropna(
-        subset=FEATURES,
+        subset=FEATURES + ["volume_ma"],
         inplace=True,
     )
 
@@ -2205,7 +2252,7 @@ def get_groq_review(
 
 
 # ============================================================
-# ICT Engine
+# ICT Engine (محسّن)
 # ============================================================
 
 def find_swing_points(
@@ -2989,14 +3036,10 @@ def compute_volatility_risk(
 
 
 # ============================================================
-# Market Regime (ADX) & Trend Strength — إضافات جديدة
+# Market Regime (ADX) & Trend Strength
 # ============================================================
 
 def compute_adx(df, period=14):
-    """
-    مؤشر ADX لقياس قوة/جودة الترند (بغض النظر عن اتجاهه).
-    ADX منخفض = سوق متذبذب/رينج. ADX مرتفع = ترند واضح وقوي.
-    """
     if (
         df is None
         or df.empty
@@ -3060,10 +3103,6 @@ def compute_adx(df, period=14):
 
 
 def compute_market_regime(df):
-    """
-    يصنّف حالة السوق الحالية إلى TRENDING / TRANSITION / RANGING
-    ويُرجع عامل تخفيض للثقة (0.0 - 1.0) يُستخدم لضرب الثقة النهائية.
-    """
     adx = compute_adx(df)
 
     if adx is None:
@@ -3076,16 +3115,10 @@ def compute_market_regime(df):
         return "TRANSITION", 0.85
 
     else:
-        # سوق متذبذب/رينج واضح — نخفّض الثقة بقوة
         return "RANGING", 0.55
 
 
 def compute_trend_strength(last_row):
-    """
-    فرق EMA50/EMA200 كنسبة من ATR — بديل عن الاعتماد فقط
-    على تقاطع EMA الثنائي (فوق/تحت) الذي لا يميّز بين
-    ترند قوي وترند ضعيف جداً قريب من التقاطع.
-    """
     try:
 
         ema_50 = float(
@@ -3179,6 +3212,155 @@ def detect_recent_displacement(
             )
 
     return results[-3:]
+
+
+def find_equal_highs_lows(df, lookback=20, tolerance=0.002):
+    if df is None or df.empty or len(df) < lookback:
+        return [], []
+
+    recent = df.iloc[-lookback:].copy()
+    highs = recent["high"].values
+    lows = recent["low"].values
+
+    equal_highs = []
+    for i in range(len(highs)):
+        for j in range(i+1, min(i+10, len(highs))):
+            if abs(highs[i] - highs[j]) / (highs[i] + 1e-6) < tolerance:
+                equal_highs.append(round(highs[i], 2))
+                break
+
+    equal_lows = []
+    for i in range(len(lows)):
+        for j in range(i+1, min(i+10, len(lows))):
+            if abs(lows[i] - lows[j]) / (lows[i] + 1e-6) < tolerance:
+                equal_lows.append(round(lows[i], 2))
+                break
+
+    equal_highs = list(set(equal_highs))
+    equal_lows = list(set(equal_lows))
+
+    return equal_highs, equal_lows
+
+
+def compute_premium_discount(df, dealing_range=None):
+    if df is None or df.empty:
+        return None, None
+
+    if dealing_range is None:
+        window = df.iloc[-24:]
+        high = window["high"].max()
+        low = window["low"].min()
+    else:
+        high, low = dealing_range
+
+    if high <= low:
+        return None, None
+
+    mid = (high + low) / 2
+    return {
+        "high": float(high),
+        "low": float(low),
+        "mid": float(mid),
+        "is_premium": float(df["close"].iloc[-1]) > mid,
+        "is_discount": float(df["close"].iloc[-1]) < mid,
+    }
+
+
+# ============================================================
+# Order Flow Proxy Engine
+# ============================================================
+
+def compute_order_flow_proxy(df):
+    if df is None or df.empty or len(df) < 30:
+        return {
+            "estimated_delta": 0,
+            "cvd": 0,
+            "volume_imbalance": 0,
+            "absorption": 0,
+            "exhaustion": 0,
+            "delta_signal": "NEUTRAL",
+        }
+
+    d = df.copy()
+
+    range_ = d["high"] - d["low"]
+    range_[range_ <= 0] = 1e-6
+    buy_pressure = d["volume"] * (d["close"] - d["low"]) / range_
+    sell_pressure = d["volume"] * (d["high"] - d["close"]) / range_
+    delta = buy_pressure - sell_pressure
+
+    delta_smooth = delta.rolling(OF_DELTA_SMOOTH).mean().fillna(delta)
+    estimated_delta = float(delta_smooth.iloc[-1])
+
+    cvd_series = delta_smooth.cumsum()
+    cvd = float(cvd_series.iloc[-1])
+
+    volume_ma = d["volume"].rolling(20).mean()
+    volume_ratio = d["volume"] / (volume_ma + 1e-6)
+
+    body = abs(d["close"] - d["open"])
+    candle_range = d["high"] - d["low"]
+    candle_range[candle_range <= 0] = 1e-6
+    body_pct = body / candle_range * 100
+
+    close_location = (d["close"] - d["low"]) / (candle_range + 1e-6)
+    last_idx = len(d) - 1
+    vol_ratio = volume_ratio.iloc[-1]
+    body_pct_last = body_pct.iloc[-1]
+    close_loc_last = close_location.iloc[-1]
+
+    imbalance_score = 0
+    if vol_ratio > OF_VOLUME_SPIKE_MULT:
+        imbalance_score += 40
+    if body_pct_last > OF_IMBALANCE_BODY_THRESHOLD:
+        imbalance_score += 30
+    if close_loc_last > 0.8 or close_loc_last < 0.2:
+        imbalance_score += 30
+
+    upper_wick = d["high"] - d["close"]
+    lower_wick = d["open"] - d["low"]
+    max_wick = np.maximum(upper_wick, lower_wick)
+    wick_ratio = max_wick / (candle_range + 1e-6)
+
+    absorption_score = 0
+    if vol_ratio > OF_VOLUME_SPIKE_MULT:
+        absorption_score += 30
+    if wick_ratio.iloc[-1] > OF_ABSORPTION_WICK_RATIO:
+        absorption_score += 40
+    atr_val = d["atr"].iloc[-1] if "atr" in d else 0
+    if atr_val > 0 and (d["close"].iloc[-1] - d["open"].iloc[-1]) / atr_val < 0.3:
+        absorption_score += 30
+    absorption_score = min(absorption_score, 100)
+
+    exhaustion_score = 0
+    recent_5 = d.iloc[-5:]
+    avg_body = abs(recent_5["close"] - recent_5["open"]).mean()
+    if avg_body > 0 and body.iloc[-1] / avg_body > 1.5:
+        exhaustion_score += 30
+    if vol_ratio > OF_VOLUME_SPIKE_MULT:
+        exhaustion_score += 30
+    if wick_ratio.iloc[-1] > 0.5:
+        exhaustion_score += 40
+    exhaustion_score = min(exhaustion_score, 100)
+
+    if estimated_delta > 0:
+        delta_signal = "BULLISH"
+    elif estimated_delta < 0:
+        delta_signal = "BEARISH"
+    else:
+        delta_signal = "NEUTRAL"
+
+    return {
+        "estimated_delta": round(estimated_delta, 2),
+        "cvd": round(cvd, 2),
+        "volume_imbalance": round(imbalance_score, 1),
+        "absorption": round(absorption_score, 1),
+        "exhaustion": round(exhaustion_score, 1),
+        "delta_signal": delta_signal,
+        "volume_ratio": round(vol_ratio, 2),
+        "body_pct": round(body_pct_last, 1),
+        "close_location": round(close_loc_last, 3),
+    }
 
 
 def run_ict_engine(
@@ -3396,6 +3578,9 @@ def run_ict_engine(
         1,
     )
 
+    equal_highs, equal_lows = find_equal_highs_lows(df_processed)
+    premium_discount = compute_premium_discount(df_processed)
+
     return {
         "bias": bias,
         "structure_breaks": structure_breaks,
@@ -3435,1958 +3620,17 @@ def run_ict_engine(
             ),
         },
         "confidence": confidence,
+        "equal_highs": equal_highs,
+        "equal_lows": equal_lows,
+        "premium_discount": premium_discount,
     }
 
 
 # ============================================================
-# Institutional Strategy
+# الاستراتيجية الوحيدة: ICT + Order Flow
 # ============================================================
 
-def _get_h1_trend(
-    df_h1_processed,
-):
-    if (
-        df_h1_processed is None
-        or df_h1_processed.empty
-    ):
-        return None
-
-    last = (
-        df_h1_processed.iloc[-1]
-    )
-
-    try:
-
-        return (
-            "BULLISH"
-            if float(
-                last["ema_50"]
-            )
-            > float(
-                last["ema_200"]
-            )
-            else "BEARISH"
-        )
-
-    except Exception:
-        return None
-
-
-def _get_previous_day_levels(
-    df,
-):
-    if (
-        df is None
-        or df.empty
-        or "datetime" not in df.columns
-    ):
-        return None
-
-    work = df.copy()
-
-    work["datetime"] = pd.to_datetime(
-        work["datetime"],
-        utc=True,
-        errors="coerce",
-    )
-
-    work.dropna(
-        subset=["datetime"],
-        inplace=True,
-    )
-
-    if work.empty:
-        return None
-
-    last_day = (
-        work["datetime"]
-        .dt.date
-        .iloc[-1]
-    )
-
-    previous_days = (
-        work[
-            work["datetime"]
-            .dt.date
-            < last_day
-        ]
-    )
-
-    if previous_days.empty:
-        return None
-
-    previous_date = (
-        previous_days[
-            "datetime"
-        ]
-        .dt.date
-        .max()
-    )
-
-    day_data = (
-        previous_days[
-            previous_days[
-                "datetime"
-            ].dt.date
-            == previous_date
-        ]
-    )
-
-    if day_data.empty:
-        return None
-
-    return {
-        "pdh": float(
-            day_data["high"].max()
-        ),
-        "pdl": float(
-            day_data["low"].min()
-        ),
-        "date": str(
-            previous_date
-        ),
-    }
-
-
-def _get_asian_range_for_latest_day(
-    df,
-):
-    if (
-        df is None
-        or df.empty
-        or "datetime" not in df.columns
-    ):
-        return None
-
-    work = df.copy()
-
-    work["datetime"] = pd.to_datetime(
-        work["datetime"],
-        utc=True,
-        errors="coerce",
-    )
-
-    work.dropna(
-        subset=["datetime"],
-        inplace=True,
-    )
-
-    if work.empty:
-        return None
-
-    latest_date = (
-        work["datetime"]
-        .dt.date
-        .iloc[-1]
-    )
-
-    asian = work[
-        (
-            work["datetime"]
-            .dt.date
-            == latest_date
-        )
-        & (
-            work["datetime"]
-            .dt.hour
-            >= 0
-        )
-        & (
-            work["datetime"]
-            .dt.hour
-            < 7
-        )
-    ]
-
-    if asian.empty:
-        return None
-
-    return {
-        "asian_high": float(
-            asian["high"].max()
-        ),
-        "asian_low": float(
-            asian["low"].min()
-        ),
-        "date": str(
-            latest_date
-        ),
-    }
-
-
-def _institutional_session_allowed(
-    timestamp,
-):
-    try:
-
-        ts = pd.Timestamp(
-            timestamp
-        )
-
-        if ts.tzinfo is None:
-            ts = ts.tz_localize(
-                "UTC"
-            )
-        else:
-            ts = ts.tz_convert(
-                "UTC"
-            )
-
-        hour = ts.hour
-
-        # London
-        if 7 <= hour < 11:
-            return (
-                True,
-                "LONDON",
-            )
-
-        # New York
-        if 12 <= hour < 16:
-            return (
-                True,
-                "NEW YORK",
-            )
-
-        return (
-            False,
-            "OUTSIDE_SESSION",
-        )
-
-    except Exception:
-        return (
-            False,
-            "UNKNOWN",
-        )
-
-
-def _find_institutional_sweep(
-    df,
-    liquidity_levels,
-    trend,
-):
-    if (
-        df is None
-        or df.empty
-        or len(df) < 8
-    ):
-        return None
-
-    recent = df.iloc[
-        -INSTITUTIONAL_SWEEP_LOOKBACK:
-    ].copy()
-
-    candidates = []
-
-    bull_levels = [
-        (
-            "ASIAN_LOW",
-            liquidity_levels.get(
-                "asian_low"
-            ),
-        ),
-        (
-            "PDL",
-            liquidity_levels.get(
-                "pdl"
-            ),
-        ),
-    ]
-
-    bear_levels = [
-        (
-            "ASIAN_HIGH",
-            liquidity_levels.get(
-                "asian_high"
-            ),
-        ),
-        (
-            "PDH",
-            liquidity_levels.get(
-                "pdh"
-            ),
-        ),
-    ]
-
-    if trend == "BULLISH":
-
-        for idx, row in recent.iterrows():
-
-            for name, level in bull_levels:
-
-                if level is None:
-                    continue
-
-                try:
-
-                    swept = (
-                        float(row["low"])
-                        < float(level)
-                    )
-
-                    reclaimed = (
-                        float(row["close"])
-                        > float(level)
-                    )
-
-                    if swept and reclaimed:
-
-                        candidates.append(
-                            {
-                                "index": int(idx),
-                                "type": name,
-                                "level": float(level),
-                                "sweep_low": float(
-                                    row["low"]
-                                ),
-                                "sweep_high": float(
-                                    row["high"]
-                                ),
-                                "time": str(
-                                    row.get(
-                                        "datetime",
-                                        "",
-                                    )
-                                ),
-                            }
-                        )
-
-                except Exception:
-                    continue
-
-    elif trend == "BEARISH":
-
-        for idx, row in recent.iterrows():
-
-            for name, level in bear_levels:
-
-                if level is None:
-                    continue
-
-                try:
-
-                    swept = (
-                        float(row["high"])
-                        > float(level)
-                    )
-
-                    reclaimed = (
-                        float(row["close"])
-                        < float(level)
-                    )
-
-                    if swept and reclaimed:
-
-                        candidates.append(
-                            {
-                                "index": int(idx),
-                                "type": name,
-                                "level": float(level),
-                                "sweep_low": float(
-                                    row["low"]
-                                ),
-                                "sweep_high": float(
-                                    row["high"]
-                                ),
-                                "time": str(
-                                    row.get(
-                                        "datetime",
-                                        "",
-                                    )
-                                ),
-                            }
-                        )
-
-                except Exception:
-                    continue
-
-    if not candidates:
-        return None
-
-    return candidates[-1]
-
-
-def _institutional_mss_confirmed(
-    df,
-    sweep,
-    direction,
-):
-    if (
-        df is None
-        or df.empty
-        or sweep is None
-    ):
-        return False, None
-
-    try:
-
-        sweep_position = (
-            df.index.get_loc(
-                sweep["index"]
-            )
-        )
-
-    except Exception:
-        try:
-            sweep_position = int(
-                sweep["index"]
-            )
-        except Exception:
-            return False, None
-
-    latest_position = (
-        len(df) - 1
-    )
-
-    if (
-        latest_position
-        <= sweep_position
-    ):
-        return False, None
-
-    bars_after = (
-        df.iloc[
-            sweep_position + 1:
-        ]
-    )
-
-    if bars_after.empty:
-        return False, None
-
-    confirmation = (
-        bars_after.tail(
-            INSTITUTIONAL_MSS_LOOKBACK
-        )
-    )
-
-    if confirmation.empty:
-        return False, None
-
-    # لا نعتبر نفس شمعة الـ sweep هي MSS
-    before_start = max(
-        0,
-        sweep_position
-        - INSTITUTIONAL_MSS_LOOKBACK,
-    )
-
-    before = df.iloc[
-        before_start:sweep_position
-    ]
-
-    if len(before) < 2:
-        return False, None
-
-    reference_high = float(
-        before["high"].max()
-    )
-
-    reference_low = float(
-        before["low"].min()
-    )
-
-    if direction == "BULLISH":
-
-        for idx, row in confirmation.iterrows():
-
-            if (
-                float(row["close"])
-                > reference_high
-            ):
-
-                return True, {
-                    "type": "BULLISH MSS",
-                    "price": float(
-                        row["close"]
-                    ),
-                    "time": str(
-                        row.get(
-                            "datetime",
-                            "",
-                        )
-                    ),
-                }
-
-    else:
-
-        for idx, row in confirmation.iterrows():
-
-            if (
-                float(row["close"])
-                < reference_low
-            ):
-
-                return True, {
-                    "type": "BEARISH MSS",
-                    "price": float(
-                        row["close"]
-                    ),
-                    "time": str(
-                        row.get(
-                            "datetime",
-                            "",
-                        )
-                    ),
-                }
-
-    return False, None
-
-
-def _institutional_displacement(
-    df,
-    direction,
-):
-    if (
-        df is None
-        or df.empty
-        or "atr" not in df.columns
-    ):
-        return False, None
-
-    last = df.iloc[-1]
-
-    try:
-
-        atr_value = float(
-            last["atr"]
-        )
-
-        body = (
-            float(last["close"])
-            - float(last["open"])
-        )
-
-        candle_range = (
-            float(last["high"])
-            - float(last["low"])
-        )
-
-        if (
-            not np.isfinite(
-                atr_value
-            )
-            or atr_value <= 0
-        ):
-            return False, None
-
-        body_pct = (
-            abs(body)
-            / (
-                candle_range
-                + 1e-9
-            )
-            * 100
-        )
-
-        direction_ok = (
-            (
-                direction == "BULLISH"
-                and body > 0
-            )
-            or
-            (
-                direction == "BEARISH"
-                and body < 0
-            )
-        )
-
-        strong_enough = (
-            abs(body)
-            >= (
-                INSTITUTIONAL_DISPLACEMENT_ATR
-                * atr_value
-            )
-        )
-
-        body_ok = (
-            body_pct
-            >= INSTITUTIONAL_BODY_PERCENT
-        )
-
-        if (
-            direction_ok
-            and strong_enough
-            and body_ok
-        ):
-
-            return True, {
-                "body": round(
-                    abs(body),
-                    2,
-                ),
-                "atr": round(
-                    atr_value,
-                    2,
-                ),
-                "body_pct": round(
-                    body_pct,
-                    1,
-                ),
-                "time": str(
-                    last.get(
-                        "datetime",
-                        "",
-                    )
-                ),
-            }
-
-    except Exception:
-        pass
-
-    return False, None
-
-
-def _institutional_latest_fvg(
-    df,
-    direction,
-):
-    if (
-        df is None
-        or len(df) < 3
-    ):
-        return None
-
-    c1 = df.iloc[-3]
-    c2 = df.iloc[-2]
-    c3 = df.iloc[-1]
-
-    try:
-
-        if direction == "BULLISH":
-
-            if (
-                float(c1["high"])
-                < float(c3["low"])
-            ):
-
-                return {
-                    "bias": "BULLISH",
-                    "bottom": float(
-                        c1["high"]
-                    ),
-                    "top": float(
-                        c3["low"]
-                    ),
-                    "time": str(
-                        c3.get(
-                            "datetime",
-                            "",
-                        )
-                    ),
-                }
-
-        else:
-
-            if (
-                float(c1["low"])
-                > float(c3["high"])
-            ):
-
-                return {
-                    "bias": "BEARISH",
-                    "bottom": float(
-                        c3["high"]
-                    ),
-                    "top": float(
-                        c1["low"]
-                    ),
-                    "time": str(
-                        c3.get(
-                            "datetime",
-                            "",
-                        )
-                    ),
-                }
-
-    except Exception:
-        pass
-
-    return None
-
-
-def _institutional_entry_zone(
-    df,
-    direction,
-    fvg,
-):
-    if (
-        df is None
-        or df.empty
-    ):
-        return False
-
-    if fvg is None:
-        return True
-
-    try:
-
-        price = float(
-            df["close"].iloc[-1]
-        )
-
-        # السماح بالدخول أثناء تكون/تأكيد
-        # المنطقة أو بالقرب منها.
-        atr = float(
-            df["atr"].iloc[-1]
-        )
-
-        if (
-            not np.isfinite(atr)
-            or atr <= 0
-        ):
-            return True
-
-        zone_low = float(
-            fvg["bottom"]
-        )
-
-        zone_high = float(
-            fvg["top"]
-        )
-
-        tolerance = (
-            atr * 0.60
-        )
-
-        return (
-            zone_low - tolerance
-            <= price
-            <= zone_high + tolerance
-        )
-
-    except Exception:
-        return False
-
-
-def _institutional_score(
-    trend,
-    session_name,
-    sweep,
-    mss,
-    displacement,
-    fvg,
-):
-    score = 0.0
-
-    if trend in {
-        "BULLISH",
-        "BEARISH",
-    }:
-        score += 20
-
-    if session_name in {
-        "LONDON",
-        "NEW YORK",
-    }:
-        score += 10
-
-    if sweep:
-        score += 25
-
-    if mss:
-        score += 20
-
-    if displacement:
-        score += 15
-
-    if fvg:
-        score += 10
-
-    return round(
-        min(
-            score,
-            100,
-        ),
-        1,
-    )
-
-
-def institutional_scanner(
-    df_h1_processed,
-    df_m15_processed,
-    df_m5_processed,
-    model,
-    scaler,
-    cfg,
-):
-    strategy_name = (
-        "Institutional Liquidity"
-    )
-
-    result = {
-        "strategy": strategy_name,
-        "trade_exists": False,
-        "direction": None,
-        "ai_conf_before_groq": 0.0,
-        "experience_conf": 0.0,
-        "experience_available": False,
-        "experience_win_rate": None,
-        "experience_sample": 0,
-        "h1_trend": None,
-        "regime": None,
-        "trend_strength": 0.0,
-        "session": None,
-        "sweep": None,
-        "mss": None,
-        "displacement": None,
-        "fvg": None,
-        "pdh": None,
-        "pdl": None,
-        "asian_high": None,
-        "asian_low": None,
-        "institutional_score": 0.0,
-        "groq_called": False,
-        "groq_available": False,
-        "groq_agree": None,
-        "groq_conf": None,
-        "groq_reason": "",
-        "final_confidence": 0.0,
-        "status": "",
-    }
-
-    # --------------------------------------------------------
-    # لا تسمح إلا بصفقة واحدة لهذه الاستراتيجية
-    # --------------------------------------------------------
-
-    active_df = (
-        get_active_trade_for_strategy(
-            strategy_name
-        )
-    )
-
-    if not active_df.empty:
-
-        active = active_df.iloc[0]
-
-        result["trade_exists"] = True
-
-        result["direction"] = (
-            active["direction"]
-        )
-
-        result[
-            "ai_conf_before_groq"
-        ] = float(
-            active.get(
-                "ai_conf",
-                0,
-            )
-            or 0
-        )
-
-        saved_groq = active.get(
-            "groq_conf",
-            np.nan,
-        )
-
-        if pd.notna(
-            saved_groq
-        ):
-            result[
-                "groq_conf"
-            ] = float(
-                saved_groq
-            )
-
-        result[
-            "groq_reason"
-        ] = str(
-            active.get(
-                "groq_note",
-                "",
-            )
-            or ""
-        )
-
-        saved_final = active.get(
-            "final_confidence",
-            np.nan,
-        )
-
-        if pd.notna(
-            saved_final
-        ):
-
-            result[
-                "final_confidence"
-            ] = float(
-                saved_final
-            )
-
-        elif (
-            result["groq_conf"]
-            is not None
-        ):
-
-            result[
-                "final_confidence"
-            ] = result[
-                "groq_conf"
-            ]
-
-        else:
-
-            result[
-                "final_confidence"
-            ] = result[
-                "ai_conf_before_groq"
-            ]
-
-        result["status"] = (
-            "استراتيجية Institutional "
-            "تدير صفقة نشطة حالياً."
-        )
-
-        return (
-            result["status"],
-            result,
-        )
-
-    # --------------------------------------------------------
-    # البيانات
-    # --------------------------------------------------------
-
-    if (
-        df_h1_processed is None
-        or df_h1_processed.empty
-        or df_m5_processed is None
-        or df_m5_processed.empty
-    ):
-
-        result["status"] = (
-            "Institutional: "
-            "بيانات السوق غير كافية."
-        )
-
-        return (
-            result["status"],
-            result,
-        )
-
-    h1_trend = _get_h1_trend(
-        df_h1_processed
-    )
-
-    result["h1_trend"] = (
-        h1_trend
-    )
-
-    # ------------------------------------------------------
-    # Market Regime + Trend Strength (إضافة جديدة)
-    # ------------------------------------------------------
-
-    regime_label, regime_factor = (
-        compute_market_regime(
-            df_h1_processed
-        )
-    )
-
-    trend_strength = (
-        compute_trend_strength(
-            df_h1_processed.iloc[-1]
-        )
-    )
-
-    result["regime"] = regime_label
-
-    result["trend_strength"] = round(
-        trend_strength,
-        2,
-    )
-
-    if h1_trend is None:
-
-        result["status"] = (
-            "Institutional: "
-            "تعذر تحديد ترند H1."
-        )
-
-        return (
-            result["status"],
-            result,
-        )
-
-    latest_time = (
-        df_m5_processed[
-            "datetime"
-        ].iloc[-1]
-        if "datetime"
-        in df_m5_processed.columns
-        else None
-    )
-
-    allowed, session_name = (
-        _institutional_session_allowed(
-            latest_time
-        )
-    )
-
-    result["session"] = (
-        session_name
-    )
-
-    if not allowed:
-
-        result["status"] = (
-            "Institutional: "
-            "خارج جلسة London / New York."
-        )
-
-        return (
-            result["status"],
-            result,
-        )
-
-    # --------------------------------------------------------
-    # السيولة
-    # --------------------------------------------------------
-
-    pd_levels = (
-        _get_previous_day_levels(
-            df_h1_processed
-        )
-    )
-
-    asian_levels = (
-        _get_asian_range_for_latest_day(
-            df_m5_processed
-        )
-    )
-
-    if pd_levels:
-
-        result["pdh"] = round(
-            pd_levels["pdh"],
-            2,
-        )
-
-        result["pdl"] = round(
-            pd_levels["pdl"],
-            2,
-        )
-
-    if asian_levels:
-
-        result["asian_high"] = round(
-            asian_levels["asian_high"],
-            2,
-        )
-
-        result["asian_low"] = round(
-            asian_levels["asian_low"],
-            2,
-        )
-
-    liquidity_levels = {
-        "pdh": (
-            pd_levels["pdh"]
-            if pd_levels
-            else None
-        ),
-        "pdl": (
-            pd_levels["pdl"]
-            if pd_levels
-            else None
-        ),
-        "asian_high": (
-            asian_levels[
-                "asian_high"
-            ]
-            if asian_levels
-            else None
-        ),
-        "asian_low": (
-            asian_levels[
-                "asian_low"
-            ]
-            if asian_levels
-            else None
-        ),
-    }
-
-    sweep = _find_institutional_sweep(
-        df_m5_processed,
-        liquidity_levels,
-        h1_trend,
-    )
-
-    result["sweep"] = (
-        sweep
-    )
-
-    if sweep is None:
-
-        result["status"] = (
-            "Institutional: "
-            "لم يحدث Liquidity Sweep "
-            "مطابق للترند."
-        )
-
-        return (
-            result["status"],
-            result,
-        )
-
-    # --------------------------------------------------------
-    # MSS
-    # --------------------------------------------------------
-
-    mss_ok, mss_data = (
-        _institutional_mss_confirmed(
-            df_m5_processed,
-            sweep,
-            h1_trend,
-        )
-    )
-
-    result["mss"] = (
-        mss_data
-    )
-
-    if not mss_ok:
-
-        result["status"] = (
-            "Institutional: "
-            "تم رصد Sweep ولكن MSS "
-            "لم يتأكد بعد."
-        )
-
-        return (
-            result["status"],
-            result,
-        )
-
-    # --------------------------------------------------------
-    # Displacement
-    # --------------------------------------------------------
-
-    displacement_ok, displacement_data = (
-        _institutional_displacement(
-            df_m5_processed,
-            h1_trend,
-        )
-    )
-
-    result[
-        "displacement"
-    ] = displacement_data
-
-    if not displacement_ok:
-
-        result["status"] = (
-            "Institutional: "
-            "MSS موجود لكن "
-            "Displacement غير كافٍ."
-        )
-
-        return (
-            result["status"],
-            result,
-        )
-
-    # --------------------------------------------------------
-    # FVG
-    # --------------------------------------------------------
-
-    fvg = _institutional_latest_fvg(
-        df_m5_processed,
-        h1_trend,
-    )
-
-    result["fvg"] = fvg
-
-    # FVG عامل تأكيد وليس شرطاً
-    # وحيداً لمنع تقليل الفرص بشكل مفرط.
-
-    fvg_present = (
-        fvg is not None
-    )
-
-    # --------------------------------------------------------
-    # Entry zone
-    # --------------------------------------------------------
-
-    if not _institutional_entry_zone(
-        df_m5_processed,
-        h1_trend,
-        fvg,
-    ):
-
-        result["status"] = (
-            "Institutional: "
-            "السعر لم يدخل منطقة "
-            "FVG / Entry الحالية."
-        )
-
-        return (
-            result["status"],
-            result,
-        )
-
-    # --------------------------------------------------------
-    # AI confirmation
-    # --------------------------------------------------------
-
-    if not model_is_ready(
-        model,
-        scaler,
-    ):
-
-        result["status"] = (
-            "Institutional: "
-            "الشبكة العصبية قيد "
-            "التهيئة والتدريب."
-        )
-
-        return (
-            result["status"],
-            result,
-        )
-
-    h1_last = (
-        df_h1_processed.iloc[-1]
-    )
-
-    try:
-
-        feature_values = (
-            h1_last[
-                FEATURES
-            ]
-            .astype(float)
-            .values
-            .reshape(1, -1)
-        )
-
-        if not np.isfinite(
-            feature_values
-        ).all():
-
-            result["status"] = (
-                "Institutional: "
-                "بيانات AI غير صالحة."
-            )
-
-            return (
-                result["status"],
-                result,
-            )
-
-        x_input = scaler.transform(
-            feature_values
-        )
-
-        probabilities = (
-            model.predict_proba(
-                x_input
-            )[0]
-        )
-
-        classes = np.asarray(
-            model.classes_
-        )
-
-        target_class = (
-            1
-            if h1_trend == "BULLISH"
-            else 0
-        )
-
-        target_indices = np.where(
-            classes == target_class
-        )[0]
-
-        if len(
-            target_indices
-        ) == 0:
-
-            result["status"] = (
-                "Institutional: "
-                "النموذج لا يدعم اتجاه "
-                "الترند الحالي."
-            )
-
-            return (
-                result["status"],
-                result,
-            )
-
-        target_index = int(
-            target_indices[0]
-        )
-
-        ai_conf = float(
-            probabilities[
-                target_index
-            ] * 100
-        )
-
-    except Exception as exc:
-
-        result["status"] = (
-            "Institutional: "
-            f"تعذر تنفيذ AI: {exc}"
-        )
-
-        return (
-            result["status"],
-            result,
-        )
-
-    direction = (
-        "BUY 🟢"
-        if h1_trend == "BULLISH"
-        else "SELL 🔴"
-    )
-
-    result[
-        "direction"
-    ] = direction
-
-    result[
-        "ai_conf_before_groq"
-    ] = ai_conf
-
-    # --------------------------------------------------------
-    # Experience
-    # --------------------------------------------------------
-
-    experience = (
-        get_experience_adjustment(
-            direction,
-            ai_conf,
-        )
-    )
-
-    result[
-        "experience_available"
-    ] = experience[
-        "available"
-    ]
-
-    result[
-        "experience_conf"
-    ] = experience[
-        "confidence"
-    ]
-
-    result[
-        "experience_win_rate"
-    ] = experience[
-        "win_rate"
-    ]
-
-    result[
-        "experience_sample"
-    ] = experience[
-        "sample"
-    ]
-
-    working_ai_conf = (
-        experience["confidence"]
-        if experience["available"]
-        else ai_conf
-    )
-
-    # --------------------------------------------------------
-    # Institutional score
-    # --------------------------------------------------------
-
-    institutional_score = (
-        _institutional_score(
-            h1_trend,
-            session_name,
-            sweep,
-            mss_ok,
-            displacement_ok,
-            fvg_present,
-        )
-    )
-
-    result[
-        "institutional_score"
-    ] = institutional_score
-
-    # دمج AI مع شروط المؤسسة
-    # + خفض الثقة تلقائياً في حال كان
-    # السوق رينج/متذبذب أو الترند ضعيفاً
-    # (regime_factor و strength_factor)
-
-    strength_factor = min(
-        1.0,
-        max(
-            0.5,
-            trend_strength / 1.5,
-        ),
-    )
-
-    working_conf = (
-        (
-            working_ai_conf * 0.45
-            + institutional_score * 0.55
-        )
-        * regime_factor
-        * strength_factor
-    )
-
-    # --------------------------------------------------------
-    # منع نفس الشمعة
-    # --------------------------------------------------------
-
-    signal_bar_time = str(
-        h1_last.get(
-            "datetime",
-            "",
-        )
-    )
-
-    last_signal_key = load_setting(
-        "last_signal_key_institutional",
-        "",
-    )
-
-    if (
-        signal_bar_time
-        and last_signal_key
-        == signal_bar_time
-    ):
-
-        result[
-            "final_confidence"
-        ] = round(
-            working_conf,
-            1,
-        )
-
-        result["status"] = (
-            "Institutional: "
-            "تمت معالجة إشارة H1 "
-            "هذه سابقاً."
-        )
-
-        return (
-            result["status"],
-            result,
-        )
-
-    # --------------------------------------------------------
-    # Groq
-    # --------------------------------------------------------
-
-    groq_result = None
-
-    if cfg["use_groq"]:
-
-        result[
-            "groq_called"
-        ] = True
-
-        extra_context = (
-            "\nالاستراتيجية: Institutional Liquidity.\n"
-            f"الجلسة: {session_name}.\n"
-            f"نظام السوق (Regime): {regime_label}.\n"
-            f"قوة الترند (EMA/ATR): {trend_strength:.2f}.\n"
-            f"Previous Day High: "
-            f"{result['pdh']}.\n"
-            f"Previous Day Low: "
-            f"{result['pdl']}.\n"
-            f"Asian High: "
-            f"{result['asian_high']}.\n"
-            f"Asian Low: "
-            f"{result['asian_low']}.\n"
-            f"Liquidity Sweep: "
-            f"{sweep['type']}.\n"
-            f"MSS: "
-            f"{mss_data['type']}.\n"
-            f"Displacement ATR: "
-            f"{displacement_data['atr']}.\n"
-            f"Displacement Body %: "
-            f"{displacement_data['body_pct']}.\n"
-            f"FVG: "
-            f"{'YES' if fvg_present else 'NO'}.\n"
-        )
-
-        groq_result = get_groq_review(
-            direction,
-            h1_last,
-            working_conf,
-            cfg["groq_key"],
-            cfg["groq_model"],
-            extra_context=extra_context,
-        )
-
-        if groq_result is not None:
-
-            result[
-                "groq_available"
-            ] = True
-
-            result[
-                "groq_agree"
-            ] = groq_result[
-                "agree"
-            ]
-
-            result[
-                "groq_conf"
-            ] = groq_result[
-                "confidence"
-            ]
-
-            result[
-                "groq_reason"
-            ] = groq_result[
-                "reason"
-            ]
-
-            if (
-                not groq_result[
-                    "agree"
-                ]
-                or groq_result[
-                    "confidence"
-                ]
-                < cfg[
-                    "min_groq_conf"
-                ]
-            ):
-
-                penalty_ratio = (
-                    0.35
-                    if not groq_result[
-                        "agree"
-                    ]
-                    else 0.15
-                )
-
-                blended = (
-                    working_conf
-                    * (
-                        1
-                        - penalty_ratio
-                    )
-                    + groq_result[
-                        "confidence"
-                    ]
-                    * penalty_ratio
-                )
-
-                result[
-                    "final_confidence"
-                ] = round(
-                    blended,
-                    1,
-                )
-
-            else:
-
-                result[
-                    "final_confidence"
-                ] = round(
-                    (
-                        working_conf
-                        + groq_result[
-                            "confidence"
-                        ]
-                    )
-                    / 2,
-                    1,
-                )
-
-        else:
-
-            result[
-                "groq_available"
-            ] = False
-
-            result[
-                "final_confidence"
-            ] = round(
-                working_conf * 0.92,
-                1,
-            )
-
-    else:
-
-        result[
-            "final_confidence"
-        ] = round(
-            working_conf,
-            1,
-        )
-
-    # --------------------------------------------------------
-    # Minimum confidence
-    # --------------------------------------------------------
-
-    if (
-        result[
-            "final_confidence"
-        ]
-        < cfg["min_conf"]
-    ):
-
-        result["status"] = (
-            "Institutional: "
-            "الشروط موجودة لكن الثقة "
-            f"{result['final_confidence']:.1f}% "
-            f"< {cfg['min_conf']}% "
-            f"(Regime: {regime_label}، "
-            f"Trend Strength: {trend_strength:.2f})."
-        )
-
-        return (
-            result["status"],
-            result,
-        )
-
-    # --------------------------------------------------------
-    # SL / TP
-    # --------------------------------------------------------
-
-    last_m5 = (
-        df_m5_processed.iloc[-1]
-    )
-
-    curr = round(
-        float(
-            last_m5["close"]
-        ),
-        2,
-    )
-
-    atr_value = float(
-        last_m5["atr"]
-    )
-
-    if (
-        not np.isfinite(
-            atr_value
-        )
-        or atr_value <= 0
-    ):
-
-        result["status"] = (
-            "Institutional: "
-            "ATR غير صالح."
-        )
-
-        return (
-            result["status"],
-            result,
-        )
-
-    # وقف أكثر منطقية:
-    # BUY تحت Sweep Low
-    # SELL فوق Sweep High
-
-    safety_buffer = (
-        atr_value * 0.20
-    )
-
-    if h1_trend == "BULLISH":
-
-        sl_base = float(
-            sweep["sweep_low"]
-        )
-
-        sl_price = round(
-            sl_base
-            - safety_buffer,
-            2,
-        )
-
-        risk_distance = (
-            curr
-            - sl_price
-        )
-
-        if (
-            risk_distance <= 0
-        ):
-            risk_distance = (
-                atr_value
-                * cfg["atr_mult"]
-            )
-
-            sl_price = round(
-                curr
-                - risk_distance,
-                2,
-            )
-
-        tp_price = round(
-            curr
-            + (
-                risk_distance
-                * cfg["risk_reward"]
-            ),
-            2,
-        )
-
-    else:
-
-        sl_base = float(
-            sweep["sweep_high"]
-        )
-
-        sl_price = round(
-            sl_base
-            + safety_buffer,
-            2,
-        )
-
-        risk_distance = (
-            sl_price
-            - curr
-        )
-
-        if (
-            risk_distance <= 0
-        ):
-            risk_distance = (
-                atr_value
-                * cfg["atr_mult"]
-            )
-
-            sl_price = round(
-                curr
-                + risk_distance,
-                2,
-            )
-
-        tp_price = round(
-            curr
-            - (
-                risk_distance
-                * cfg["risk_reward"]
-            ),
-            2,
-        )
-
-    if (
-        sl_price == curr
-        or tp_price == curr
-    ):
-
-        result["status"] = (
-            "Institutional: "
-            "SL/TP غير صالح."
-        )
-
-        return (
-            result["status"],
-            result,
-        )
-
-    # --------------------------------------------------------
-    # حفظ الصفقة
-    # --------------------------------------------------------
-
-    with TRADE_DB_LOCK:
-
-        conn = get_db_connection()
-
-        try:
-
-            # فحص أخير قبل INSERT
-            c = conn.cursor()
-
-            c.execute(
-                """
-                SELECT COUNT(*)
-                FROM active_trade
-                WHERE strategy = ?
-                """,
-                (
-                    strategy_name,
-                ),
-            )
-
-            if int(
-                c.fetchone()[0]
-            ) > 0:
-
-                result[
-                    "trade_exists"
-                ] = True
-
-                result["status"] = (
-                    "Institutional: "
-                    "هناك صفقة نشطة "
-                    "لهذه الاستراتيجية."
-                )
-
-                return (
-                    result["status"],
-                    result,
-                )
-
-            trade_id = (
-                get_next_active_trade_id(
-                    conn
-                )
-            )
-
-            c.execute(
-                """
-                INSERT INTO active_trade (
-                    id,
-                    symbol,
-                    direction,
-                    entry,
-                    sl,
-                    tp,
-                    time,
-                    features,
-                    ai_conf,
-                    groq_conf,
-                    groq_note,
-                    signal_bar_time,
-                    final_confidence,
-                    strategy
-                )
-                VALUES (
-                    ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?
-                )
-                """,
-                (
-                    trade_id,
-                    "XAU/USD",
-                    direction,
-                    curr,
-                    sl_price,
-                    tp_price,
-                    datetime.now(
-                        timezone.utc
-                    ).isoformat(),
-                    json.dumps(
-                        {
-                            feature: float(
-                                h1_last[
-                                    feature
-                                ]
-                            )
-                            for feature
-                            in FEATURES
-                        }
-                    ),
-                    ai_conf,
-                    (
-                        result[
-                            "groq_conf"
-                        ]
-                        if result[
-                            "groq_conf"
-                        ] is not None
-                        else None
-                    ),
-                    result[
-                        "groq_reason"
-                    ],
-                    signal_bar_time,
-                    result[
-                        "final_confidence"
-                    ],
-                    strategy_name,
-                ),
-            )
-
-            conn.commit()
-
-        finally:
-            conn.close()
-
-    save_setting(
-        "last_signal_key_institutional",
-        signal_bar_time,
-    )
-
-    groq_line = (
-        f"\nGroq: "
-        f"{result['groq_conf']:.1f}%"
-        if result[
-            "groq_available"
-        ]
-        else ""
-    )
-
-    send_alert(
-        (
-            "🏦 Institutional Trade Signal\n"
-            f"Strategy: {strategy_name}\n"
-            f"Direction: {direction}\n"
-            f"Session: {session_name}\n"
-            f"Regime: {regime_label} | "
-            f"Trend Strength: {trend_strength:.2f}\n"
-            f"Sweep: {sweep['type']}\n"
-            f"MSS: {mss_data['type']}\n"
-            f"Displacement: "
-            f"{displacement_data['body_pct']:.1f}% body\n"
-            f"FVG: "
-            f"{'YES' if fvg_present else 'NO'}\n"
-            f"Entry: ${curr}\n"
-            f"SL: ${sl_price}\n"
-            f"TP: ${tp_price}\n"
-            f"AI Raw: {ai_conf:.1f}%\n"
-            f"Institutional Score: "
-            f"{institutional_score:.1f}%"
-            f"{groq_line}\n"
-            f"Final Confidence: "
-            f"{result['final_confidence']:.1f}%"
-        ),
-        title=(
-            "🏦 Institutional Trade — XAU/USD"
-        ),
-    )
-
-    send_trade_confirmation_alert(
-        direction=direction,
-        entry=curr,
-        sl=sl_price,
-        tp=tp_price,
-        final_confidence=result[
-            "final_confidence"
-        ],
-        risk_reward_ratio=(
-            cfg["risk_reward"]
-        ),
-        ai_conf=ai_conf,
-        groq_conf=(
-            result["groq_conf"]
-            if result[
-                "groq_available"
-            ]
-            else None
-        ),
-        strategy=strategy_name,
-    )
-
-    result[
-        "trade_exists"
-    ] = True
-
-    result["status"] = (
-        "🏦 تم إطلاق صفقة "
-        "Institutional — "
-        f"{direction} — "
-        f"Sweep: {sweep['type']} — "
-        f"MSS — "
-        f"Final: "
-        f"{result['final_confidence']:.1f}%"
-    )
-
-    return (
-        result["status"],
-        result,
-    )
-
-
-# ============================================================
-# AI Scanner — ICT / SMC
-# ============================================================
-
-def ai_scanner(
+def strategy_scanner(
     df_h1_processed,
     df_m15_processed,
     df_m5_processed,
@@ -5396,7 +3640,7 @@ def ai_scanner(
     ict_data_m5,
     cfg,
 ):
-    strategy_name = "ICT / SMC"
+    strategy_name = "ICT + Order Flow"
 
     result = {
         "strategy": strategy_name,
@@ -5421,1036 +3665,362 @@ def ai_scanner(
         "groq_reason": "",
         "final_confidence": 0.0,
         "status": "",
+        # Order Flow
+        "of_delta": 0,
+        "of_cvd": 0,
+        "of_imbalance": 0,
+        "of_absorption": 0,
+        "of_exhaustion": 0,
+        "of_signal": "NEUTRAL",
+        "confluence_score": 0,
     }
 
-    use_groq_local = cfg[
-        "use_groq"
-    ]
+    use_groq_local = cfg["use_groq"]
+    groq_key_local = cfg["groq_key"]
+    groq_model_local = cfg["groq_model"]
+    min_groq_conf_local = cfg["min_groq_conf"]
+    min_conf_local = cfg["min_conf"]
+    atr_mult_local = cfg["atr_mult"]
+    risk_reward_local = cfg["risk_reward"]
 
-    groq_key_local = cfg[
-        "groq_key"
-    ]
+    of_weight = float(load_setting("of_weight", 35)) / 100.0
+    ict_weight = 1.0 - of_weight
 
-    groq_model_local = cfg[
-        "groq_model"
-    ]
+    # ------------------------------------------------------------
+    # 1. بيانات H1
+    # ------------------------------------------------------------
 
-    min_groq_conf_local = cfg[
-        "min_groq_conf"
-    ]
-
-    min_conf_local = cfg[
-        "min_conf"
-    ]
-
-    atr_mult_local = cfg[
-        "atr_mult"
-    ]
-
-    risk_reward_local = cfg[
-        "risk_reward"
-    ]
-
-    # --------------------------------------------------------
-    # ICT/H1
-    # --------------------------------------------------------
-
-    if (
-        df_h1_processed is not None
-        and not df_h1_processed.empty
-    ):
-
-        h1_last = (
-            df_h1_processed.iloc[-1]
-        )
-
-        result[
-            "h1_trend"
-        ] = (
-            "BULLISH"
-            if h1_last["ema_50"]
-            > h1_last["ema_200"]
-            else "BEARISH"
-        )
-
-        # ---------------------------------------------------
-        # Market Regime + Trend Strength (إضافة جديدة)
-        # ---------------------------------------------------
-
-        regime_label, regime_factor = (
-            compute_market_regime(
-                df_h1_processed
-            )
-        )
-
-        trend_strength = (
-            compute_trend_strength(
-                h1_last
-            )
-        )
-
+    if df_h1_processed is not None and not df_h1_processed.empty:
+        h1_last = df_h1_processed.iloc[-1]
+        result["h1_trend"] = "BULLISH" if h1_last["ema_50"] > h1_last["ema_200"] else "BEARISH"
+        regime_label, regime_factor = compute_market_regime(df_h1_processed)
+        trend_strength = compute_trend_strength(h1_last)
         result["regime"] = regime_label
-
-        result["trend_strength"] = round(
-            trend_strength,
-            2,
-        )
-
+        result["trend_strength"] = round(trend_strength, 2)
     else:
-
-        regime_label, regime_factor = (
-            "UNKNOWN",
-            1.0,
-        )
-
+        regime_label, regime_factor = "UNKNOWN", 1.0
         trend_strength = 0.0
 
-    result["m15_bias"] = (
-        ict_data_m15.get(
-            "bias"
-        )
-        if ict_data_m15
-        else "NEUTRAL"
-    )
+    result["m15_bias"] = ict_data_m15.get("bias") if ict_data_m15 else "NEUTRAL"
+    result["m5_bias"] = ict_data_m5.get("bias") if ict_data_m5 else "NEUTRAL"
 
-    result["m5_bias"] = (
-        ict_data_m5.get(
-            "bias"
-        )
-        if ict_data_m5
-        else "NEUTRAL"
-    )
+    # ------------------------------------------------------------
+    # 2. التحقق من وجود صفقة نشطة
+    # ------------------------------------------------------------
 
-    # --------------------------------------------------------
-    # فقط ICT active trade
-    # --------------------------------------------------------
-
-    df_act = (
-        get_active_trade_for_strategy(
-            strategy_name
-        )
-    )
-
+    df_act = get_active_trade_for_strategy(strategy_name)
     if not df_act.empty:
-
         active = df_act.iloc[0]
-
-        result[
-            "trade_exists"
-        ] = True
-
-        result[
-            "direction"
-        ] = active[
-            "direction"
-        ]
-
-        result[
-            "ai_conf_before_groq"
-        ] = float(
-            active.get(
-                "ai_conf",
-                0,
-            )
-            or 0
-        )
-
-        groq_conf = active.get(
-            "groq_conf",
-            np.nan,
-        )
-
-        if pd.notna(
-            groq_conf
-        ):
-
-            result[
-                "groq_conf"
-            ] = float(
-                groq_conf
-            )
-
-        result[
-            "groq_reason"
-        ] = str(
-            active.get(
-                "groq_note",
-                "",
-            )
-            or ""
-        )
-
-        saved_final = active.get(
-            "final_confidence",
-            np.nan,
-        )
-
-        if pd.notna(
-            saved_final
-        ):
-
-            result[
-                "final_confidence"
-            ] = float(
-                saved_final
-            )
-
-        elif (
-            result[
-                "groq_conf"
-            ]
-            is not None
-        ):
-
-            result[
-                "final_confidence"
-            ] = result[
-                "groq_conf"
-            ]
-
+        result["trade_exists"] = True
+        result["direction"] = active["direction"]
+        result["ai_conf_before_groq"] = float(active.get("ai_conf", 0) or 0)
+        groq_conf = active.get("groq_conf", np.nan)
+        if pd.notna(groq_conf):
+            result["groq_conf"] = float(groq_conf)
+        result["groq_reason"] = str(active.get("groq_note", "") or "")
+        saved_final = active.get("final_confidence", np.nan)
+        if pd.notna(saved_final):
+            result["final_confidence"] = float(saved_final)
+        elif result["groq_conf"] is not None:
+            result["final_confidence"] = result["groq_conf"]
         else:
+            result["final_confidence"] = result["ai_conf_before_groq"]
+        result["status"] = f"{strategy_name} يدير صفقة نشطة حالياً."
+        return result["status"], result
 
-            result[
-                "final_confidence"
-            ] = result[
-                "ai_conf_before_groq"
-            ]
+    # ------------------------------------------------------------
+    # 3. البيانات كافية؟
+    # ------------------------------------------------------------
 
-        result["status"] = (
-            "ICT / SMC يدير "
-            "صفقة نشطة حالياً."
-        )
+    if df_h1_processed is None or df_h1_processed.empty:
+        result["status"] = "بيانات السوق غير كافية."
+        return result["status"], result
 
-        return (
-            result["status"],
-            result,
-        )
+    if not model_is_ready(model, scaler):
+        result["status"] = "الشبكة العصبية قيد التهيئة."
+        return result["status"], result
 
-    # --------------------------------------------------------
-    # البيانات
-    # --------------------------------------------------------
+    last = df_h1_processed.iloc[-1]
+    signal_bar_time = str(last.get("datetime", ""))
+    last_signal_key = load_setting("last_signal_key", "")
 
-    if (
-        df_h1_processed is None
-        or df_h1_processed.empty
-    ):
-
-        result["status"] = (
-            "ICT: لا توجد صفقة: "
-            "بيانات السوق غير كافية."
-        )
-
-        return (
-            result["status"],
-            result,
-        )
-
-    if not model_is_ready(
-        model,
-        scaler,
-    ):
-
-        result["status"] = (
-            "ICT: الشبكة العصبية "
-            "قيد التهيئة والتدريب."
-        )
-
-        return (
-            result["status"],
-            result,
-        )
-
-    last = (
-        df_h1_processed.iloc[-1]
-    )
-
-    signal_bar_time = str(
-        last.get(
-            "datetime",
-            "",
-        )
-    )
-
-    last_signal_key = load_setting(
-        "last_signal_key",
-        "",
-    )
-
-    # --------------------------------------------------------
-    # AI
-    # --------------------------------------------------------
+    # ============================================================
+    # 4. AI Neural Network
+    # ============================================================
 
     try:
-
-        feature_values = (
-            last[
-                FEATURES
-            ]
-            .astype(float)
-            .values
-            .reshape(1, -1)
-        )
-
-        if not np.isfinite(
-            feature_values
-        ).all():
-
-            result["status"] = (
-                "ICT: بيانات المؤشرات "
-                "غير صالحة."
-            )
-
-            return (
-                result["status"],
-                result,
-            )
-
-        x_input = scaler.transform(
-            feature_values
-        )
-
-        probabilities = (
-            model.predict_proba(
-                x_input
-            )[0]
-        )
-
-        classes = np.asarray(
-            model.classes_
-        )
-
-        best_index = int(
-            np.argmax(
-                probabilities
-            )
-        )
-
-        model_pred = int(
-            classes[
-                best_index
-            ]
-        )
-
+        feature_values = last[FEATURES].astype(float).values.reshape(1, -1)
+        if not np.isfinite(feature_values).all():
+            result["status"] = "بيانات المؤشرات غير صالحة."
+            return result["status"], result
+        x_input = scaler.transform(feature_values)
+        probabilities = model.predict_proba(x_input)[0]
+        classes = np.asarray(model.classes_)
+        best_index = int(np.argmax(probabilities))
+        model_pred = int(classes[best_index])
     except Exception as exc:
+        result["status"] = f"تعذر تنفيذ الشبكة العصبية: {exc}"
+        return result["status"], result
 
-        result["status"] = (
-            "ICT: تعذر تنفيذ "
-            f"الشبكة العصبية: {exc}"
-        )
+    # ============================================================
+    # 5. Trend Alignment
+    # ============================================================
 
-        return (
-            result["status"],
-            result,
-        )
-
-    # --------------------------------------------------------
-    # Trend
-    # --------------------------------------------------------
-
-    h1_last = (
-        df_h1_processed.iloc[-1]
-    )
-
-    h1_trend = (
-        "BULLISH"
-        if h1_last["ema_50"]
-        > h1_last["ema_200"]
-        else "BEARISH"
-    )
-
-    result[
-        "h1_trend"
-    ] = h1_trend
-
+    h1_trend = result["h1_trend"]
     pred = model_pred
-
-    if (
-        h1_trend == "BEARISH"
-        and pred == 1
-    ):
-
+    if h1_trend == "BEARISH" and pred == 1:
         pred = 0
-
-        result["status"] = (
-            "ICT: ترند هابط — "
-            "البحث نحو فرص البيع."
-        )
-
-    elif (
-        h1_trend == "BULLISH"
-        and pred == 0
-    ):
-
+    elif h1_trend == "BULLISH" and pred == 0:
         pred = 1
 
-        result["status"] = (
-            "ICT: ترند صاعد — "
-            "البحث نحو فرص الشراء."
-        )
-
-    # --------------------------------------------------------
-    # confidence
-    # --------------------------------------------------------
+    # ============================================================
+    # 6. AI Confidence
+    # ============================================================
 
     try:
-
-        target_indices = np.where(
-            classes == pred
-        )[0]
-
-        if len(
-            target_indices
-        ) == 0:
-
-            result["status"] = (
-                "ICT: النموذج لا يدعم "
-                "الاتجاه المطلوب."
-            )
-
-            return (
-                result["status"],
-                result,
-            )
-
-        target_index = int(
-            target_indices[0]
-        )
-
-        ai_conf = float(
-            probabilities[
-                target_index
-            ]
-            * 100
-        )
-
+        target_indices = np.where(classes == pred)[0]
+        if len(target_indices) == 0:
+            result["status"] = "النموذج لا يدعم الاتجاه المطلوب."
+            return result["status"], result
+        target_index = int(target_indices[0])
+        ai_conf = float(probabilities[target_index] * 100)
     except Exception as exc:
+        result["status"] = f"تعذر حساب الثقة: {exc}"
+        return result["status"], result
 
-        result["status"] = (
-            "ICT: تعذر حساب "
-            f"الثقة: {exc}"
-        )
+    direction = "BUY 🟢" if pred == 1 else "SELL 🔴"
+    result["direction"] = direction
+    result["ai_conf_before_groq"] = ai_conf
 
-        return (
-            result["status"],
-            result,
-        )
+    # ============================================================
+    # 7. ICT M15/M5 Confirmation
+    # ============================================================
 
-    direction = (
-        "BUY 🟢"
-        if pred == 1
-        else "SELL 🔴"
-    )
-
-    result[
-        "direction"
-    ] = direction
-
-    result[
-        "ai_conf_before_groq"
-    ] = ai_conf
-
-    # --------------------------------------------------------
-    # M15/M5
-    # --------------------------------------------------------
-
-    m15_bias = (
-        ict_data_m15.get(
-            "bias"
-        )
-        if ict_data_m15
-        else "NEUTRAL"
-    )
-
-    m5_bias = (
-        ict_data_m5.get(
-            "bias"
-        )
-        if ict_data_m5
-        else "NEUTRAL"
-    )
-
-    result[
-        "m15_bias"
-    ] = m15_bias
-
-    result[
-        "m5_bias"
-    ] = m5_bias
-
+    m15_bias = result["m15_bias"]
+    m5_bias = result["m5_bias"]
     confirmation_score = 1.0
-
-    if (
-        m15_bias != "NEUTRAL"
-        and m15_bias != h1_trend
-    ):
+    if m15_bias != "NEUTRAL" and m15_bias != h1_trend:
+        confirmation_score -= 0.35
+    if m5_bias != "NEUTRAL" and m5_bias != h1_trend:
         confirmation_score -= 0.35
 
-    if (
-        m5_bias != "NEUTRAL"
-        and m5_bias != h1_trend
-    ):
-        confirmation_score -= 0.35
+    # ============================================================
+    # 8. Experience Layer
+    # ============================================================
 
-    # --------------------------------------------------------
-    # Experience
-    # --------------------------------------------------------
+    experience = get_experience_adjustment(direction, ai_conf)
+    result["experience_available"] = experience["available"]
+    result["experience_conf"] = experience["confidence"]
+    result["experience_win_rate"] = experience["win_rate"]
+    result["experience_sample"] = experience["sample"]
+    working_conf = experience["confidence"] if experience["available"] else ai_conf
 
-    experience = (
-        get_experience_adjustment(
-            direction,
-            ai_conf,
-        )
-    )
-
-    result[
-        "experience_available"
-    ] = experience[
-        "available"
-    ]
-
-    result[
-        "experience_conf"
-    ] = experience[
-        "confidence"
-    ]
-
-    result[
-        "experience_win_rate"
-    ] = experience[
-        "win_rate"
-    ]
-
-    result[
-        "experience_sample"
-    ] = experience[
-        "sample"
-    ]
-
-    working_conf = (
-        experience["confidence"]
-        if experience["available"]
-        else ai_conf
-    )
-
-    # --------------------------------------------------------
-    # ICT M15
-    # --------------------------------------------------------
+    # ============================================================
+    # 9. ICT M15 Confidence
+    # ============================================================
 
     if ict_data_m15 is not None:
-
-        ict_bias = (
-            ict_data_m15.get(
-                "bias"
-            )
-        )
-
-        ict_conf = (
-            ict_data_m15.get(
-                "confidence",
-                50.0,
-            )
-        )
-
-        result[
-            "ict_bias"
-        ] = ict_bias
-
-        result[
-            "ict_confidence"
-        ] = ict_conf
-
-        ai_direction_bias = (
-            "BULLISH"
-            if pred == 1
-            else "BEARISH"
-        )
-
-        if (
-            ict_bias
-            == ai_direction_bias
-        ):
-
-            ict_component = (
-                ict_conf
-            )
-
-        elif (
-            ict_bias
-            == "NEUTRAL"
-        ):
-
+        ict_bias = ict_data_m15.get("bias")
+        ict_conf = ict_data_m15.get("confidence", 50.0)
+        result["ict_bias"] = ict_bias
+        result["ict_confidence"] = ict_conf
+        ai_direction_bias = "BULLISH" if pred == 1 else "BEARISH"
+        if ict_bias == ai_direction_bias:
+            ict_component = ict_conf
+        elif ict_bias == "NEUTRAL":
             ict_component = 50.0
-
         else:
+            ict_component = 100.0 - ict_conf
+        working_conf = working_conf * 0.85 + ict_component * 0.15
 
-            ict_component = (
-                100.0
-                - ict_conf
-            )
+    # ============================================================
+    # 10. Order Flow Proxy
+    # ============================================================
 
-        working_conf = (
-            working_conf * 0.85
-            + ict_component * 0.15
-        )
+    of_df = df_m5_processed if df_m5_processed is not None and not df_m5_processed.empty else df_m15_processed
+    of_metrics = compute_order_flow_proxy(of_df) if of_df is not None and not of_df.empty else {}
 
-    # ------------------------------------------------------
-    # تطبيق تخفيض الثقة بحسب نظام السوق وقوة الترند
-    # (إضافة جديدة — يمنع الإفراط في الثقة أثناء الرينج)
-    # ------------------------------------------------------
+    result["of_delta"] = of_metrics.get("estimated_delta", 0)
+    result["of_cvd"] = of_metrics.get("cvd", 0)
+    result["of_imbalance"] = of_metrics.get("volume_imbalance", 0)
+    result["of_absorption"] = of_metrics.get("absorption", 0)
+    result["of_exhaustion"] = of_metrics.get("exhaustion", 0)
+    result["of_signal"] = of_metrics.get("delta_signal", "NEUTRAL")
 
-    strength_factor = min(
-        1.0,
-        max(
-            0.5,
-            trend_strength / 1.5,
-        ),
-    )
+    of_score = 50
+    if of_metrics:
+        of_score = np.mean([
+            of_metrics.get("volume_imbalance", 0),
+            of_metrics.get("absorption", 0),
+            of_metrics.get("exhaustion", 0),
+        ])
+        if of_metrics["delta_signal"] == "BULLISH" and pred == 1:
+            of_score = min(100, of_score + 20)
+        elif of_metrics["delta_signal"] == "BEARISH" and pred == 0:
+            of_score = min(100, of_score + 20)
+        elif of_metrics["delta_signal"] != "NEUTRAL":
+            of_score = max(0, of_score - 20)
 
-    working_conf *= (
-        confirmation_score
-        * regime_factor
-        * strength_factor
-    )
+    result["confluence_score"] = round(of_score, 1)
 
-    # --------------------------------------------------------
-    # Duplicate signal
-    # --------------------------------------------------------
+    # ============================================================
+    # 11. دمج ICT + Order Flow
+    # ============================================================
 
-    if (
-        signal_bar_time
-        and last_signal_key
-        == signal_bar_time
-    ):
+    strength_factor = min(1.0, max(0.5, trend_strength / 1.5))
+    ict_final = working_conf * confirmation_score * regime_factor * strength_factor
+    combined_conf = ict_final * ict_weight + of_score * of_weight if of_score > 0 else ict_final
 
-        result[
-            "final_confidence"
-        ] = round(
-            working_conf,
-            1,
-        )
+    # ============================================================
+    # 12. منع تكرار الإشارة
+    # ============================================================
 
-        result["status"] = (
-            "ICT: تمت معالجة "
-            "هذه الشمعة سابقاً."
-        )
+    if signal_bar_time and last_signal_key == signal_bar_time:
+        result["final_confidence"] = round(combined_conf, 1)
+        result["status"] = "تمت معالجة هذه الشمعة سابقاً."
+        return result["status"], result
 
-        return (
-            result["status"],
-            result,
-        )
-
-    # --------------------------------------------------------
-    # Groq
-    # --------------------------------------------------------
+    # ============================================================
+    # 13. Groq
+    # ============================================================
 
     groq_result = None
-
     if use_groq_local:
-
-        result[
-            "groq_called"
-        ] = True
-
-        groq_result = (
-            get_groq_review(
-                direction,
-                last,
-                working_conf,
-                groq_key_local,
-                groq_model_local,
-                extra_context=(
-                    f"\nنظام السوق (Regime): "
-                    f"{regime_label}.\n"
-                    f"قوة الترند (EMA/ATR): "
-                    f"{trend_strength:.2f}.\n"
-                ),
-            )
+        result["groq_called"] = True
+        extra_context = (
+            f"\nنظام السوق (Regime): {regime_label}.\n"
+            f"قوة الترند (EMA/ATR): {trend_strength:.2f}.\n"
+            f"Order Flow Delta: {of_metrics.get('estimated_delta', 0):.2f}\n"
+            f"Order Flow Imbalance: {of_metrics.get('volume_imbalance', 0):.1f}%\n"
+            f"Order Flow Absorption: {of_metrics.get('absorption', 0):.1f}%\n"
         )
-
+        groq_result = get_groq_review(
+            direction, last, combined_conf,
+            groq_key_local, groq_model_local,
+            extra_context=extra_context
+        )
         if groq_result is not None:
-
-            result[
-                "groq_available"
-            ] = True
-
-            result[
-                "groq_agree"
-            ] = groq_result[
-                "agree"
-            ]
-
-            result[
-                "groq_conf"
-            ] = groq_result[
-                "confidence"
-            ]
-
-            result[
-                "groq_reason"
-            ] = groq_result[
-                "reason"
-            ]
-
-            if (
-                not groq_result[
-                    "agree"
-                ]
-                or groq_result[
-                    "confidence"
-                ]
-                < min_groq_conf_local
-            ):
-
-                penalty_ratio = (
-                    0.35
-                    if not groq_result[
-                        "agree"
-                    ]
-                    else 0.15
-                )
-
-                blended = (
-                    working_conf
-                    * (
-                        1
-                        - penalty_ratio
-                    )
-                    + groq_result[
-                        "confidence"
-                    ]
-                    * penalty_ratio
-                )
-
-                result[
-                    "final_confidence"
-                ] = round(
-                    blended,
-                    1,
-                )
-
+            result["groq_available"] = True
+            result["groq_agree"] = groq_result["agree"]
+            result["groq_conf"] = groq_result["confidence"]
+            result["groq_reason"] = groq_result["reason"]
+            if not groq_result["agree"] or groq_result["confidence"] < min_groq_conf_local:
+                penalty_ratio = 0.35 if not groq_result["agree"] else 0.15
+                blended = combined_conf * (1 - penalty_ratio) + groq_result["confidence"] * penalty_ratio
+                result["final_confidence"] = round(blended, 1)
             else:
-
-                result[
-                    "final_confidence"
-                ] = round(
-                    (
-                        working_conf
-                        + groq_result[
-                            "confidence"
-                        ]
-                    )
-                    / 2,
-                    1,
-                )
-
+                result["final_confidence"] = round((combined_conf + groq_result["confidence"]) / 2, 1)
         else:
-
-            result[
-                "groq_available"
-            ] = False
-
-            result[
-                "final_confidence"
-            ] = round(
-                working_conf * 0.92,
-                1,
-            )
-
+            result["groq_available"] = False
+            result["final_confidence"] = round(combined_conf * 0.92, 1)
     else:
+        result["final_confidence"] = round(combined_conf, 1)
 
-        result[
-            "final_confidence"
-        ] = round(
-            working_conf,
-            1,
-        )
+    # ============================================================
+    # 14. الحد الأدنى للثقة
+    # ============================================================
 
-    # --------------------------------------------------------
-    # Minimum confidence
-    # --------------------------------------------------------
-
-    if (
-        result[
-            "final_confidence"
-        ]
-        < min_conf_local
-    ):
-
+    if result["final_confidence"] < min_conf_local:
         result["status"] = (
-            f"🟡 ICT ({direction}) "
-            "مطابق للترند، لكن لم "
-            "تكتمل شروط التأكيد "
-            f"(الثقة "
-            f"{result['final_confidence']:.1f}% "
-            f"< {min_conf_local}% — "
-            f"Regime: {regime_label}، "
-            f"Trend Strength: {trend_strength:.2f})."
+            f"🟡 {strategy_name} ({direction}) — الثقة {result['final_confidence']:.1f}% < {min_conf_local}% "
+            f"(Regime: {regime_label}, Trend Strength: {trend_strength:.2f}, OF: {of_score:.1f})"
         )
+        return result["status"], result
 
-        return (
-            result["status"],
-            result,
-        )
+    # ============================================================
+    # 15. SL / TP
+    # ============================================================
 
-    # --------------------------------------------------------
-    # SL / TP
-    # --------------------------------------------------------
+    curr = round(float(last["close"]), 2)
+    atr_value = float(last["atr"])
+    if not np.isfinite(atr_value) or atr_value <= 0:
+        result["status"] = "قيمة ATR غير صالحة."
+        return result["status"], result
 
-    curr = round(
-        float(
-            last["close"]
-        ),
-        2,
-    )
-
-    atr_value = float(
-        last["atr"]
-    )
-
-    if (
-        not np.isfinite(
-            atr_value
-        )
-        or atr_value <= 0
-    ):
-
-        result["status"] = (
-            "ICT: قيمة ATR غير صالحة."
-        )
-
-        return (
-            result["status"],
-            result,
-        )
-
-    sl_distance = round(
-        atr_value
-        * atr_mult_local,
-        2,
-    )
-
-    tp_distance = round(
-        sl_distance
-        * risk_reward_local,
-        2,
-    )
+    sl_distance = round(atr_value * atr_mult_local, 2)
+    tp_distance = round(sl_distance * risk_reward_local, 2)
 
     if pred == 1:
-
-        sl_price = round(
-            curr
-            - sl_distance,
-            2,
-        )
-
-        tp_price = round(
-            curr
-            + tp_distance,
-            2,
-        )
-
+        sl_price = round(curr - sl_distance, 2)
+        tp_price = round(curr + tp_distance, 2)
     else:
+        sl_price = round(curr + sl_distance, 2)
+        tp_price = round(curr - tp_distance, 2)
 
-        sl_price = round(
-            curr
-            + sl_distance,
-            2,
-        )
-
-        tp_price = round(
-            curr
-            - tp_distance,
-            2,
-        )
-
-    # --------------------------------------------------------
-    # حفظ ICT دون حذف Institutional
-    # --------------------------------------------------------
+    # ============================================================
+    # 16. حفظ الصفقة
+    # ============================================================
 
     with TRADE_DB_LOCK:
-
         conn = get_db_connection()
-
         try:
-
             c = conn.cursor()
+            c.execute("SELECT COUNT(*) FROM active_trade WHERE strategy = ?", (strategy_name,))
+            if int(c.fetchone()[0]) > 0:
+                result["trade_exists"] = True
+                result["status"] = f"{strategy_name}: توجد صفقة نشطة بالفعل."
+                return result["status"], result
 
-            c.execute(
-                """
-                SELECT COUNT(*)
-                FROM active_trade
-                WHERE strategy = ?
-                """,
-                (
-                    strategy_name,
-                ),
-            )
-
-            if int(
-                c.fetchone()[0]
-            ) > 0:
-
-                result[
-                    "trade_exists"
-                ] = True
-
-                result["status"] = (
-                    "ICT: توجد صفقة "
-                    "نشطة بالفعل."
-                )
-
-                return (
-                    result["status"],
-                    result,
-                )
-
-            trade_id = (
-                get_next_active_trade_id(
-                    conn
-                )
-            )
-
+            trade_id = get_next_active_trade_id(conn)
             c.execute(
                 """
                 INSERT INTO active_trade (
-                    id,
-                    symbol,
-                    direction,
-                    entry,
-                    sl,
-                    tp,
-                    time,
-                    features,
-                    ai_conf,
-                    groq_conf,
-                    groq_note,
-                    signal_bar_time,
-                    final_confidence,
-                    strategy
-                )
-                VALUES (
-                    ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?
-                )
+                    id, symbol, direction, entry, sl, tp, time, features,
+                    ai_conf, groq_conf, groq_note, signal_bar_time, final_confidence, strategy
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    trade_id,
-                    "XAU/USD",
-                    direction,
-                    curr,
-                    sl_price,
-                    tp_price,
-                    datetime.now(
-                        timezone.utc
-                    ).isoformat(),
-                    json.dumps(
-                        {
-                            feature: float(
-                                last[
-                                    feature
-                                ]
-                            )
-                            for feature
-                            in FEATURES
-                        }
-                    ),
+                    trade_id, "XAU/USD", direction, curr, sl_price, tp_price,
+                    datetime.now(timezone.utc).isoformat(),
+                    json.dumps({feature: float(last[feature]) for feature in FEATURES}),
                     ai_conf,
-                    (
-                        result[
-                            "groq_conf"
-                        ]
-                        if result[
-                            "groq_conf"
-                        ] is not None
-                        else None
-                    ),
-                    result[
-                        "groq_reason"
-                    ],
+                    result["groq_conf"] if result["groq_conf"] is not None else None,
+                    result["groq_reason"],
                     signal_bar_time,
-                    result[
-                        "final_confidence"
-                    ],
+                    result["final_confidence"],
                     strategy_name,
-                ),
+                )
             )
-
             conn.commit()
-
         finally:
             conn.close()
 
-    save_setting(
-        "last_signal_key",
-        signal_bar_time,
-    )
+    save_setting("last_signal_key", signal_bar_time)
 
-    groq_line = (
-        f"\nGroq: "
-        f"{result['groq_conf']:.1f}%"
-        if result[
-            "groq_available"
-        ]
-        else ""
-    )
+    # ============================================================
+    # 17. تنبيهات
+    # ============================================================
 
+    groq_line = f"\nGroq: {result['groq_conf']:.1f}%" if result["groq_available"] else ""
     send_alert(
         (
-            "🧠 ICT / SMC Trade Signal\n"
-            f"Strategy: {strategy_name}\n"
+            f"🧠 {strategy_name} Signal\n"
             f"Direction: {direction}\n"
-            f"Regime: {regime_label} | "
-            f"Trend Strength: {trend_strength:.2f}\n"
-            f"Entry: ${curr}\n"
-            f"SL: ${sl_price}\n"
-            f"TP: ${tp_price}\n"
-            f"AI Raw: {ai_conf:.1f}%\n"
-            f"Experience+ICT: "
-            f"{working_conf:.1f}%"
-            f"{groq_line}\n"
-            f"Final Confidence: "
-            f"{result['final_confidence']:.1f}%"
-        )
+            f"Regime: {regime_label} | Trend Strength: {trend_strength:.2f}\n"
+            f"ICT Conf: {ict_final:.1f}%\n"
+            f"OF Score: {of_score:.1f}%\n"
+            f"Entry: ${curr}\nSL: ${sl_price}\nTP: ${tp_price}\n"
+            f"AI Raw: {ai_conf:.1f}%{groq_line}\n"
+            f"Final Confidence: {result['final_confidence']:.1f}%"
+        ),
+        title=f"🧠 {strategy_name} — XAU/USD"
     )
 
     send_trade_confirmation_alert(
-        direction=direction,
-        entry=curr,
-        sl=sl_price,
-        tp=tp_price,
-        final_confidence=result[
-            "final_confidence"
-        ],
-        risk_reward_ratio=(
-            risk_reward_local
-        ),
+        direction=direction, entry=curr, sl=sl_price, tp=tp_price,
+        final_confidence=result["final_confidence"],
+        risk_reward_ratio=risk_reward_local,
         ai_conf=ai_conf,
-        groq_conf=(
-            result["groq_conf"]
-            if result[
-                "groq_available"
-            ]
-            else None
-        ),
+        groq_conf=result["groq_conf"] if result["groq_available"] else None,
         strategy=strategy_name,
     )
 
-    result[
-        "trade_exists"
-    ] = True
-
+    result["trade_exists"] = True
     result["status"] = (
-        f"🟢 ICT: تم إطلاق الإشارة "
-        f"({direction}) — "
-        f"AI: {ai_conf:.1f}% — "
-        f"Final: "
-        f"{result['final_confidence']:.1f}%"
+        f"🟢 {strategy_name}: تم إطلاق الإشارة ({direction}) — "
+        f"AI: {ai_conf:.1f}% — OF: {of_score:.1f}% — Final: {result['final_confidence']:.1f}%"
     )
-
-    return (
-        result["status"],
-        result,
-    )
+    return result["status"], result
 
 
 # ============================================================
@@ -6465,9 +4035,7 @@ def _get_shared_engine_state():
             "last_groq_error": None,
             "last_train_time": None,
             "last_update_time": None,
-            "ai_result": None,
-            "institutional_result": None,
-            "strategy_results": {},
+            "strategy_result": None,
             "scan_msg": "",
             "ict_confidence": None,
             "snapshot": None,
@@ -6479,644 +4047,198 @@ def _get_shared_engine_state():
     }
 
 
-_shared_engine_state = (
-    _get_shared_engine_state()
-)
-
-APP_STATE = (
-    _shared_engine_state["data"]
-)
-
-_APP_STATE_LOCK = (
-    _shared_engine_state["lock"]
-)
+_shared_engine_state = _get_shared_engine_state()
+APP_STATE = _shared_engine_state["data"]
+_APP_STATE_LOCK = _shared_engine_state["lock"]
 
 
-def APP_STATE_set(
-    key,
-    value,
-):
+def APP_STATE_set(key, value):
     with _APP_STATE_LOCK:
         APP_STATE[key] = value
 
 
-def APP_STATE_get(
-    key,
-    default=None,
-):
+def APP_STATE_get(key, default=None):
     with _APP_STATE_LOCK:
-        return APP_STATE.get(
-            key,
-            default,
-        )
+        return APP_STATE.get(key, default)
 
 
 def _read_worker_config():
-    def safe_float(
-        key,
-        default,
-    ):
+    def safe_float(key, default):
         try:
-
-            return float(
-                load_setting(
-                    key,
-                    str(default),
-                )
-                or default
-            )
-
+            return float(load_setting(key, str(default)) or default)
         except Exception:
-            return float(
-                default
-            )
+            return float(default)
 
     return {
-        "twelve_key": load_setting(
-            "twelve_key",
-            "",
-        ),
-        "use_groq": (
-            load_setting(
-                "use_groq",
-                "1",
-            )
-            == "1"
-        ),
-        "groq_key": load_setting(
-            "groq_key",
-            "",
-        ),
-        "groq_model": load_setting(
-            "groq_model",
-            "openai/gpt-oss-120b",
-        ),
-        "min_groq_conf": safe_float(
-            "min_groq_conf",
-            50,
-        ),
-        "min_conf": safe_float(
-            "min_conf",
-            65,
-        ),
-        "atr_mult": safe_float(
-            "atr_mult",
-            1.5,
-        ),
-        "risk_reward": safe_float(
-            "risk_reward",
-            2.0,
-        ),
+        "twelve_key": load_setting("twelve_key", ""),
+        "use_groq": load_setting("use_groq", "1") == "1",
+        "groq_key": load_setting("groq_key", ""),
+        "groq_model": load_setting("groq_model", "openai/gpt-oss-120b"),
+        "min_groq_conf": safe_float("min_groq_conf", 50),
+        "min_conf": safe_float("min_conf", 65),
+        "atr_mult": safe_float("atr_mult", 1.5),
+        "risk_reward": safe_float("risk_reward", 2.0),
+        "of_weight": safe_float("of_weight", 35),
     }
 
 
 # ============================================================
-# مراقبة جميع الصفقات النشطة
+# مراقبة الصفقات النشطة
 # ============================================================
 
-def _monitor_active_trade(
-    df_live_processed,
-    model,
-    scaler,
-    cfg,
-):
-    if (
-        df_live_processed is None
-        or df_live_processed.empty
-    ):
+def _monitor_active_trade(df_live_processed, model, scaler, cfg):
+    if df_live_processed is None or df_live_processed.empty:
         return
 
     conn = get_db_connection()
-
     try:
-
-        active_df = pd.read_sql(
-            """
-            SELECT *
-            FROM active_trade
-            ORDER BY id ASC
-            """,
-            conn,
-        )
-
+        active_df = pd.read_sql("SELECT * FROM active_trade ORDER BY id ASC", conn)
     finally:
         conn.close()
 
     if active_df.empty:
         return
 
-    last_row = (
-        df_live_processed.iloc[-1]
-    )
+    last_row = df_live_processed.iloc[-1]
+    current_bar_time = str(last_row.get("datetime", ""))
 
-    current_bar_time = str(
-        last_row.get(
-            "datetime",
-            "",
-        )
-    )
-
-    for _, trade_row in (
-        active_df.iterrows()
-    ):
-
+    for _, trade_row in active_df.iterrows():
         try:
-            _monitor_single_active_trade(
-                trade_row,
-                current_bar_time,
-                last_row,
-                model,
-                scaler,
-                cfg,
-            )
-
+            _monitor_single_active_trade(trade_row, current_bar_time, last_row, model, scaler, cfg)
         except Exception:
             continue
 
 
-def _monitor_single_active_trade(
-    trade_row,
-    current_bar_time,
-    last_row,
-    model,
-    scaler,
-    cfg,
-):
-    trade_id = int(
-        trade_row["id"]
-    )
+def _monitor_single_active_trade(trade_row, current_bar_time, last_row, model, scaler, cfg):
+    trade_id = int(trade_row["id"])
+    strategy_name = str(trade_row.get("strategy", "ICT + Order Flow") or "ICT + Order Flow")
+    is_buy_trade = "BUY" in str(trade_row["direction"])
+    signal_bar_time = str(trade_row.get("signal_bar_time", "") or "")
+    can_monitor_trade = current_bar_time != signal_bar_time
 
-    strategy_name = str(
-        trade_row.get(
-            "strategy",
-            "ICT / SMC",
-        )
-        or "ICT / SMC"
-    )
-
-    is_buy_trade = (
-        "BUY"
-        in str(
-            trade_row["direction"]
-        )
-    )
-
-    signal_bar_time = str(
-        trade_row.get(
-            "signal_bar_time",
-            "",
-        )
-        or ""
-    )
-
-    can_monitor_trade = (
-        current_bar_time
-        != signal_bar_time
-    )
-
-    # --------------------------------------------------------
-    # Reversal warning
-    # --------------------------------------------------------
-
-    if (
-        can_monitor_trade
-        and model_is_ready(
-            model,
-            scaler,
-        )
-    ):
-
+    # تنبيه انعكاس محتمل
+    if can_monitor_trade and model_is_ready(model, scaler):
         try:
-
-            x_current = scaler.transform(
-                last_row[
-                    FEATURES
-                ]
-                .astype(float)
-                .values
-                .reshape(1, -1)
-            )
-
-            current_probs = (
-                model.predict_proba(
-                    x_current
-                )[0]
-            )
-
-            classes = np.asarray(
-                model.classes_
-            )
-
-            current_index = int(
-                np.argmax(
-                    current_probs
-                )
-            )
-
-            current_pred = int(
-                classes[
-                    current_index
-                ]
-            )
-
-            current_conf = float(
-                current_probs[
-                    current_index
-                ]
-                * 100
-            )
+            x_current = scaler.transform(last_row[FEATURES].astype(float).values.reshape(1, -1))
+            current_probs = model.predict_proba(x_current)[0]
+            classes = np.asarray(model.classes_)
+            current_index = int(np.argmax(current_probs))
+            current_pred = int(classes[current_index])
+            current_conf = float(current_probs[current_index] * 100)
 
             reversal_detected = False
-
-            if (
-                is_buy_trade
-                and current_pred == 0
-                and current_conf
-                >= (
-                    cfg[
-                        "min_conf"
-                    ]
-                    - 5
-                )
-            ):
-
+            if is_buy_trade and current_pred == 0 and current_conf >= (cfg["min_conf"] - 5):
                 reversal_detected = True
-
-            elif (
-                not is_buy_trade
-                and current_pred == 1
-                and current_conf
-                >= (
-                    cfg[
-                        "min_conf"
-                    ]
-                    - 5
-                )
-            ):
-
+            elif not is_buy_trade and current_pred == 1 and current_conf >= (cfg["min_conf"] - 5):
                 reversal_detected = True
 
             if reversal_detected:
-
                 send_alert(
-                    (
-                        "⚠️ تنبيه الشبكة العصبية\n"
-                        f"الاستراتيجية: "
-                        f"{strategy_name}\n"
-                        f"الصفقة: "
-                        f"{trade_row['direction']}\n"
-                        f"انعكاس محتمل بقوة "
-                        f"{current_conf:.1f}%."
-                    ),
-                    "🚨 AI Reversal Warning",
+                    f"⚠️ تنبيه الشبكة العصبية\nالاستراتيجية: {strategy_name}\nالصفقة: {trade_row['direction']}\nانعكاس محتمل بقوة {current_conf:.1f}%.",
+                    "🚨 AI Reversal Warning"
                 )
-
         except Exception:
             pass
 
     if not can_monitor_trade:
         return
 
-    # --------------------------------------------------------
-    # SL / TP
-    # --------------------------------------------------------
-
-    high_price = float(
-        last_row["high"]
-    )
-
-    low_price = float(
-        last_row["low"]
-    )
-
-    sl_price = float(
-        trade_row["sl"]
-    )
-
-    tp_price = float(
-        trade_row["tp"]
-    )
+    # التحقق من SL/TP
+    high_price = float(last_row["high"])
+    low_price = float(last_row["low"])
+    sl_price = float(trade_row["sl"])
+    tp_price = float(trade_row["tp"])
 
     hit_sl = False
     hit_tp = False
-
     if is_buy_trade:
-
-        if (
-            low_price
-            <= sl_price
-        ):
+        if low_price <= sl_price:
             hit_sl = True
-
-        if (
-            high_price
-            >= tp_price
-        ):
+        if high_price >= tp_price:
             hit_tp = True
-
     else:
-
-        if (
-            high_price
-            >= sl_price
-        ):
+        if high_price >= sl_price:
             hit_sl = True
-
-        if (
-            low_price
-            <= tp_price
-        ):
+        if low_price <= tp_price:
             hit_tp = True
 
-    both_hit = (
-        hit_sl
-        and hit_tp
-    )
-
+    both_hit = hit_sl and hit_tp
     if both_hit:
-
-        # السلوك المحافظ الموجود سابقاً
         hit_tp = False
         hit_sl = True
 
-    if not (
-        hit_sl
-        or hit_tp
-    ):
+    if not (hit_sl or hit_tp):
         return
 
-    win_value = (
-        1
-        if hit_tp
-        else 0
-    )
+    win_value = 1 if hit_tp else 0
+    note_str = "SL and TP touched in same candle; conservative SL outcome." if both_hit else ("AI Target Reached" if hit_tp else "AI Stop Loss Hit")
 
-    note_str = (
-        "SL and TP touched in same candle; "
-        "conservative SL outcome."
-        if both_hit
-        else (
-            "AI Target Reached"
-            if hit_tp
-            else "AI Stop Loss Hit"
-        )
-    )
-
-    # --------------------------------------------------------
-    # Final confidence
-    # --------------------------------------------------------
-
-    saved_final = trade_row.get(
-        "final_confidence",
-        np.nan,
-    )
-
-    if pd.notna(
-        saved_final
-    ):
-
-        final_confidence = float(
-            saved_final
-        )
-
+    saved_final = trade_row.get("final_confidence", np.nan)
+    if pd.notna(saved_final):
+        final_confidence = float(saved_final)
     else:
-
-        saved_groq = trade_row.get(
-            "groq_conf",
-            np.nan,
-        )
-
-        if pd.notna(
-            saved_groq
-        ):
-
-            final_confidence = float(
-                saved_groq
-            )
-
+        saved_groq = trade_row.get("groq_conf", np.nan)
+        if pd.notna(saved_groq):
+            final_confidence = float(saved_groq)
         else:
+            final_confidence = float(trade_row.get("ai_conf", 0) or 0)
 
-            final_confidence = float(
-                trade_row.get(
-                    "ai_conf",
-                    0,
-                )
-                or 0
-            )
-
-    # --------------------------------------------------------
     # تسجيل الصفقة المغلقة
-    # --------------------------------------------------------
-
     with TRADE_DB_LOCK:
-
         conn = get_db_connection()
-
         try:
-
             c = conn.cursor()
-
             c.execute(
                 """
                 INSERT INTO trades (
-                    date,
-                    symbol,
-                    direction,
-                    entry,
-                    sl,
-                    tp,
-                    win,
-                    note,
-                    claude_conf,
-                    claude_note,
-                    groq_conf,
-                    groq_note,
-                    ai_conf_before_groq,
-                    ai_conf_after_groq,
-                    final_confidence,
-                    strategy
-                )
-                VALUES (
-                    ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?, ?, ?
-                )
+                    date, symbol, direction, entry, sl, tp, win, note,
+                    claude_conf, claude_note, groq_conf, groq_note,
+                    ai_conf_before_groq, ai_conf_after_groq, final_confidence, strategy
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    str(
-                        datetime.now(
-                            timezone.utc
-                        ).date()
-                    ),
-                    trade_row[
-                        "symbol"
-                    ],
-                    trade_row[
-                        "direction"
-                    ],
-                    float(
-                        trade_row[
-                            "entry"
-                        ]
-                    ),
-                    float(
-                        trade_row[
-                            "sl"
-                        ]
-                    ),
-                    float(
-                        trade_row[
-                            "tp"
-                        ]
-                    ),
+                    str(datetime.now(timezone.utc).date()),
+                    trade_row["symbol"],
+                    trade_row["direction"],
+                    float(trade_row["entry"]),
+                    float(trade_row["sl"]),
+                    float(trade_row["tp"]),
                     win_value,
                     note_str,
-                    None,
-                    None,
-                    (
-                        float(
-                            trade_row.get(
-                                "groq_conf"
-                            )
-                        )
-                        if pd.notna(
-                            trade_row.get(
-                                "groq_conf"
-                            )
-                        )
-                        else None
-                    ),
-                    str(
-                        trade_row.get(
-                            "groq_note",
-                            "",
-                        )
-                        or ""
-                    ),
-                    float(
-                        trade_row.get(
-                            "ai_conf",
-                            0,
-                        )
-                        or 0
-                    ),
+                    None, None,
+                    float(trade_row.get("groq_conf")) if pd.notna(trade_row.get("groq_conf")) else None,
+                    str(trade_row.get("groq_note", "") or ""),
+                    float(trade_row.get("ai_conf", 0) or 0),
                     final_confidence,
                     final_confidence,
                     strategy_name,
-                ),
+                )
             )
-
-            c.execute(
-                """
-                DELETE FROM active_trade
-                WHERE id = ?
-                """,
-                (
-                    trade_id,
-                ),
-            )
-
+            c.execute("DELETE FROM active_trade WHERE id = ?", (trade_id,))
             conn.commit()
-
         finally:
             conn.close()
 
-    # --------------------------------------------------------
-    # Online Learning
-    # --------------------------------------------------------
-
-    if model_is_ready(
-        model,
-        scaler,
-    ):
-
+    # تعلم عبر الإنترنت
+    if model_is_ready(model, scaler):
         try:
-
-            feat_dict = json.loads(
-                trade_row.get(
-                    "features"
-                )
-                or "{}"
-            )
-
+            feat_dict = json.loads(trade_row.get("features") or "{}")
             if feat_dict:
-
-                x_vec = np.array(
-                    [
-                        [
-                            float(
-                                feat_dict.get(
-                                    f,
-                                    np.nan,
-                                )
-                            )
-                            for f in FEATURES
-                        ]
-                    ],
-                    dtype=float,
-                )
-
-                if np.isfinite(
-                    x_vec
-                ).all():
-
-                    x_scaled = (
-                        scaler.transform(
-                            x_vec
-                        )
-                    )
-
-                    outcome_up = (
-                        (
-                            is_buy_trade
-                            and win_value == 1
-                        )
-                        or (
-                            not is_buy_trade
-                            and win_value == 0
-                        )
-                    )
-
-                    label = np.array(
-                        [
-                            1
-                            if outcome_up
-                            else 0
-                        ]
-                    )
-
+                x_vec = np.array([[float(feat_dict.get(f, np.nan)) for f in FEATURES]], dtype=float)
+                if np.isfinite(x_vec).all():
+                    x_scaled = scaler.transform(x_vec)
+                    outcome_up = (is_buy_trade and win_value == 1) or (not is_buy_trade and win_value == 0)
+                    label = np.array([1 if outcome_up else 0])
                     with MODEL_IO_LOCK:
-
-                        model.partial_fit(
-                            x_scaled,
-                            label,
-                            classes=np.asarray(
-                                model.classes_
-                            ),
-                        )
-
-                        _atomic_joblib_dump(
-                            model,
-                            MODEL_FILE,
-                        )
-
-                    APP_STATE_set(
-                        "last_train_time",
-                        datetime.now(
-                            timezone.utc
-                        ).isoformat(),
-                    )
-
+                        model.partial_fit(x_scaled, label, classes=np.asarray(model.classes_))
+                        _atomic_joblib_dump(model, MODEL_FILE)
+                    APP_STATE_set("last_train_time", datetime.now(timezone.utc).isoformat())
         except Exception:
             pass
 
     send_alert(
-        (
-            f"Closed {trade_row['symbol']} "
-            f"{trade_row['direction']}\n"
-            f"Strategy: {strategy_name}\n"
-            f"-> {note_str}"
-        ),
-        "🧠 AI Trade Settled",
+        f"Closed {trade_row['symbol']} {trade_row['direction']}\nStrategy: {strategy_name}\n-> {note_str}",
+        "🧠 AI Trade Settled"
     )
 
 
@@ -7124,446 +4246,134 @@ def _monitor_single_active_trade(
 # Heartbeat
 # ============================================================
 
-def _maybe_send_heartbeat(
-    ai_result,
-    institutional_result,
-    snapshot,
-):
-    last_heartbeat_raw = (
-        load_setting(
-            "last_heartbeat_time",
-            "",
-        )
-    )
-
-    now = datetime.now(
-        timezone.utc
-    )
-
+def _maybe_send_heartbeat(strategy_result, snapshot):
+    last_heartbeat_raw = load_setting("last_heartbeat_time", "")
+    now = datetime.now(timezone.utc)
     should_send = True
-
     if last_heartbeat_raw:
-
         try:
-
-            last_heartbeat = (
-                datetime.fromisoformat(
-                    last_heartbeat_raw
-                )
-            )
-
-            if (
-                (now - last_heartbeat).total_seconds()
-                < HEARTBEAT_INTERVAL_SECONDS
-            ):
-
+            last_heartbeat = datetime.fromisoformat(last_heartbeat_raw)
+            if (now - last_heartbeat).total_seconds() < HEARTBEAT_INTERVAL_SECONDS:
                 should_send = False
-
         except Exception:
             should_send = True
 
     if not should_send:
         return
 
-    price_txt = (
-        f"${snapshot['close']}"
-        if snapshot
-        and snapshot.get(
-            "close"
-        )
-        else "—"
-    )
-
-    active_df = (
-        get_active_trades_df()
-    )
-
+    price_txt = f"${snapshot['close']}" if snapshot and snapshot.get("close") else "—"
+    active_df = get_active_trades_df()
     if active_df.empty:
-
-        trade_txt = (
-            "لا توجد صفقات نشطة حالياً"
-        )
-
+        trade_txt = "لا توجد صفقات نشطة حالياً"
     else:
-
         parts = []
-
-        for _, row in (
-            active_df.iterrows()
-        ):
-
-            parts.append(
-                (
-                    f"{row.get('strategy', 'ICT / SMC')}: "
-                    f"{row.get('direction', '')}"
-                )
-            )
-
-        trade_txt = "\n".join(
-            parts
-        )
+        for _, row in active_df.iterrows():
+            parts.append(f"{row.get('strategy', 'ICT + Order Flow')}: {row.get('direction', '')}")
+        trade_txt = "\n".join(parts)
 
     send_alert(
-        (
-            "❤️ المحرك يعمل بشكل طبيعي\n"
-            f"آخر سعر: {price_txt}\n"
-            f"الصفقات النشطة:\n"
-            f"{trade_txt}\n"
-            f"الوقت: "
-            f"{now.strftime('%Y-%m-%d %H:%M UTC')}"
-        ),
-        title="❤️ Engine Heartbeat",
+        f"❤️ المحرك يعمل بشكل طبيعي\nآخر سعر: {price_txt}\nالصفقات النشطة:\n{trade_txt}\nالوقت: {now.strftime('%Y-%m-%d %H:%M UTC')}",
+        title="❤️ Engine Heartbeat"
     )
-
-    save_setting(
-        "last_heartbeat_time",
-        now.isoformat(),
-    )
+    save_setting("last_heartbeat_time", now.isoformat())
 
 
 # ============================================================
-# Engine Cycle
+# دورة المحرك الخلفي
 # ============================================================
 
 def _engine_cycle():
-    cfg = (
-        _read_worker_config()
+    cfg = _read_worker_config()
+    twelve_key_local = cfg["twelve_key"]
+    maybe_spawn_training(twelve_key_local)
+
+    model, scaler = load_current_model()
+
+    # جلب البيانات
+    df_live_raw_h1 = fetch_live_series(
+        symbol_twelve="XAU/USD", symbol_yahoo="XAUUSD=X",
+        interval_twelve="1h", interval_yahoo="60m",
+        range_yahoo="60d", outputsize_twelve=LIVE_OUTPUT_SIZE,
+        twelve_api_key=twelve_key_local,
+    )
+    df_live_raw_m15 = fetch_live_series(
+        symbol_twelve="XAU/USD", symbol_yahoo="XAUUSD=X",
+        interval_twelve="15min", interval_yahoo="15m",
+        range_yahoo="5d", outputsize_twelve=LIVE_OUTPUT_SIZE,
+        twelve_api_key=twelve_key_local,
+    )
+    df_live_raw_m5 = fetch_live_series(
+        symbol_twelve="XAU/USD", symbol_yahoo="XAUUSD=X",
+        interval_twelve="5min", interval_yahoo="5m",
+        range_yahoo="5d", outputsize_twelve=LIVE_OUTPUT_SIZE,
+        twelve_api_key=twelve_key_local,
     )
 
-    twelve_key_local = (
-        cfg["twelve_key"]
+    df_live_h1 = keep_closed_candles(df_live_raw_h1, interval_hours=1)
+    df_live_m15 = keep_closed_candles(df_live_raw_m15, interval_hours=0.25)
+    df_live_m5 = keep_closed_candles(df_live_raw_m5, interval_hours=5/60)
+
+    df_h1_processed = apply_deep_indicators(df_live_h1)
+    df_m15_processed = apply_deep_indicators(df_live_m15)
+    df_m5_processed = apply_deep_indicators(df_live_m5)
+
+    # ICT على M15 و M5
+    ict_data_m15 = run_ict_engine(df_m15_processed, swing_lookback=ICT_SWING_LOOKBACK, ob_mult=ICT_OB_DISPLACEMENT_MULT) if not df_m15_processed.empty else None
+    ict_data_m5 = run_ict_engine(df_m5_processed, swing_lookback=ICT_SWING_LOOKBACK, ob_mult=ICT_OB_DISPLACEMENT_MULT) if not df_m5_processed.empty else None
+
+    # استراتيجية واحدة
+    scan_msg, strategy_result = strategy_scanner(
+        df_h1_processed, df_m15_processed, df_m5_processed,
+        model, scaler, ict_data_m15, ict_data_m5, cfg
     )
 
-    maybe_spawn_training(
-        twelve_key_local
-    )
+    # مراقبة الصفقات
+    _monitor_active_trade(df_h1_processed, model, scaler, cfg)
 
-    model, scaler = (
-        load_current_model()
-    )
-
-    # --------------------------------------------------------
-    # H1
-    # --------------------------------------------------------
-
-    df_live_raw_h1 = (
-        fetch_live_series(
-            symbol_twelve="XAU/USD",
-            symbol_yahoo="XAUUSD=X",
-            interval_twelve="1h",
-            interval_yahoo="60m",
-            range_yahoo="60d",
-            outputsize_twelve=LIVE_OUTPUT_SIZE,
-            twelve_api_key=twelve_key_local,
-        )
-    )
-
-    # --------------------------------------------------------
-    # M15
-    # --------------------------------------------------------
-
-    df_live_raw_m15 = (
-        fetch_live_series(
-            symbol_twelve="XAU/USD",
-            symbol_yahoo="XAUUSD=X",
-            interval_twelve="15min",
-            interval_yahoo="15m",
-            range_yahoo="5d",
-            outputsize_twelve=LIVE_OUTPUT_SIZE,
-            twelve_api_key=twelve_key_local,
-        )
-    )
-
-    # --------------------------------------------------------
-    # M5
-    # --------------------------------------------------------
-
-    df_live_raw_m5 = (
-        fetch_live_series(
-            symbol_twelve="XAU/USD",
-            symbol_yahoo="XAUUSD=X",
-            interval_twelve="5min",
-            interval_yahoo="5m",
-            range_yahoo="5d",
-            outputsize_twelve=LIVE_OUTPUT_SIZE,
-            twelve_api_key=twelve_key_local,
-        )
-    )
-
-    df_live_h1 = (
-        keep_closed_candles(
-            df_live_raw_h1,
-            interval_hours=1,
-        )
-    )
-
-    df_live_m15 = (
-        keep_closed_candles(
-            df_live_raw_m15,
-            interval_hours=0.25,
-        )
-    )
-
-    df_live_m5 = (
-        keep_closed_candles(
-            df_live_raw_m5,
-            interval_hours=5 / 60,
-        )
-    )
-
-    df_h1_processed = (
-        apply_deep_indicators(
-            df_live_h1
-        )
-    )
-
-    df_m15_processed = (
-        apply_deep_indicators(
-            df_live_m15
-        )
-    )
-
-    df_m5_processed = (
-        apply_deep_indicators(
-            df_live_m5
-        )
-    )
-
-    # --------------------------------------------------------
-    # ICT M15
-    # --------------------------------------------------------
-
-    ict_data_m15 = (
-        run_ict_engine(
-            df_m15_processed,
-            swing_lookback=(
-                ICT_SWING_LOOKBACK
-            ),
-            ob_mult=(
-                ICT_OB_DISPLACEMENT_MULT
-            ),
-        )
-        if not df_m15_processed.empty
-        else None
-    )
-
-    # --------------------------------------------------------
-    # ICT M5
-    # --------------------------------------------------------
-
-    ict_data_m5 = (
-        run_ict_engine(
-            df_m5_processed,
-            swing_lookback=(
-                ICT_SWING_LOOKBACK
-            ),
-            ob_mult=(
-                ICT_OB_DISPLACEMENT_MULT
-            ),
-        )
-        if not df_m5_processed.empty
-        else None
-    )
-
-    # ========================================================
-    # الاستراتيجية الأولى
-    # ========================================================
-
-    scan_msg_ict, ai_result = (
-        ai_scanner(
-            df_h1_processed,
-            df_m15_processed,
-            df_m5_processed,
-            model,
-            scaler,
-            ict_data_m15,
-            ict_data_m5,
-            cfg,
-        )
-    )
-
-    # ========================================================
-    # الاستراتيجية الثانية
-    # تعمل بشكل مستقل
-    # ========================================================
-
-    scan_msg_institutional, institutional_result = (
-        institutional_scanner(
-            df_h1_processed,
-            df_m15_processed,
-            df_m5_processed,
-            model,
-            scaler,
-            cfg,
-        )
-    )
-
-    # ========================================================
-    # مراقبة جميع الصفقات
-    # ========================================================
-
-    _monitor_active_trade(
-        df_h1_processed,
-        model,
-        scaler,
-        cfg,
-    )
-
-    # ========================================================
     # Snapshot
-    # ========================================================
-
     snapshot = None
-
     if not df_h1_processed.empty:
-
-        last_snapshot = (
-            df_h1_processed.iloc[-1]
-        )
-
+        last_snapshot = df_h1_processed.iloc[-1]
         snapshot = {
-            "close": float(
-                last_snapshot[
-                    "close"
-                ]
-            ),
-            "rsi": float(
-                last_snapshot[
-                    "rsi"
-                ]
-            ),
-            "ema_50": float(
-                last_snapshot[
-                    "ema_50"
-                ]
-            ),
-            "ema_200": float(
-                last_snapshot[
-                    "ema_200"
-                ]
-            ),
-            "atr": float(
-                last_snapshot[
-                    "atr"
-                ]
-            ),
-            "datetime": str(
-                last_snapshot.get(
-                    "datetime",
-                    "",
-                )
-            ),
+            "close": float(last_snapshot["close"]),
+            "rsi": float(last_snapshot["rsi"]),
+            "ema_50": float(last_snapshot["ema_50"]),
+            "ema_200": float(last_snapshot["ema_200"]),
+            "atr": float(last_snapshot["atr"]),
+            "datetime": str(last_snapshot.get("datetime", "")),
         }
 
-    # ========================================================
     # حفظ الحالة
-    # ========================================================
-
-    strategy_results = {
-        "ICT / SMC": ai_result,
-        "Institutional Liquidity": (
-            institutional_result
-        ),
-    }
-
     with _APP_STATE_LOCK:
+        APP_STATE["strategy_result"] = strategy_result
+        APP_STATE["scan_msg"] = scan_msg
+        APP_STATE["ict_confidence"] = ict_data_m15.get("confidence") if ict_data_m15 else None
+        APP_STATE["snapshot"] = snapshot
+        APP_STATE["last_update_time"] = datetime.now(timezone.utc).isoformat()
+        APP_STATE["engine_error"] = None
 
-        APP_STATE[
-            "ai_result"
-        ] = ai_result
-
-        APP_STATE[
-            "institutional_result"
-        ] = institutional_result
-
-        APP_STATE[
-            "strategy_results"
-        ] = strategy_results
-
-        APP_STATE[
-            "scan_msg"
-        ] = (
-            f"ICT: {scan_msg_ict} | "
-            f"Institutional: "
-            f"{scan_msg_institutional}"
-        )
-
-        APP_STATE[
-            "ict_confidence"
-        ] = (
-            ict_data_m15.get(
-                "confidence"
-            )
-            if ict_data_m15
-            else None
-        )
-
-        APP_STATE[
-            "snapshot"
-        ] = snapshot
-
-        APP_STATE[
-            "last_update_time"
-        ] = datetime.now(
-            timezone.utc
-        ).isoformat()
-
-        APP_STATE[
-            "engine_error"
-        ] = None
-
-    _maybe_send_heartbeat(
-        ai_result,
-        institutional_result,
-        snapshot,
-    )
+    _maybe_send_heartbeat(strategy_result, snapshot)
 
 
 # ============================================================
-# Background Worker
+# الخلفية
 # ============================================================
 
 def background_worker_loop():
-
-    APP_STATE_set(
-        "engine_running",
-        True,
-    )
-
+    APP_STATE_set("engine_running", True)
     while True:
-
         try:
-
             _engine_cycle()
-
         except Exception as exc:
-
-            APP_STATE_set(
-                "engine_error",
-                (
-                    f"{exc}\n"
-                    f"{traceback.format_exc()}"
-                ),
-            )
-
-        time.sleep(
-            WORKER_LOOP_SECONDS
-        )
+            APP_STATE_set("engine_error", f"{exc}\n{traceback.format_exc()}")
+        time.sleep(WORKER_LOOP_SECONDS)
 
 
 def ensure_background_worker_started():
-
     for t in threading.enumerate():
-
         if t.name == "bg_worker_loop":
             return
-
-    worker = threading.Thread(
-        target=background_worker_loop,
-        daemon=True,
-        name="bg_worker_loop",
-    )
-
+    worker = threading.Thread(target=background_worker_loop, daemon=True, name="bg_worker_loop")
     worker.start()
 
 
@@ -7574,909 +4384,248 @@ ensure_background_worker_started()
 # UI
 # ============================================================
 
-st.title(
-    "🧠 نظام التداول العميق — XAU/USD"
-)
+st.title("🧠 نظام التداول العميق — XAU/USD (ICT + Order Flow)")
 
-success_count = (
-    get_successful_trades_count()
-)
+success_count = get_successful_trades_count()
+total_count = get_total_trades_count()
 
-total_count = (
-    get_total_trades_count()
-)
+st.caption("📡 مصدر البيانات: Yahoo Finance (مجاني) مع Twelve Data كخيار احتياطي.")
 
-st.caption(
-    "📡 مصدر البيانات المباشر: "
-    "Yahoo Finance (مجاني، بلا مفتاح) "
-    "مع Twelve Data كخطة احتياطية اختيارية."
-)
+if os.path.exists(TRAINING_LOCK_FILE):
+    st.info("🧠 النموذج يتدرب حالياً في الخلفية على البيانات التاريخية.")
 
-if os.path.exists(
-    TRAINING_LOCK_FILE
-):
-
-    st.info(
-        "🧠 النموذج يتدرب حالياً "
-        "في الخلفية على البيانات التاريخية."
-    )
-
-last_update = APP_STATE_get(
-    "last_update_time"
-)
-
-last_data_source = APP_STATE_get(
-    "last_data_source"
-)
-
+last_update = APP_STATE_get("last_update_time")
+last_data_source = APP_STATE_get("last_data_source")
 if last_update:
-
-    source_txt = (
-        f" — المصدر: {last_data_source}"
-        if last_data_source
-        else ""
-    )
-
-    st.caption(
-        "🟢 المحرك الخلفي يعمل — "
-        f"آخر تحديث: {last_update}"
-        f"{source_txt}"
-    )
-
+    source_txt = f" — المصدر: {last_data_source}" if last_data_source else ""
+    st.caption(f"🟢 المحرك الخلفي يعمل — آخر تحديث: {last_update}{source_txt}")
 else:
-
-    st.caption(
-        "🟡 المحرك الخلفي بدأ للتو، "
-        "بانتظار أول دورة تحليل..."
-    )
+    st.caption("🟡 المحرك الخلفي بدأ للتو، بانتظار أول دورة تحليل...")
 
 
 # ============================================================
 # Diagnostics
 # ============================================================
 
-with st.expander(
-    "🔧 حالة المحرك (تشخيص)"
-):
-
-    diag_model, diag_scaler = (
-        load_current_model()
-    )
-
-    model_ready_now = (
-        model_is_ready(
-            diag_model,
-            diag_scaler,
-        )
-    )
-
+with st.expander("🔧 حالة المحرك (تشخيص)"):
+    diag_model, diag_scaler = load_current_model()
+    model_ready_now = model_is_ready(diag_model, diag_scaler)
     d1, d2 = st.columns(2)
-
-    d1.write(
-        "📡 مصدر البيانات الحالي: "
-        + (
-            last_data_source
-            or "لم يُحدَّد بعد"
-        )
-    )
-
-    d1.write(
-        "🔑 مفتاح Twelve Data (احتياطي): "
-        + (
-            "✅ موجود"
-            if twelve_key
-            else "➖ غير مُدخل "
-            "(Yahoo يعمل بدونه)"
-        )
-    )
-
-    d1.write(
-        "🧠 حالة النموذج: "
-        + (
-            "✅ مُدرَّب وجاهز"
-            if model_ready_now
-            else "⏳ غير جاهز بعد"
-        )
-    )
-
-    d1.write(
-        "🔒 قفل تدريب نشط الآن: "
-        + (
-            "نعم"
-            if os.path.exists(
-                TRAINING_LOCK_FILE
-            )
-            else "لا"
-        )
-    )
-
-    last_train_time = (
-        APP_STATE_get(
-            "last_train_time"
-        )
-    )
-
-    d2.write(
-        f"🕒 آخر تدريب ناجح: "
-        f"{last_train_time or 'لم يحدث بعد'}"
-    )
-
-    d2.write(
-        f"🔄 آخر دورة تحليل: "
-        f"{last_update or 'لم تبدأ بعد'}"
-    )
-
-    d2.write(
-        f"📶 عدد الصفقات في السجل: "
-        f"{get_total_trades_count()}"
-    )
-
-    active_diag = (
-        get_active_trades_df()
-    )
-
-    d2.write(
-        "🔒 الصفقات النشطة الآن: "
-        f"{len(active_diag)}"
-    )
+    d1.write("📡 مصدر البيانات الحالي: " + (last_data_source or "لم يُحدَّد بعد"))
+    d1.write("🔑 مفتاح Twelve Data (احتياطي): " + ("✅ موجود" if twelve_key else "➖ غير مُدخل (Yahoo يعمل بدونه)"))
+    d1.write("🧠 حالة النموذج: " + ("✅ مُدرَّب وجاهز" if model_ready_now else "⏳ غير جاهز بعد"))
+    d1.write("🔒 قفل تدريب نشط الآن: " + ("نعم" if os.path.exists(TRAINING_LOCK_FILE) else "لا"))
+    last_train_time = APP_STATE_get("last_train_time")
+    d2.write(f"🕒 آخر تدريب ناجح: {last_train_time or 'لم يحدث بعد'}")
+    d2.write(f"🔄 آخر دورة تحليل: {last_update or 'لم تبدأ بعد'}")
+    d2.write(f"📶 عدد الصفقات في السجل: {get_total_trades_count()}")
+    active_diag = get_active_trades_df()
+    d2.write(f"🔒 الصفقات النشطة الآن: {len(active_diag)}")
 
 
 # ============================================================
-# Strategy Results
+# عرض نتيجة الاستراتيجية
 # ============================================================
 
-ai_result = (
-    APP_STATE_get(
-        "ai_result"
-    )
-    or {}
-)
+strategy_result = APP_STATE_get("strategy_result") or {}
+scan_msg = APP_STATE_get("scan_msg") or ""
 
-institutional_result = (
-    APP_STATE_get(
-        "institutional_result"
-    )
-    or {}
-)
+st.markdown("### 🎯 حالة الاستراتيجية")
 
-scan_msg = (
-    APP_STATE_get(
-        "scan_msg"
-    )
-    or ""
-)
-
-
-st.markdown(
-    "### 🎯 حالة الاستراتيجيات"
-)
-
-
-strategy_results = [
-    (
-        "ICT / SMC",
-        ai_result,
-    ),
-    (
-        "Institutional Liquidity",
-        institutional_result,
-    ),
-]
-
-
-for strategy_name, strategy_result in (
-    strategy_results
-):
-
-    if not strategy_result:
-        continue
-
-    trade_exists = bool(
-        strategy_result.get(
-            "trade_exists",
-            False,
-        )
-    )
-
-    direction = (
-        strategy_result.get(
-            "direction"
-        )
-    )
-
+if strategy_result:
+    trade_exists = bool(strategy_result.get("trade_exists", False))
+    direction = strategy_result.get("direction")
     if trade_exists:
-
-        if (
-            direction
-            and "BUY"
-            in str(direction)
-        ):
-
-            status_class = (
-                "trade-buy"
-            )
-
-            status_text = (
-                "🟢 صفقة نشطة"
-            )
-
-        elif (
-            direction
-            and "SELL"
-            in str(direction)
-        ):
-
-            status_class = (
-                "trade-sell"
-            )
-
-            status_text = (
-                "🔴 صفقة نشطة"
-            )
-
+        if direction and "BUY" in str(direction):
+            status_class = "trade-buy"
+            status_text = "🟢 صفقة نشطة"
+        elif direction and "SELL" in str(direction):
+            status_class = "trade-sell"
+            status_text = "🔴 صفقة نشطة"
         else:
-
-            status_class = (
-                "trade-neutral"
-            )
-
-            status_text = (
-                "🟡 إشارة نشطة"
-            )
-
+            status_class = "trade-neutral"
+            status_text = "🟡 إشارة نشطة"
     else:
+        status_class = "trade-neutral"
+        status_text = "⚪ لا توجد صفقة"
 
-        status_class = (
-            "trade-neutral"
-        )
+    final_conf = float(strategy_result.get("final_confidence", 0) or 0)
+    regime_txt = str(strategy_result.get("regime") or "—")
+    trend_strength_txt = strategy_result.get("trend_strength")
 
-        status_text = (
-            "⚪ لا توجد صفقة"
-        )
-
-    final_conf = float(
-        strategy_result.get(
-            "final_confidence",
-            0,
-        )
-        or 0
-    )
-
-    regime_txt = str(
-        strategy_result.get(
-            "regime"
-        )
-        or "—"
-    )
-
-    trend_strength_txt = (
-        strategy_result.get(
-            "trend_strength"
-        )
-    )
-
-    render_html(
-        f"""
+    render_html(f"""
 <div class="strategy-card">
-    <div class="strategy-title">
-        {strategy_name}
-    </div>
-    <div class="trade-status-value {status_class}">
-        {status_text}
-    </div>
-    <div>
-        الاتجاه:
-        <b>{direction or "—"}</b>
-    </div>
-    <div>
-        Final Confidence:
-        <b>{final_conf:.1f}%</b>
-    </div>
-    <div>
-        نظام السوق (Regime):
-        <b>{regime_txt}</b>
-        |
-        قوة الترند:
-        <b>{trend_strength_txt if trend_strength_txt is not None else "—"}</b>
-    </div>
+    <div class="strategy-title">ICT + Order Flow</div>
+    <div class="trade-status-value {status_class}">{status_text}</div>
+    <div>الاتجاه: <b>{direction or "—"}</b></div>
+    <div>Final Confidence: <b>{final_conf:.1f}%</b></div>
+    <div>نظام السوق (Regime): <b>{regime_txt}</b> | قوة الترند: <b>{trend_strength_txt if trend_strength_txt is not None else "—"}</b></div>
+    <div>OF Delta: {strategy_result.get('of_delta', 0):.2f} | Imbalance: {strategy_result.get('of_imbalance', 0):.1f}%</div>
+    <div>Absorption: {strategy_result.get('of_absorption', 0):.1f}% | Exhaustion: {strategy_result.get('of_exhaustion', 0):.1f}%</div>
 </div>
-"""
-    )
+""")
+else:
+    st.info("بانتظار نتائج التحليل...")
 
 
 # ============================================================
 # H1 / M15 / M5 Overview
 # ============================================================
 
-h1_trend = (
-    ai_result.get(
-        "h1_trend"
-    )
-    or institutional_result.get(
-        "h1_trend"
-    )
-)
-
-m15_bias = ai_result.get(
-    "m15_bias"
-)
-
-m5_bias = ai_result.get(
-    "m5_bias"
-)
-
-if (
-    h1_trend
-    or m15_bias
-    or m5_bias
-):
-
-    display_text = ""
-
-    if h1_trend:
-
-        display_text += (
-            f"📊 H1 Trend: "
-            f"**{h1_trend}**  |  "
-        )
-
-    if m15_bias:
-
-        display_text += (
-            f"⚙️ M15 Setup: "
-            f"**{m15_bias}**  |  "
-        )
-
-    if m5_bias:
-
-        display_text += (
-            f"✅ M5 Confirm: "
-            f"**{m5_bias}**"
-        )
-
-    st.info(
-        display_text
-    )
+if strategy_result:
+    h1_trend = strategy_result.get("h1_trend")
+    m15_bias = strategy_result.get("m15_bias")
+    m5_bias = strategy_result.get("m5_bias")
+    if h1_trend or m15_bias or m5_bias:
+        display_text = ""
+        if h1_trend:
+            display_text += f"📊 H1 Trend: **{h1_trend}**  |  "
+        if m15_bias:
+            display_text += f"⚙️ M15 Setup: **{m15_bias}**  |  "
+        if m5_bias:
+            display_text += f"✅ M5 Confirm: **{m5_bias}**"
+        st.info(display_text)
 
 
 # ============================================================
 # Confidence
 # ============================================================
 
-st.markdown(
-    "### 🧠 مستوى الثقة"
-)
+st.markdown("### 🧠 مستوى الثقة")
 
+final_conf = float(strategy_result.get("final_confidence", 0) or 0) if strategy_result else 0.0
+snapshot = APP_STATE_get("snapshot")
+last_price_txt = f" | آخر سعر: ${snapshot.get('close')}" if snapshot and snapshot.get("close") else ""
 
-all_confidences = []
-
-for _, strategy_result in (
-    strategy_results
-):
-
-    try:
-
-        value = float(
-            strategy_result.get(
-                "final_confidence",
-                0,
-            )
-            or 0
-        )
-
-        if value > 0:
-            all_confidences.append(
-                value
-            )
-
-    except Exception:
-        pass
-
-
-if all_confidences:
-
-    final_conf = max(
-        all_confidences
-    )
-
-    confidence_note = (
-        "أعلى ثقة حالية بين "
-        "الاستراتيجيتين"
-    )
-
-else:
-
-    try:
-
-        final_conf = float(
-            ai_result.get(
-                "ai_conf_before_groq",
-                0,
-            )
-            or 0
-        )
-
-    except Exception:
-        final_conf = 0.0
-
-    confidence_note = (
-        "بانتظار تأكيد الإشارات"
-    )
-
-
-snapshot = APP_STATE_get(
-    "snapshot"
-)
-
-last_price_txt = ""
-
-if (
-    snapshot
-    and snapshot.get(
-        "close"
-    )
-):
-
-    last_price_txt = (
-        f" | آخر سعر: "
-        f"${snapshot.get('close')}"
-    )
-
-
-render_html(
-    f"""
+render_html(f"""
 <div class="ai-level-card">
-    <div class="ai-level-title">
-        AI CONFIDENCE LEVEL
-    </div>
-
-    <div class="ai-level-value">
-        {final_conf:.1f}%
-    </div>
-
-    <div class="ai-level-sub">
-        Trades: {total_count}
-        |
-        Wins: {success_count}
-        |
-        {confidence_note}
-        {last_price_txt}
-    </div>
+    <div class="ai-level-title">AI CONFIDENCE LEVEL</div>
+    <div class="ai-level-value">{final_conf:.1f}%</div>
+    <div class="ai-level-sub">Trades: {total_count} | Wins: {success_count} | ICT + Order Flow {last_price_txt}</div>
 </div>
-"""
-)
+""")
 
 
 # ============================================================
-# Active Trade UI
+# الصفقات النشطة
 # ============================================================
 
-st.markdown(
-    "### 🔒 الصفقات النشطة"
-)
-
+st.markdown("### 🔒 الصفقات النشطة")
 conn = get_db_connection()
-
 try:
-
-    df_active = pd.read_sql(
-        """
-        SELECT *
-        FROM active_trade
-        ORDER BY id ASC
-        """,
-        conn,
-    )
-
+    df_active = pd.read_sql("SELECT * FROM active_trade ORDER BY id ASC", conn)
 finally:
     conn.close()
 
-
 if not df_active.empty:
-
-    for _, active_trade in (
-        df_active.iterrows()
-    ):
-
-        strategy_label = str(
-            active_trade.get(
-                "strategy",
-                "ICT / SMC",
-            )
-            or "ICT / SMC"
-        )
-
-        final_value = float(
-            active_trade.get(
-                "final_confidence",
-                0,
-            )
-            or 0
-        )
-
-        st.warning(
-            f"""
+    for _, active_trade in df_active.iterrows():
+        strategy_label = str(active_trade.get("strategy", "ICT + Order Flow") or "ICT + Order Flow")
+        final_value = float(active_trade.get("final_confidence", 0) or 0)
+        st.warning(f"""
 🔒 **صفقة نشطة — {strategy_label}**
-
 الاتجاه: {active_trade['direction']}
-
 الدخول: ${active_trade['entry']}
-
 SL: ${active_trade['sl']}
-
 TP: ${active_trade['tp']}
-
-الثقة النهائية:
-{final_value:.1f}%
-
-شمعة الإشارة:
-{active_trade.get('signal_bar_time', '')}
-"""
-        )
-
+الثقة النهائية: {final_value:.1f}%
+شمعة الإشارة: {active_trade.get('signal_bar_time', '')}
+""")
 else:
-
-    st.info(
-        "لا توجد صفقات نشطة حالياً."
-    )
+    st.info("لا توجد صفقات نشطة حالياً.")
 
 
 # ============================================================
-# Strategy Details
+# تفاصيل الاستراتيجية (ICT + Order Flow)
 # ============================================================
 
-if institutional_result:
-
-    with st.expander(
-        "🏦 تفاصيل استراتيجية Institutional Liquidity"
-    ):
-
-        st.write(
-            "الجلسة:",
-            institutional_result.get(
-                "session",
-                "—",
-            ),
-        )
-
-        st.write(
-            "H1 Trend:",
-            institutional_result.get(
-                "h1_trend",
-                "—",
-            ),
-        )
-
-        st.write(
-            "نظام السوق (Regime):",
-            institutional_result.get(
-                "regime",
-                "—",
-            ),
-        )
-
-        st.write(
-            "قوة الترند (EMA/ATR):",
-            institutional_result.get(
-                "trend_strength",
-                "—",
-            ),
-        )
-
-        st.write(
-            "Institutional Score:",
-            f"{float(institutional_result.get('institutional_score', 0) or 0):.1f}%",
-        )
-
-        st.write(
-            "PDH:",
-            institutional_result.get(
-                "pdh",
-                "—",
-            ),
-        )
-
-        st.write(
-            "PDL:",
-            institutional_result.get(
-                "pdl",
-                "—",
-            ),
-        )
-
-        st.write(
-            "Asian High:",
-            institutional_result.get(
-                "asian_high",
-                "—",
-            ),
-        )
-
-        st.write(
-            "Asian Low:",
-            institutional_result.get(
-                "asian_low",
-                "—",
-            ),
-        )
-
-        sweep = (
-            institutional_result.get(
-                "sweep"
-            )
-        )
-
-        if sweep:
-
-            st.success(
-                f"💧 Liquidity Sweep: "
-                f"{sweep.get('type', '—')}"
-            )
-
-        mss = (
-            institutional_result.get(
-                "mss"
-            )
-        )
-
-        if mss:
-
-            st.success(
-                f"📐 MSS: "
-                f"{mss.get('type', '—')}"
-            )
-
-        displacement = (
-            institutional_result.get(
-                "displacement"
-            )
-        )
-
-        if displacement:
-
-            st.success(
-                "⚡ Displacement: "
-                f"{displacement.get('body_pct', 0):.1f}% "
-                "body"
-            )
-
-        fvg = (
-            institutional_result.get(
-                "fvg"
-            )
-        )
-
-        if fvg:
-
-            st.success(
-                "🧲 FVG: موجودة"
-            )
-
-        elif (
-            institutional_result.get(
-                "trade_exists"
-            )
-        ):
-
-            st.info(
-                "FVG: غير موجودة في آخر 3 شموع."
-            )
+if strategy_result:
+    with st.expander("📊 تفاصيل ICT + Order Flow"):
+        st.write("H1 Trend:", strategy_result.get("h1_trend", "—"))
+        st.write("نظام السوق (Regime):", strategy_result.get("regime", "—"))
+        st.write("قوة الترند (EMA/ATR):", strategy_result.get("trend_strength", "—"))
+        st.write("M15 Bias:", strategy_result.get("m15_bias", "—"))
+        st.write("M5 Bias:", strategy_result.get("m5_bias", "—"))
+        st.write("ICT Confidence:", f"{strategy_result.get('ict_confidence', 0):.1f}%")
+        st.write("OF Delta:", strategy_result.get("of_delta", 0))
+        st.write("OF CVD:", strategy_result.get("of_cvd", 0))
+        st.write("OF Imbalance:", f"{strategy_result.get('of_imbalance', 0):.1f}%")
+        st.write("OF Absorption:", f"{strategy_result.get('of_absorption', 0):.1f}%")
+        st.write("OF Exhaustion:", f"{strategy_result.get('of_exhaustion', 0):.1f}%")
+        st.write("OF Signal:", strategy_result.get("of_signal", "NEUTRAL"))
+        st.write("Confluence Score:", f"{strategy_result.get('confluence_score', 0):.1f}%")
 
 
 # ============================================================
 # Groq UI
 # ============================================================
 
-for strategy_name, strategy_result in (
-    strategy_results
-):
-
-    if not strategy_result.get(
-        "groq_called"
-    ):
-        continue
-
-    with st.expander(
-        f"🧠 Groq — {strategy_name}"
-    ):
-
-        if strategy_result.get(
-            "groq_available"
-        ):
-
-            groq_conf_val = (
-                strategy_result.get(
-                    "groq_conf"
-                )
-            )
-
-            groq_conf_txt = (
-                f"{groq_conf_val:.1f}%"
-                if groq_conf_val
-                is not None
-                else "—"
-            )
-
-            if strategy_result.get(
-                "groq_agree"
-            ):
-
-                st.success(
-                    "✅ Groq وافق على الإشارة "
-                    "— ثقة Groq: "
-                    f"{groq_conf_txt}"
-                )
-
+if strategy_result and strategy_result.get("groq_called"):
+    with st.expander("🧠 رأي Groq"):
+        if strategy_result.get("groq_available"):
+            groq_conf_val = strategy_result.get("groq_conf")
+            groq_conf_txt = f"{groq_conf_val:.1f}%" if groq_conf_val is not None else "—"
+            if strategy_result.get("groq_agree"):
+                st.success(f"✅ Groq وافق على الإشارة — ثقة Groq: {groq_conf_txt}")
             else:
-
-                st.warning(
-                    "❌ Groq لم يوافق على الإشارة "
-                    "— ثقة Groq: "
-                    f"{groq_conf_txt}"
-                )
-
-            if strategy_result.get(
-                "groq_reason"
-            ):
-
-                st.caption(
-                    "🧠 رأي Groq: "
-                    f"{strategy_result['groq_reason']}"
-                )
-
+                st.warning(f"❌ Groq لم يوافق على الإشارة — ثقة Groq: {groq_conf_txt}")
+            if strategy_result.get("groq_reason"):
+                st.caption(f"🧠 رأي Groq: {strategy_result['groq_reason']}")
         else:
-
-            st.warning(
-                "🟠 تم استدعاء Groq لكن لم تصل "
-                "استجابة صالحة منه هذه الدورة."
-            )
+            st.warning("🟠 تم استدعاء Groq لكن لم تصل استجابة صالحة منه هذه الدورة.")
 
 
 # ============================================================
-# Scan Message
+# آخر رسائل التحليل
 # ============================================================
 
 if scan_msg:
-
-    with st.expander(
-        "🔍 آخر رسائل التحليل"
-    ):
-
-        st.write(
-            scan_msg
-        )
+    with st.expander("🔍 آخر رسائل التحليل"):
+        st.write(scan_msg)
 
 
 # ============================================================
 # Errors
 # ============================================================
 
-twelve_error = (
-    APP_STATE_get(
-        "last_twelve_error"
-    )
-)
+twelve_error = APP_STATE_get("last_twelve_error")
+if twelve_error and twelve_key:
+    st.error(f"⚠️ Twelve Data: {twelve_error}")
 
-if (
-    twelve_error
-    and twelve_key
-):
-
-    st.error(
-        "⚠️ Twelve Data: "
-        f"{twelve_error}"
-    )
-
-
-engine_error = (
-    APP_STATE_get(
-        "engine_error"
-    )
-)
-
+engine_error = APP_STATE_get("engine_error")
 if engine_error:
-
-    st.warning(
-        "⚠️ حدث خطأ داخلي في المحرك "
-        "الخلفي، سيُعاد المحاولة تلقائياً "
-        "في الدورة القادمة."
-    )
+    st.warning("⚠️ حدث خطأ داخلي في المحرك الخلفي، سيُعاد المحاولة تلقائياً في الدورة القادمة.")
 
 
 # ============================================================
-# Trade Log
+# سجل الصفقات
 # ============================================================
 
-st.markdown(
-    "### 📊 سجل الصفقات"
-)
-
+st.markdown("### 📊 سجل الصفقات")
 conn = get_db_connection()
-
 try:
-
-    df_log = pd.read_sql(
-        """
-        SELECT *
-        FROM trades
-        ORDER BY id DESC
-        """,
-        conn,
-    )
-
+    df_log = pd.read_sql("SELECT * FROM trades ORDER BY id DESC", conn)
 finally:
     conn.close()
 
-
 if not df_log.empty:
-
-    win_rate = (
-        df_log["win"].sum()
-        / len(df_log)
-        * 100
-    )
-
-    m1, m2, m3 = (
-        st.columns(3)
-    )
-
-    m1.metric(
-        "إجمالي الصفقات",
-        len(df_log),
-    )
-
-    m2.metric(
-        "نسبة الربح",
-        f"{win_rate:.1f}%",
-    )
-
-    m3.metric(
-        "الصفقات الرابحة",
-        int(
-            df_log["win"].sum()
-        ),
-    )
+    win_rate = df_log["win"].sum() / len(df_log) * 100
+    m1, m2, m3 = st.columns(3)
+    m1.metric("إجمالي الصفقات", len(df_log))
+    m2.metric("نسبة الربح", f"{win_rate:.1f}%")
+    m3.metric("الصفقات الرابحة", int(df_log["win"].sum()))
 
     columns_to_show = [
-        "date",
-        "strategy",
-        "direction",
-        "entry",
-        "sl",
-        "tp",
-        "win",
-        "note",
-        "ai_conf_before_groq",
-        "groq_conf",
-        "final_confidence",
+        "date", "strategy", "direction", "entry", "sl", "tp",
+        "win", "note", "ai_conf_before_groq", "groq_conf", "final_confidence"
     ]
-
-    available_columns = [
-        col
-        for col in columns_to_show
-        if col in df_log.columns
-    ]
-
-    st.dataframe(
-        df_log[
-            available_columns
-        ],
-        use_container_width=True,
-    )
-
+    available_columns = [col for col in columns_to_show if col in df_log.columns]
+    st.dataframe(df_log[available_columns], use_container_width=True)
 else:
-
-    st.info(
-        "لا توجد صفقات مغلقة "
-        "مسجلة حتى الآن."
-    )
+    st.info("لا توجد صفقات مغلقة مسجلة حتى الآن.")
 
 
 # ============================================================
 # Auto Refresh
 # ============================================================
 
-st_autorefresh(
-    interval=20000,
-    key="deep_ai_ui_refresh",
-)
+st_autorefresh(interval=20000, key="deep_ai_ui_refresh")
