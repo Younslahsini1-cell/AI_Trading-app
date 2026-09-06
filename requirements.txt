@@ -4,5 +4,5 @@ streamlit-local-storage
 pandas
 numpy
 requests
-joblib
 scikit-learn
+joblib
