@@ -22,6 +22,9 @@ ICT (Smart Money Concepts) + Order Flow Proxy (تقديري من OHLCV + Volume)
 - Groq (رأي ثانٍ)
 - Experience Layer
 - Risk Management (ATR-based SL/TP)
+
+[إضافة جديدة]:
+- Vision AI: تحليل صور الشارتات عبر GPT-4 Vision أو Gemini، وإنشاء صفقات منفصلة.
 """
 
 
@@ -32,6 +35,7 @@ import sqlite3
 import threading
 import time
 import traceback
+import base64
 
 import joblib
 import numpy as np
@@ -861,6 +865,44 @@ save_setting(
     "of_volume_threshold",
     of_volume_threshold,
 )
+
+
+# ============================================================
+# إعدادات الرؤية الحاسوبية (Vision AI) - جديد
+# ============================================================
+
+st.sidebar.markdown("---")
+st.sidebar.header("🖼️ تحليل صور الشارتات (Vision)")
+
+vision_provider = st.sidebar.selectbox(
+    "مزوّد الرؤية",
+    ["OpenAI", "Gemini"],
+    index=0,
+)
+
+vision_key = st.sidebar.text_input(
+    f"مفتاح {vision_provider} API",
+    type="password",
+    value=load_setting(f"vision_{vision_provider.lower()}_key", ""),
+)
+
+save_setting(
+    f"vision_{vision_provider.lower()}_key",
+    vision_key,
+)
+
+use_vision = st.sidebar.checkbox(
+    "تفعيل تحليل الصور",
+    value=load_setting("use_vision", "0") == "1",
+)
+
+save_setting(
+    "use_vision",
+    "1" if use_vision else "0",
+)
+
+if use_vision:
+    st.sidebar.info("ارفع صورة الشارت في القسم الرئيسي وسيتم تحليلها.")
 
 
 if st.sidebar.button(
@@ -3627,6 +3669,160 @@ def run_ict_engine(
 
 
 # ============================================================
+# Vision AI: تحليل صور الشارتات (جديد)
+# ============================================================
+
+def analyze_chart_image(image_bytes, api_key, provider="openai"):
+    """
+    يحلل صورة الشارت ويعيد قاموسًا يحتوي على:
+    - trend: الاتجاه العام (BULLISH / BEARISH / NEUTRAL)
+    - confidence: ثقة النموذج في الاتجاه (0-100)
+    - support_resistance: مستويات دعم/مقاومة رئيسية (قائمة)
+    - patterns: أنماط شموع أو أشكال فنية ملاحظة
+    - comment: تعليق نصي
+    """
+    if not api_key:
+        return None
+
+    if provider == "openai":
+        url = "https://api.openai.com/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        base64_image = base64.b64encode(image_bytes).decode("utf-8")
+        payload = {
+            "model": "gpt-4-vision-preview",  # أو gpt-4o
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": (
+                                "أنت محلل فني خبير. قم بتحليل صورة الشارت المعطاة واستخرج المعلومات التالية بصيغة JSON فقط:\n"
+                                '{"trend": "BULLISH/BEARISH/NEUTRAL", "confidence": 0-100, "support": [أرقام], "resistance": [أرقام], "patterns": ["وصف نمط1", "وصف نمط2"], "comment": "تعليق موجز"}'
+                            ),
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{base64_image}"
+                            },
+                        },
+                    ],
+                }
+            ],
+            "max_tokens": 500,
+            "temperature": 0,
+        }
+    elif provider == "gemini":
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+        headers = {"Content-Type": "application/json"}
+        base64_image = base64.b64encode(image_bytes).decode("utf-8")
+        payload = {
+            "contents": [
+                {
+                    "parts": [
+                        {
+                            "text": (
+                                "أنت محلل فني خبير. قم بتحليل صورة الشارت المعطاة واستخرج المعلومات التالية بصيغة JSON فقط:\n"
+                                '{"trend": "BULLISH/BEARISH/NEUTRAL", "confidence": 0-100, "support": [أرقام], "resistance": [أرقام], "patterns": ["وصف نمط1", "وصف نمط2"], "comment": "تعليق موجز"}'
+                            )
+                        },
+                        {
+                            "inline_data": {
+                                "mime_type": "image/jpeg",
+                                "data": base64_image,
+                            }
+                        },
+                    ]
+                }
+            ]
+        }
+    else:
+        return None
+
+    try:
+        response = HTTP_SESSION.post(url, headers=headers, json=payload, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+
+        if provider == "openai":
+            content = data["choices"][0]["message"]["content"]
+        elif provider == "gemini":
+            content = data["candidates"][0]["content"]["parts"][0]["text"]
+
+        # تنظيف النص من علامات JSON
+        content = content.replace("```json", "").replace("```", "").strip()
+        result = json.loads(content)
+        return result
+    except Exception as e:
+        APP_STATE_set("last_vision_error", f"تعذر تحليل الصورة: {e}")
+        return None
+
+
+def create_trade_from_vision(analysis, uploaded_file_name):
+    """
+    إنشاء صفقة في جدول active_trade بناءً على تحليل الصورة.
+    """
+    if not analysis:
+        return None
+
+    trend = analysis.get("trend", "NEUTRAL").upper()
+    confidence = float(analysis.get("confidence", 0))
+    if trend not in ["BULLISH", "BEARISH"] or confidence < 30:  # عتبة منخفضة
+        return None
+
+    direction = "BUY 🟢" if trend == "BULLISH" else "SELL 🔴"
+    support = analysis.get("support", [])
+    resistance = analysis.get("resistance", [])
+    if not support or not resistance:
+        # استخدام أرقام افتراضية
+        entry = 0.0
+        sl = 0.0
+        tp = 0.0
+    else:
+        entry = (max(support) + min(resistance)) / 2
+        if trend == "BULLISH":
+            sl = max(support) * 0.995
+            tp = min(resistance) * 1.02
+        else:
+            sl = min(resistance) * 1.005
+            tp = max(support) * 0.98
+
+    # حفظ الصفقة
+    with TRADE_DB_LOCK:
+        conn = get_db_connection()
+        try:
+            c = conn.cursor()
+            trade_id = get_next_active_trade_id(conn)
+            c.execute(
+                """
+                INSERT INTO active_trade (
+                    id, symbol, direction, entry, sl, tp, time, features,
+                    ai_conf, groq_conf, groq_note, signal_bar_time, final_confidence, strategy
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    trade_id, "CHART_IMAGE", direction, entry, sl, tp,
+                    datetime.now(timezone.utc).isoformat(),
+                    json.dumps({}),  # لا ميزات رقمية
+                    confidence,  # ai_conf = ثقة الرؤية
+                    None,  # groq_conf
+                    "",    # groq_note
+                    "",    # signal_bar_time (غير متاح)
+                    confidence,  # final_confidence
+                    "Vision Image Analysis",
+                ),
+            )
+            conn.commit()
+            return direction
+        finally:
+            conn.close()
+
+
+# ============================================================
 # الاستراتيجية الوحيدة: ICT + Order Flow
 # ============================================================
 
@@ -4042,6 +4238,7 @@ def _get_shared_engine_state():
             "engine_running": False,
             "engine_error": None,
             "last_data_source": None,
+            "last_vision_error": None,  # جديد
         },
         "lock": threading.Lock(),
     }
@@ -4575,6 +4772,53 @@ if strategy_result and strategy_result.get("groq_called"):
 
 
 # ============================================================
+# Vision AI: قسم رفع الصور وتحليلها (جديد)
+# ============================================================
+
+if use_vision:
+    st.markdown("### 🖼️ تحليل صورة شارت")
+    uploaded_files = st.file_uploader(
+        "ارفع صورة أو أكثر للشارت (PNG/JPG)",
+        type=["png", "jpg", "jpeg"],
+        accept_multiple_files=True,
+    )
+
+    if uploaded_files:
+        for uploaded_file in uploaded_files:
+            with st.expander(f"📈 تحليل: {uploaded_file.name}"):
+                # عرض الصورة
+                st.image(uploaded_file, caption=uploaded_file.name, use_column_width=True)
+
+                if st.button(f"تحليل وحفظ الصفقة", key=f"analyze_save_{uploaded_file.name}"):
+                    if not vision_key:
+                        st.error("يرجى إدخال مفتاح API للرؤية في الشريط الجانبي.")
+                    else:
+                        with st.spinner("جارٍ التحليل..."):
+                            image_bytes = uploaded_file.getvalue()
+                            analysis = analyze_chart_image(
+                                image_bytes,
+                                vision_key,
+                                provider=vision_provider.lower(),
+                            )
+                            if analysis:
+                                st.success("تم التحليل بنجاح")
+                                st.json(analysis)
+
+                                # إنشاء صفقة من التحليل
+                                direction = create_trade_from_vision(analysis, uploaded_file.name)
+                                if direction:
+                                    st.success(f"تم إنشاء صفقة: {direction}")
+                                    send_alert(
+                                        f"صفقة من تحليل الصورة: {direction} بثقة {analysis['confidence']}%",
+                                        title="📈 Vision Trade"
+                                    )
+                                else:
+                                    st.warning("الثقة أقل من 30% أو الاتجاه غير واضح، لم يتم إنشاء صفقة.")
+                            else:
+                                st.error("فشل تحليل الصورة. تحقق من المفتاح والمزود.")
+
+
+# ============================================================
 # آخر رسائل التحليل
 # ============================================================
 
@@ -4590,6 +4834,10 @@ if scan_msg:
 twelve_error = APP_STATE_get("last_twelve_error")
 if twelve_error and twelve_key:
     st.error(f"⚠️ Twelve Data: {twelve_error}")
+
+vision_error = APP_STATE_get("last_vision_error")
+if vision_error and use_vision:
+    st.error(f"⚠️ Vision AI: {vision_error}")
 
 engine_error = APP_STATE_get("engine_error")
 if engine_error:
