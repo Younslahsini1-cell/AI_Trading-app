@@ -19,28 +19,28 @@ ICT (Smart Money Concepts) + Order Flow Proxy (تقديري من OHLCV + Volume)
 - Displacement
 - Order Flow Proxy (Estimated Delta, CVD, Volume Imbalance, Absorption, Exhaustion)
 - Neural Network (MLP)
-- Hugging Face Public (رأي ثانٍ + تحليل صور) — نماذج مفتوحة الوزن ومجانية
+- OpenRouter (رأي ثانٍ + تحليل صور) — نماذج مفتوحة الوزن ومجانية
 - Experience Layer
 - Risk Management (ATR-based SL/TP)
 
 [إضافة جديدة]:
-- Vision AI: تحليل صور الشارتات عبر Hugging Face Public Vision، وإنشاء صفقات منفصلة.
+- Vision AI: تحليل صور الشارتات عبر OpenRouter Vision، وإنشاء صفقات منفصلة.
 
-[إصلاح 2026-09-07 — التحول من Groq إلى Hugging Face Public]:
+[إصلاح 2026-09-07 — التحول من Groq إلى OpenRouter]:
 - المشكلة: Groq أوقف/أزال أكثر من نموذج رؤية على التوالي
   (llama-3.2-90b-vision-preview ثم llama-4-scout/maverick)، فكل نموذج
   نضبطه يدوياً يُصبح 404 model_not_found خلال أسابيع.
-- الحل: تم استبدال Groq بالكامل بـ Hugging Face Public (https://huggingface.co/spaces)،
+- الحل: تم استبدال Groq بالكامل بـ OpenRouter (https://openrouter.ai)،
   وهو Gateway واحد يمنح وصولاً مجانياً (بدون بطاقة ائتمان) لعشرات
   النماذج مفتوحة الوزن (Qwen, Llama, Gemma, Nemotron...) عبر نفس
-  الواجهة المتوافقة مع OpenAI. مفتاح Hugging Face Public API واحد يكفي لكل من:
+  الواجهة المتوافقة مع OpenAI. مفتاح OpenRouter API واحد يكفي لكل من:
     1) الرأي الثاني النصي (كان Groq groq/openai-gpt-oss سابقاً).
     2) تحليل صور الشارتات (Vision).
-- بما أن قائمة "النماذج المجانية" في Hugging Face Public تتغيّر هي الأخرى بمرور
+- بما أن قائمة "النماذج المجانية" في OpenRouter تتغيّر هي الأخرى بمرور
   الوقت، تم استخدام سلسلة نماذج احتياطية (fallback chain) تُجرَّب
   تلقائياً، ورسالة خطأ واضحة تجمع كل المحاولات إن فشلت جميعها. يمكن أيضاً
   إدخال اسم نموذج مخصص من الشريط الجانبي إن رغب المستخدم.
-  ملاحظة: راجع https://huggingface.co/spaces/models?max_price=0 للحصول على
+  ملاحظة: راجع https://openrouter.ai/models?max_price=0 للحصول على
   أحدث قائمة نماذج مجانية إذا ظهر خطأ 404/400 مستقبلاً رغم هذا الإصلاح.
 """
 
@@ -53,7 +53,6 @@ import threading
 import time
 import traceback
 import base64
-import tempfile
 
 import joblib
 import numpy as np
@@ -489,13 +488,13 @@ OF_DELTA_SMOOTH = 3
 DEFAULT_MIN_VISION_CONF = 10
 
 # ------------------------------------------------------------
-# Hugging Face Public — الاستبدال الكامل لـ Groq (محدَّث 2026-09-07)
+# OpenRouter — الاستبدال الكامل لـ Groq (محدَّث 2026-09-07)
 # ------------------------------------------------------------
-# لماذا Hugging Face Public بدل Groq؟
+# لماذا OpenRouter بدل Groq؟
 #   - Groq أوقف/أزال نماذج الرؤية المتاحة لديه عدة مرات خلال 2025-2026
 #     (llama-3.2-*-vision-preview ثم llama-4-scout/maverick)، وفي كل
 #     مرة يظهر خطأ 404 model_not_found بدون سابق إنذار.
-#   - Hugging Face Public (https://huggingface.co/spaces) هو "Gateway" واحد يجمّع عشرات
+#   - OpenRouter (https://openrouter.ai) هو "Gateway" واحد يجمّع عشرات
 #     النماذج مفتوحة الوزن (Qwen, Meta Llama, Google Gemma, NVIDIA
 #     Nemotron...) من مزوّدين متعددين، ويوفّر نسخاً "مجانية" (لاحقة
 #     :free) بدون بطاقة ائتمان، عبر واجهة واحدة متوافقة مع OpenAI API.
@@ -506,12 +505,12 @@ DEFAULT_MIN_VISION_CONF = 10
 #     قبل القائمة الاحتياطية).
 #
 # للحصول على أحدث قائمة نماذج مجانية في أي وقت:
-#   https://huggingface.co/spaces/models?max_price=0
+#   https://openrouter.ai/models?max_price=0
 # ابحث عن أي نموذج يدعم "Image" في خانة Input modalities لتحليل الصور.
 
-OPENROUTER_API_URL = "https://huggingface.co/spaces/api/v1/chat/completions"
+OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-# نماذج رؤية (Vision) مجانية ومفتوحة الوزن على Hugging Face Public، مرتبة حسب
+# نماذج رؤية (Vision) مجانية ومفتوحة الوزن على OpenRouter، مرتبة حسب
 # الأولوية. تُجرَّب بالترتيب حتى ينجح أحدها.
 VISION_MODEL_FALLBACKS = [
     "qwen/qwen2.5-vl-72b-instruct:free",
@@ -522,7 +521,7 @@ VISION_MODEL_FALLBACKS = [
 
 DEFAULT_VISION_MODEL = VISION_MODEL_FALLBACKS[0]
 
-# نماذج نصية مجانية على Hugging Face Public، تُستخدم في "الرأي الثاني"
+# نماذج نصية مجانية على OpenRouter، تُستخدم في "الرأي الثاني"
 # (كانت تعتمد سابقاً على Groq / openai-gpt-oss-120b).
 TEXT_REVIEW_MODEL_FALLBACKS = [
     "meta-llama/llama-3.3-70b-instruct:free",
@@ -533,7 +532,7 @@ TEXT_REVIEW_MODEL_FALLBACKS = [
 DEFAULT_TEXT_REVIEW_MODEL = TEXT_REVIEW_MODEL_FALLBACKS[0]
 
 # أي نموذج قديم محفوظ في قاعدة البيانات من إصدار Groq السابق للتطبيق
-# يُعتبر "متوقفاً" (لا يعمل مطلقاً على Hugging Face Public) ويُستبدل تلقائياً
+# يُعتبر "متوقفاً" (لا يعمل مطلقاً على OpenRouter) ويُستبدل تلقائياً
 # بالنموذج الافتراضي الجديد أعلاه.
 DEPRECATED_VISION_MODELS = {
     "llama-3.2-90b-vision-preview",
@@ -944,12 +943,12 @@ save_setting(
 
 st.sidebar.markdown("---")
 st.sidebar.header(
-    "🧠 الرأي الثاني (Hugging Face — بدون مفتاح)"
+    "🧠 الرأي الثاني (OpenRouter — نماذج مجانية)"
 )
 
 
 use_groq = st.sidebar.checkbox(
-    "تفعيل مراجعة Hugging Face Public",
+    "تفعيل مراجعة OpenRouter",
     value=(
         load_setting(
             "use_groq",
@@ -965,10 +964,67 @@ save_setting(
 )
 
 
-# لا يوجد مفتاح API في نسخة Streamlit Cloud.
-# الذكاء الاصطناعي يعمل عبر Hugging Face Public Gradio Spaces.
-groq_key = ""
-st.sidebar.success("🤖 AI: Hugging Face Public — بدون API Key")
+groq_secret = get_secret_value(
+    "OPENROUTER_API_KEY",
+    "",
+) or get_secret_value(
+    "GROQ_API_KEY",
+    "",
+)
+
+if "groq_key" not in st.session_state:
+
+    try:
+        stored_groq_key = (
+            localS.getItem(
+                "openrouter_key_ls"
+            )
+            or load_setting(
+                "groq_key",
+                "",
+            )
+        )
+
+    except Exception:
+        stored_groq_key = load_setting(
+            "groq_key",
+            "",
+        )
+
+    st.session_state[
+        "groq_key"
+    ] = (
+        groq_secret
+        or stored_groq_key
+    )
+
+
+groq_key = st.sidebar.text_input(
+    "مفتاح OpenRouter API",
+    type="password",
+    key="groq_key",
+    help=(
+        "احصل على مفتاح مجاني من https://openrouter.ai/keys "
+        "(بدون بطاقة ائتمان). هذا المفتاح يُستخدم لكل من الرأي "
+        "الثاني النصي وتحليل صور الشارتات."
+    ),
+)
+
+if groq_key:
+
+    save_setting(
+        "groq_key",
+        groq_key,
+    )
+
+    try:
+        localS.setItem(
+            "openrouter_key_ls",
+            groq_key,
+        )
+    except Exception:
+        pass
+
 
 _stored_text_model = load_setting(
     "groq_model",
@@ -979,7 +1035,7 @@ if (not _stored_text_model) or (_stored_text_model in DEPRECATED_TEXT_MODELS):
     _stored_text_model = DEFAULT_TEXT_REVIEW_MODEL
 
 groq_model = st.sidebar.text_input(
-    "نموذج Hugging Face Public النصي (اختياري)",
+    "نموذج OpenRouter النصي (اختياري)",
     value=_stored_text_model,
     help=(
         "يُجرَّب هذا النموذج أولاً، ثم قائمة احتياطية مجانية تلقائياً "
@@ -1094,7 +1150,7 @@ save_setting(
 # ============================================================
 
 st.sidebar.markdown("---")
-st.sidebar.header("🖼️ تحليل صور الشارتات (Vision — Hugging Face)")
+st.sidebar.header("🖼️ تحليل صور الشارتات (Vision — OpenRouter)")
 
 use_vision = st.sidebar.checkbox(
     "تفعيل تحليل الصور",
@@ -1108,7 +1164,7 @@ save_setting(
 
 # --- ترحيل تلقائي: إذا كان النموذج المحفوظ سابقاً متوقفاً (decommissioned
 # أو ينتمي لعصر Groq القديم)، يتم استبداله تلقائياً بالنموذج الافتراضي
-# الجديد على Hugging Face Public، بدل أن يستمر المستخدم برؤية خطأ 404 في كل مرة.
+# الجديد على OpenRouter، بدل أن يستمر المستخدم برؤية خطأ 404 في كل مرة.
 _stored_vision_model = load_setting(
     "vision_model",
     DEFAULT_VISION_MODEL,
@@ -1127,20 +1183,20 @@ if (not _stored_vision_model) or (_stored_vision_model in DEPRECATED_VISION_MODE
 
     st.sidebar.warning(
         "⚠️ تم تحديث نموذج تحليل الصور تلقائياً إلى "
-        f"`{DEFAULT_VISION_MODEL}` (عبر Hugging Face Public) لأن النموذج القديم "
+        f"`{DEFAULT_VISION_MODEL}` (عبر OpenRouter) لأن النموذج القديم "
         f"`{_old_model_name or 'غير محدد'}` (Groq) لم يعد متاحاً."
     )
 
 vision_model = st.sidebar.text_input(
-    "نموذج الرؤية (Hugging Face Public Vision)",
+    "نموذج الرؤية (OpenRouter Vision)",
     value=_stored_vision_model,
     help=(
-        "ملاحظة: تم الانتقال بالكامل من Groq إلى Hugging Face Public لأن قوائم "
+        "ملاحظة: تم الانتقال بالكامل من Groq إلى OpenRouter لأن قوائم "
         "نماذج الرؤية المجانية تتغيّر بكثرة لدى كل المزوّدين. حتى لو "
         "أدخلت نموذجاً متوقفاً بالخطأ، سيحاول النظام تلقائياً استخدام "
         "النماذج الاحتياطية المدعومة: "
         + ", ".join(VISION_MODEL_FALLBACKS)
-        + ". وإن فشلت جميعها راجع https://huggingface.co/spaces/models?max_price=0 "
+        + ". وإن فشلت جميعها راجع https://openrouter.ai/models?max_price=0 "
         "لأحدث اسم نموذج رؤية مجاني."
     ),
 )
@@ -1207,7 +1263,7 @@ save_setting(
 if use_vision:
     st.sidebar.info(
         "ارفع صورة الشارت في القسم الرئيسي، "
-        "وسيتم تحليلها عبر Hugging Face Vision بدون أي مفتاح."
+        "وسيتم تحليلها باستخدام مفتاح OpenRouter."
     )
 
 
@@ -2242,7 +2298,7 @@ clean_stale_training_lock()
 
 
 # ============================================================
-# Experience Layer & Hugging Face Public (كان Groq)
+# Experience Layer & OpenRouter (كان Groq)
 # ============================================================
 
 def get_experience_adjustment(
@@ -2381,7 +2437,7 @@ def _parse_groq_bool(value):
 
 def _extract_openrouter_error_message(response):
     """
-    يحاول استخراج رسالة خطأ واضحة من رد Hugging Face Public (JSON قياسي أو نص خام).
+    يحاول استخراج رسالة خطأ واضحة من رد OpenRouter (JSON قياسي أو نص خام).
     """
     try:
         err_json = response.json()
@@ -2405,50 +2461,53 @@ def _call_openrouter_chat(
     max_tokens=700,
     timeout=25,
 ):
-    """Keyless text inference through a public Hugging Face Qwen3 Space."""
-    try:
-        from gradio_client import Client
-    except Exception as exc:
-        return None, f"gradio_client غير مثبت: {exc}"
+    """
+    استدعاء واحد لـ OpenRouter Chat Completions بنموذج محدد.
+    يعيد (result_text_or_dict, error_message).
+    """
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        # اختياريان لكن يحسّنان أولوية معالجة الطلبات المجانية لدى OpenRouter
+        "HTTP-Referer": "https://streamlit.io",
+        "X-Title": "XAU Deep AI Engine",
+    }
 
-    prompt = "\n\n".join(
-        str(m.get("content", "")) for m in messages
-        if isinstance(m, dict) and isinstance(m.get("content", ""), str)
-    )
+    payload = {
+        "model": model_name,
+        "temperature": 0,
+        "max_tokens": max_tokens,
+        "messages": messages,
+    }
+
     if response_json:
-        prompt += "\n\nReturn ONLY valid JSON. No markdown or explanation."
+        payload["response_format"] = {"type": "json_object"}
 
-    spaces = ["VIDraft/Qwen3-0_6B", "VIDraft/Qwen3"]
-    errors = []
-    for space_name in spaces:
-        try:
-            client = Client(space_name, httpx_kwargs={"timeout": timeout + 20})
-            # VIDraft/Qwen3 exposes /generate with: history, system prompt,
-            # model, max tokens, temperature, top-k, top-p, repetition penalty.
-            history = [{"role": "user", "content": prompt}]
-            model_choice = "Qwen3-0.6B" if "0_6B" in space_name else "Qwen3-1.7B"
-            result = client.predict(
-                history,
-                "You are a balanced technical analyst. Return JSON only.",
-                model_choice,
-                min(int(max_tokens), 512),
-                0.2,
-                40,
-                0.9,
-                1.05,
-                api_name="/generate",
-            )
-            if isinstance(result, (list, tuple)) and result:
-                result = result[-1]
-            if isinstance(result, list) and result:
-                result = result[-1]
-            text = str(result).strip()
-            if text:
-                return text, None
-        except Exception as exc:
-            errors.append(f"{space_name}: {str(exc)[:260]}")
+    try:
+        response = HTTP_SESSION.post(
+            OPENROUTER_API_URL,
+            headers=headers,
+            json=payload,
+            timeout=timeout,
+        )
+    except Exception as exc:
+        return None, f"{model_name}: تعذّر الاتصال بـ OpenRouter ({exc})"
 
-    return None, "فشل Hugging Face Public AI: " + " | ".join(errors)
+    if not response.ok:
+        err_msg = _extract_openrouter_error_message(response)
+        return None, f"{model_name}: HTTP {response.status_code} — {err_msg}"
+
+    try:
+        data = response.json()
+        choices = data.get("choices", [])
+        if not choices:
+            return None, f"{model_name}: رد بلا choices"
+        content = choices[0].get("message", {}).get("content", "")
+        if not content:
+            return None, f"{model_name}: رد بلا محتوى نصي"
+        return content, None
+    except Exception as exc:
+        return None, f"{model_name}: تعذّر قراءة رد OpenRouter ({exc})"
 
 
 def get_groq_review(
@@ -2460,14 +2519,14 @@ def get_groq_review(
     extra_context="",
 ):
     """
-    "الرأي الثاني" — كان يعتمد على Groq، وأصبح الآن يعتمد على Hugging Face Public
+    "الرأي الثاني" — كان يعتمد على Groq، وأصبح الآن يعتمد على OpenRouter
     (نماذج نصية مجانية مفتوحة الوزن)، مع سلسلة نماذج احتياطية تلقائية.
     """
     if not api_key:
 
         APP_STATE_set(
             "last_groq_error",
-            "لم يتم إدخال مفتاح Hugging Face Public API.",
+            "لم يتم إدخال مفتاح OpenRouter API.",
         )
 
         return None
@@ -3959,74 +4018,86 @@ def run_ict_engine(
 
 
 # ============================================================
-# Vision AI: تحليل صور الشارتات (عبر Hugging Face Public)
+# Vision AI: تحليل صور الشارتات (عبر OpenRouter)
 # ============================================================
 
-def _call_vision_model_once(image_b64):
-    """Keyless Vision via a public Hugging Face Gradio Space."""
+def _call_vision_model_once(image_b64, api_key, model_name):
+    """
+    ينفذ استدعاء واحد لنموذج رؤية على OpenRouter.
+    يعيد (result_dict, error_message). عند النجاح تكون error_message = None.
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        "أنت محلل فني خبير متخصص في قراءة شارتات "
+                        "التداول (ICT / Smart Money / Price Action). "
+                        "قم بتحليل صورة الشارت المعطاة بدقة، حتى لو "
+                        "كانت الإشارة ضعيفة أو صغيرة، واستخرج المعلومات "
+                        "التالية بصيغة JSON فقط بدون أي نص إضافي:\n"
+                        '{"trend": "BULLISH/BEARISH/NEUTRAL", '
+                        '"confidence": 0-100, '
+                        '"current_price": رقم أو null, '
+                        '"support": [أرقام], "resistance": [أرقام], '
+                        '"patterns": ["وصف نمط1", "وصف نمط2"], '
+                        '"entry_suggestion": رقم أو null, '
+                        '"comment": "تعليق موجز عن سبب القرار"}\n'
+                        "إذا لم تكن متأكداً تماماً، أعطِ أفضل تقدير "
+                        "ممكن مع درجة ثقة أقل بدلاً من ترك trend "
+                        "كـ NEUTRAL دائماً."
+                    ),
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/jpeg;base64,{image_b64}"
+                    },
+                },
+            ],
+        }
+    ]
+
+    text, error_msg = _call_openrouter_chat(
+        messages,
+        api_key,
+        model_name,
+        response_json=False,
+        max_tokens=700,
+        timeout=30,
+    )
+
+    if text is None:
+        return None, error_msg
+
     try:
-        from gradio_client import Client, handle_file
+        cleaned = text.replace("```json", "").replace("```", "").strip()
+        result = json.loads(cleaned)
+        return result, None
     except Exception as exc:
-        return None, f"gradio_client غير مثبت: {exc}"
-
-    try:
-        image_bytes = base64.b64decode(image_b64)
-        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
-            tmp.write(image_bytes)
-            image_path = tmp.name
-
-        prompt = (
-            "أنت محلل فني خبير في XAU/USD و ICT / Smart Money. "
-            "حلل صورة الشارت بدقة وأعد JSON فقط بهذا الشكل: "
-            '{"trend":"BULLISH/BEARISH/NEUTRAL","confidence":0-100,'
-            '"current_price":number or null,"support":[numbers],"resistance":[numbers],'
-            '"patterns":["..."],"entry_suggestion":number or null,"comment":"..."}'
-        )
-        spaces = [
-            "developer0hye/Qwen2.5-VL-7B-Instruct",
-            "Qwen/Qwen2.5-VL-32B-Instruct",
-        ]
-        endpoints = ["/predict", "/qwen_vl_inference"]
-        errors = []
-        for space_name in spaces:
-            try:
-                client = Client(space_name)
-                for endpoint in endpoints:
-                    for args in [
-                        (handle_file(image_path), prompt),
-                        (handle_file(image_path),),
-                    ]:
-                        try:
-                            result = client.predict(*args, api_name=endpoint)
-                            if isinstance(result, (list, tuple)) and result:
-                                result = result[-1]
-                            text = str(result).strip()
-                            if text:
-                                cleaned = text.replace("```json", "").replace("```", "").strip()
-                                return json.loads(cleaned), None
-                        except Exception as exc:
-                            errors.append(f"{space_name}{endpoint}: {str(exc)[:180]}")
-            except Exception as exc:
-                errors.append(f"{space_name}: {str(exc)[:180]}")
-        return None, "فشلت خدمات Vision العامة: " + " | ".join(errors)
-    finally:
-        try:
-            if 'image_path' in locals() and os.path.exists(image_path):
-                os.remove(image_path)
-        except Exception:
-            pass
+        return None, f"{model_name}: تعذّر تحليل رد النموذج ({exc})"
 
 
 def analyze_chart_image(
     image_bytes,
+    api_key,
     model_name=DEFAULT_VISION_MODEL,
 ):
     """
-    يحلل صورة الشارت باستخدام Hugging Face Public Vision (نماذج مفتوحة الوزن
+    يحلل صورة الشارت باستخدام OpenRouter Vision (نماذج مفتوحة الوزن
     ومجانية). بدلاً من الفشل الصامت عند استخدام نموذج متوقف/محذوف،
     تُجرَّب سلسلة نماذج بديلة مدعومة تلقائياً، وتُجمع رسائل الخطأ من
     كل محاولة في حال فشل الجميع بدلاً من رسالة عامة غير مفيدة.
     """
+    if not api_key:
+        APP_STATE_set(
+            "last_vision_error",
+            "لم يتم إدخال مفتاح OpenRouter API.",
+        )
+        return None
+
     base64_image = base64.b64encode(image_bytes).decode("utf-8")
 
     # ترتيب النماذج المطلوب تجربتها: النموذج المختار من المستخدم أولاً،
@@ -4042,7 +4113,11 @@ def analyze_chart_image(
 
     for candidate_model in models_to_try:
 
-        result, error_msg = _call_vision_model_once(base64_image)
+        result, error_msg = _call_vision_model_once(
+            base64_image,
+            api_key,
+            candidate_model,
+        )
 
         if result is not None:
 
@@ -4539,7 +4614,7 @@ def strategy_scanner(
         return result["status"], result
 
     # ============================================================
-    # 13. Hugging Face Public (الرأي الثاني)
+    # 13. OpenRouter (الرأي الثاني)
     # ============================================================
 
     groq_result = None
@@ -5074,7 +5149,7 @@ with st.expander("🔧 حالة المحرك (تشخيص)"):
     d1.write("🔑 مفتاح Twelve Data (احتياطي): " + ("✅ موجود" if twelve_key else "➖ غير مُدخل (Yahoo يعمل بدونه)"))
     d1.write("🧠 حالة النموذج: " + ("✅ مُدرَّب وجاهز" if model_ready_now else "⏳ غير جاهز بعد"))
     d1.write("🔒 قفل تدريب نشط الآن: " + ("نعم" if os.path.exists(TRAINING_LOCK_FILE) else "لا"))
-    d1.write("🖼️ نموذج Vision الحالي (Hugging Face Public): " + (vision_model or "—"))
+    d1.write("🖼️ نموذج Vision الحالي (OpenRouter): " + (vision_model or "—"))
     last_train_time = APP_STATE_get("last_train_time")
     d2.write(f"🕒 آخر تدريب ناجح: {last_train_time or 'لم يحدث بعد'}")
     d2.write(f"🔄 آخر دورة تحليل: {last_update or 'لم تبدأ بعد'}")
@@ -5120,4 +5195,260 @@ if strategy_result:
     <div>الاتجاه: <b>{direction or "—"}</b></div>
     <div>Final Confidence: <b>{final_conf:.1f}%</b></div>
     <div>نظام السوق (Regime): <b>{regime_txt}</b> | قوة الترند: <b>{safe_fmt(trend_strength_txt, "{:.2f}")}</b></div>
-    <div
+    <div>OF Delta: {safe_fmt(strategy_result.get('of_delta'), "{:.2f}")} | Imbalance: {safe_fmt(strategy_result.get('of_imbalance'), "{:.1f}")}%</div>
+    <div>Absorption: {safe_fmt(strategy_result.get('of_absorption'), "{:.1f}")}% | Exhaustion: {safe_fmt(strategy_result.get('of_exhaustion'), "{:.1f}")}%</div>
+</div>
+""")
+else:
+    st.info("بانتظار نتائج التحليل...")
+
+
+# ============================================================
+# H1 / M15 / M5 Overview
+# ============================================================
+
+if strategy_result:
+    h1_trend = strategy_result.get("h1_trend")
+    m15_bias = strategy_result.get("m15_bias")
+    m5_bias = strategy_result.get("m5_bias")
+    if h1_trend or m15_bias or m5_bias:
+        display_text = ""
+        if h1_trend:
+            display_text += f"📊 H1 Trend: **{h1_trend}**  |  "
+        if m15_bias:
+            display_text += f"⚙️ M15 Setup: **{m15_bias}**  |  "
+        if m5_bias:
+            display_text += f"✅ M5 Confirm: **{m5_bias}**"
+        st.info(display_text)
+
+
+# ============================================================
+# Confidence
+# ============================================================
+
+st.markdown("### 🧠 مستوى الثقة")
+
+final_conf = float(strategy_result.get("final_confidence", 0) or 0) if strategy_result else 0.0
+snapshot = APP_STATE_get("snapshot")
+last_price_txt = f" | آخر سعر: ${snapshot.get('close')}" if snapshot and snapshot.get("close") else ""
+
+render_html(f"""
+<div class="ai-level-card">
+    <div class="ai-level-title">AI CONFIDENCE LEVEL</div>
+    <div class="ai-level-value">{final_conf:.1f}%</div>
+    <div class="ai-level-sub">Trades: {total_count} | Wins: {success_count} | ICT + Order Flow {last_price_txt}</div>
+</div>
+""")
+
+
+# ============================================================
+# الصفقات النشطة
+# ============================================================
+
+st.markdown("### 🔒 الصفقات النشطة")
+conn = get_db_connection()
+try:
+    df_active = pd.read_sql("SELECT * FROM active_trade ORDER BY id ASC", conn)
+finally:
+    conn.close()
+
+if not df_active.empty:
+    for _, active_trade in df_active.iterrows():
+        strategy_label = str(active_trade.get("strategy", "ICT + Order Flow") or "ICT + Order Flow")
+        final_value = float(active_trade.get("final_confidence", 0) or 0)
+        st.warning(f"""
+🔒 **صفقة نشطة — {strategy_label}**
+الاتجاه: {active_trade['direction']}
+الدخول: ${active_trade['entry']}
+SL: ${active_trade['sl']}
+TP: ${active_trade['tp']}
+الثقة النهائية: {final_value:.1f}%
+شمعة الإشارة / المرجع: {active_trade.get('signal_bar_time', '')}
+""")
+else:
+    st.info("لا توجد صفقات نشطة حالياً.")
+
+
+# ============================================================
+# Vision AI: قسم رفع الصور وتحليلها (تصميم أنيق)
+# ============================================================
+
+st.markdown("### 🖼️ تحليل صورة شارت")
+
+if not use_vision:
+    st.info("تفعيل تحليل الصور من الشريط الجانبي لاستخدام هذه الميزة.")
+else:
+    if not groq_key:
+        st.warning(
+            "⚠️ لم يتم إدخال مفتاح OpenRouter في الشريط الجانبي بعد. "
+            "يمكنك رفع الصورة الآن، لكن زر التحليل لن يعمل حتى تُدخل المفتاح."
+        )
+
+    uploaded_files = st.file_uploader(
+        "ارفع صورة أو أكثر للشارت (PNG/JPG)",
+        type=["png", "jpg", "jpeg"],
+        accept_multiple_files=True,
+    )
+
+    if uploaded_files:
+        for uploaded_file in uploaded_files:
+            with st.expander(f"📈 تحليل: {uploaded_file.name}", expanded=True):
+                st.image(
+                    uploaded_file,
+                    caption=uploaded_file.name,
+                    use_container_width=True,
+                )
+
+                analyze_col, _ = st.columns([1, 3])
+                with analyze_col:
+                    do_analyze = st.button(
+                        "🔍 تحليل وفتح صفقة",
+                        key=f"analyze_save_{uploaded_file.name}",
+                        use_container_width=True,
+                        disabled=not bool(groq_key),
+                    )
+
+                if do_analyze and not groq_key:
+                    st.error("يرجى إدخال مفتاح OpenRouter في الشريط الجانبي أولاً.")
+                elif do_analyze:
+                    with st.spinner("🧠 جارٍ تحليل الشارت بذكاء اصطناعي..."):
+                        image_bytes = uploaded_file.getvalue()
+                        analysis = analyze_chart_image(
+                            image_bytes, groq_key, vision_model
+                        )
+
+                    if analysis:
+                        trade_info, conf_value = create_trade_from_vision(
+                            analysis,
+                            uploaded_file.name,
+                            min_conf_threshold=float(min_vision_conf),
+                            risk_pct=float(vision_risk_pct),
+                            rr_ratio=float(vision_rr),
+                        )
+
+                        render_vision_analysis_card(analysis, trade_info)
+
+                        if trade_info:
+                            send_alert(
+                                (
+                                    f"صفقة من تحليل الصورة: {trade_info['direction']}\n"
+                                    f"الدخول: ${trade_info['entry']} | SL: ${trade_info['sl']} | TP: ${trade_info['tp']}\n"
+                                    f"الثقة: {conf_value:.1f}%"
+                                ),
+                                title="📈 Vision Trade",
+                            )
+                        else:
+                            st.warning(
+                                f"لم يتم فتح صفقة — إما أن الاتجاه غير واضح، أو "
+                                f"الثقة ({safe_fmt(conf_value, '{:.0f}')}%) أقل من الحد "
+                                f"الأدنى المحدد ({int(min_vision_conf)}%)، أو لا تتوفر "
+                                f"مستويات كافية لتحديد سعر دخول. يمكنك خفض الحد الأدنى "
+                                f"من الشريط الجانبي للسماح بصفقات أصغر."
+                            )
+                    else:
+                        st.error(
+                            "فشل تحليل الصورة عبر جميع النماذج المتاحة على "
+                            "OpenRouter. تحقق من صلاحية مفتاح OpenRouter API، "
+                            "أو راجع تفاصيل الخطأ أسفل الصفحة."
+                        )
+
+
+# ============================================================
+# تفاصيل الاستراتيجية (ICT + Order Flow)
+# ============================================================
+
+if strategy_result:
+    with st.expander("📊 تفاصيل ICT + Order Flow"):
+        st.write("H1 Trend:", strategy_result.get("h1_trend", "—"))
+        st.write("نظام السوق (Regime):", strategy_result.get("regime", "—"))
+        st.write("قوة الترند (EMA/ATR):", safe_fmt(strategy_result.get("trend_strength"), "{:.2f}"))
+        st.write("M15 Bias:", strategy_result.get("m15_bias", "—"))
+        st.write("M5 Bias:", strategy_result.get("m5_bias", "—"))
+        st.write("ICT Confidence:", f"{safe_fmt(strategy_result.get('ict_confidence'), '{:.1f}')}%")
+        st.write("OF Delta:", strategy_result.get("of_delta", 0))
+        st.write("OF CVD:", strategy_result.get("of_cvd", 0))
+        st.write("OF Imbalance:", f"{safe_fmt(strategy_result.get('of_imbalance'), '{:.1f}')}%")
+        st.write("OF Absorption:", f"{safe_fmt(strategy_result.get('of_absorption'), '{:.1f}')}%")
+        st.write("OF Exhaustion:", f"{safe_fmt(strategy_result.get('of_exhaustion'), '{:.1f}')}%")
+        st.write("OF Signal:", strategy_result.get("of_signal", "NEUTRAL"))
+        st.write("Confluence Score:", f"{safe_fmt(strategy_result.get('confluence_score'), '{:.1f}')}%")
+
+
+# ============================================================
+# OpenRouter UI (الرأي الثاني)
+# ============================================================
+
+if strategy_result and strategy_result.get("groq_called"):
+    with st.expander("🧠 الرأي الثاني (OpenRouter)"):
+        if strategy_result.get("groq_available"):
+            groq_conf_val = strategy_result.get("groq_conf")
+            groq_conf_txt = f"{safe_fmt(groq_conf_val, '{:.1f}')}%"
+            if strategy_result.get("groq_agree"):
+                st.success(f"✅ وافقت المراجعة على الإشارة — الثقة: {groq_conf_txt}")
+            else:
+                st.warning(f"❌ لم توافق المراجعة على الإشارة — الثقة: {groq_conf_txt}")
+            if strategy_result.get("groq_reason"):
+                st.caption(f"🧠 السبب: {strategy_result['groq_reason']}")
+        else:
+            st.warning("🟠 تم استدعاء OpenRouter لكن لم تصل استجابة صالحة منه هذه الدورة.")
+
+
+# ============================================================
+# آخر رسائل التحليل
+# ============================================================
+
+if scan_msg:
+    with st.expander("🔍 آخر رسائل التحليل"):
+        st.write(scan_msg)
+
+
+# ============================================================
+# Errors
+# ============================================================
+
+twelve_error = APP_STATE_get("last_twelve_error")
+if twelve_error and twelve_key:
+    st.error(f"⚠️ Twelve Data: {twelve_error}")
+
+vision_error = APP_STATE_get("last_vision_error")
+if vision_error and use_vision:
+    st.error(f"⚠️ Vision AI (OpenRouter): {vision_error}")
+
+engine_error = APP_STATE_get("engine_error")
+if engine_error:
+    st.warning("⚠️ حدث خطأ داخلي في المحرك الخلفي، سيُعاد المحاولة تلقائياً في الدورة القادمة.")
+
+
+# ============================================================
+# سجل الصفقات
+# ============================================================
+
+st.markdown("### 📊 سجل الصفقات")
+conn = get_db_connection()
+try:
+    df_log = pd.read_sql("SELECT * FROM trades ORDER BY id DESC", conn)
+finally:
+    conn.close()
+
+if not df_log.empty:
+    win_rate = df_log["win"].sum() / len(df_log) * 100
+    m1, m2, m3 = st.columns(3)
+    m1.metric("إجمالي الصفقات", len(df_log))
+    m2.metric("نسبة الربح", f"{win_rate:.1f}%")
+    m3.metric("الصفقات الرابحة", int(df_log["win"].sum()))
+
+    columns_to_show = [
+        "date", "strategy", "direction", "entry", "sl", "tp",
+        "win", "note", "ai_conf_before_groq", "groq_conf", "final_confidence"
+    ]
+    available_columns = [col for col in columns_to_show if col in df_log.columns]
+    st.dataframe(df_log[available_columns], use_container_width=True)
+else:
+    st.info("لا توجد صفقات مغلقة مسجلة حتى الآن.")
+
+
+# ============================================================
+# Auto Refresh
+# ============================================================
+
+st_autorefresh(interval=20000, key="deep_ai_ui_refresh")
