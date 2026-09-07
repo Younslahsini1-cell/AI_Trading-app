@@ -1150,7 +1150,7 @@ save_setting(
 # ============================================================
 
 st.sidebar.markdown("---")
-st.sidebar.header("🖼️ تحليل صور الشارتات (Vision — OpenRouter)")
+st.sidebar.header("🖼️ تحليل صور الشارتات (Vision — بدون مفتاح API)")
 
 use_vision = st.sidebar.checkbox(
     "تفعيل تحليل الصور",
@@ -1162,48 +1162,13 @@ save_setting(
     "1" if use_vision else "0",
 )
 
-# --- ترحيل تلقائي: إذا كان النموذج المحفوظ سابقاً متوقفاً (decommissioned
-# أو ينتمي لعصر Groq القديم)، يتم استبداله تلقائياً بالنموذج الافتراضي
-# الجديد على OpenRouter، بدل أن يستمر المستخدم برؤية خطأ 404 في كل مرة.
-_stored_vision_model = load_setting(
-    "vision_model",
-    DEFAULT_VISION_MODEL,
-)
+# لا حاجة لمفتاح API ولا لاختيار اسم نموذج يدوياً: يعمل تحليل الصور
+# مباشرة عبر نماذج رؤية عامة ومجانية مستضافة على Hugging Face Spaces.
+vision_model = "Hugging Face Public (Qwen2.5-VL) — بدون مفتاح"
 
-if (not _stored_vision_model) or (_stored_vision_model in DEPRECATED_VISION_MODELS):
-
-    _old_model_name = _stored_vision_model
-
-    _stored_vision_model = DEFAULT_VISION_MODEL
-
-    save_setting(
-        "vision_model",
-        _stored_vision_model,
-    )
-
-    st.sidebar.warning(
-        "⚠️ تم تحديث نموذج تحليل الصور تلقائياً إلى "
-        f"`{DEFAULT_VISION_MODEL}` (عبر OpenRouter) لأن النموذج القديم "
-        f"`{_old_model_name or 'غير محدد'}` (Groq) لم يعد متاحاً."
-    )
-
-vision_model = st.sidebar.text_input(
-    "نموذج الرؤية (OpenRouter Vision)",
-    value=_stored_vision_model,
-    help=(
-        "ملاحظة: تم الانتقال بالكامل من Groq إلى OpenRouter لأن قوائم "
-        "نماذج الرؤية المجانية تتغيّر بكثرة لدى كل المزوّدين. حتى لو "
-        "أدخلت نموذجاً متوقفاً بالخطأ، سيحاول النظام تلقائياً استخدام "
-        "النماذج الاحتياطية المدعومة: "
-        + ", ".join(VISION_MODEL_FALLBACKS)
-        + ". وإن فشلت جميعها راجع https://openrouter.ai/models?max_price=0 "
-        "لأحدث اسم نموذج رؤية مجاني."
-    ),
-)
-
-save_setting(
-    "vision_model",
-    vision_model,
+st.sidebar.caption(
+    "🤖 يعمل تحليل الصور مباشرة بدون أي مفتاح API، عبر نماذج رؤية "
+    "عامة ومجانية على Hugging Face."
 )
 
 min_vision_conf = st.sidebar.slider(
@@ -1263,7 +1228,7 @@ save_setting(
 if use_vision:
     st.sidebar.info(
         "ارفع صورة الشارت في القسم الرئيسي، "
-        "وسيتم تحليلها باستخدام مفتاح OpenRouter."
+        "وسيتم تحليلها مباشرة بدون أي مفتاح API."
     )
 
 
@@ -4018,124 +3983,141 @@ def run_ict_engine(
 
 
 # ============================================================
-# Vision AI: تحليل صور الشارتات (عبر OpenRouter)
+# Vision AI: تحليل صور الشارتات (مباشر، بدون أي مفتاح API — عبر
+# نماذج رؤية عامة ومجانية مستضافة على Hugging Face Spaces)
 # ============================================================
 
-def _call_vision_model_once(image_b64, api_key, model_name):
+VISION_PROMPT_TEXT = (
+    "أنت محلل فني خبير متخصص في قراءة شارتات "
+    "التداول (ICT / Smart Money / Price Action) لزوج XAU/USD. "
+    "قم بتحليل صورة الشارت المعطاة بدقة، حتى لو "
+    "كانت الإشارة ضعيفة أو صغيرة، وأعد JSON فقط بدون أي نص إضافي "
+    "بهذا الشكل بالضبط:\n"
+    '{"trend": "BULLISH/BEARISH/NEUTRAL", '
+    '"confidence": 0-100, '
+    '"current_price": رقم أو null, '
+    '"support": [أرقام], "resistance": [أرقام], '
+    '"patterns": ["وصف نمط1", "وصف نمط2"], '
+    '"entry_suggestion": رقم أو null, '
+    '"comment": "تعليق موجز عن سبب القرار"}\n'
+    "إذا لم تكن متأكداً تماماً، أعطِ أفضل تقدير "
+    "ممكن مع درجة ثقة أقل بدلاً من ترك trend "
+    "كـ NEUTRAL دائماً."
+)
+
+# مساحات (Spaces) عامة على Hugging Face تدعم تحليل الصور (Vision)
+# وتعمل مباشرة بدون أي مفتاح API. تُجرَّب بالترتيب حتى تنجح واحدة.
+VISION_PUBLIC_SPACES = [
+    "developer0hye/Qwen2.5-VL-7B-Instruct",
+    "Qwen/Qwen2.5-VL-32B-Instruct",
+]
+
+
+def _call_vision_model_once(image_b64):
     """
-    ينفذ استدعاء واحد لنموذج رؤية على OpenRouter.
+    يستدعي نموذج رؤية عام ومجاني على Hugging Face Spaces عبر
+    gradio_client — بدون أي مفتاح API.
     يعيد (result_dict, error_message). عند النجاح تكون error_message = None.
     """
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": (
-                        "أنت محلل فني خبير متخصص في قراءة شارتات "
-                        "التداول (ICT / Smart Money / Price Action). "
-                        "قم بتحليل صورة الشارت المعطاة بدقة، حتى لو "
-                        "كانت الإشارة ضعيفة أو صغيرة، واستخرج المعلومات "
-                        "التالية بصيغة JSON فقط بدون أي نص إضافي:\n"
-                        '{"trend": "BULLISH/BEARISH/NEUTRAL", '
-                        '"confidence": 0-100, '
-                        '"current_price": رقم أو null, '
-                        '"support": [أرقام], "resistance": [أرقام], '
-                        '"patterns": ["وصف نمط1", "وصف نمط2"], '
-                        '"entry_suggestion": رقم أو null, '
-                        '"comment": "تعليق موجز عن سبب القرار"}\n'
-                        "إذا لم تكن متأكداً تماماً، أعطِ أفضل تقدير "
-                        "ممكن مع درجة ثقة أقل بدلاً من ترك trend "
-                        "كـ NEUTRAL دائماً."
-                    ),
-                },
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:image/jpeg;base64,{image_b64}"
-                    },
-                },
-            ],
-        }
-    ]
+    try:
+        from gradio_client import Client, handle_file
+    except Exception as exc:
+        return None, (
+            "مكتبة gradio_client غير مثبتة على السيرفر. أضف السطر "
+            f"'gradio_client' إلى requirements.txt ثم أعد نشر التطبيق. ({exc})"
+        )
 
-    text, error_msg = _call_openrouter_chat(
-        messages,
-        api_key,
-        model_name,
-        response_json=False,
-        max_tokens=700,
-        timeout=30,
-    )
-
-    if text is None:
-        return None, error_msg
+    image_path = None
+    errors = []
 
     try:
-        cleaned = text.replace("```json", "").replace("```", "").strip()
-        result = json.loads(cleaned)
-        return result, None
-    except Exception as exc:
-        return None, f"{model_name}: تعذّر تحليل رد النموذج ({exc})"
+        image_bytes = base64.b64decode(image_b64)
+
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+            tmp.write(image_bytes)
+            image_path = tmp.name
+
+        for space_name in VISION_PUBLIC_SPACES:
+
+            try:
+                client = Client(space_name)
+            except Exception as exc:
+                errors.append(f"{space_name}: تعذّر الاتصال ({str(exc)[:180]})")
+                continue
+
+            for endpoint in ("/predict", "/qwen_vl_inference", None):
+
+                for args in (
+                    (handle_file(image_path), VISION_PROMPT_TEXT),
+                    (handle_file(image_path),),
+                ):
+
+                    try:
+                        if endpoint:
+                            result = client.predict(*args, api_name=endpoint)
+                        else:
+                            result = client.predict(*args)
+                    except Exception as exc:
+                        errors.append(
+                            f"{space_name}{endpoint or ''}: {str(exc)[:180]}"
+                        )
+                        continue
+
+                    if isinstance(result, (list, tuple)) and result:
+                        result = result[-1]
+
+                    text = str(result).strip()
+
+                    if not text:
+                        continue
+
+                    cleaned = (
+                        text.replace("```json", "")
+                        .replace("```", "")
+                        .strip()
+                    )
+
+                    try:
+                        parsed = json.loads(cleaned)
+                        return parsed, None
+                    except Exception as exc:
+                        errors.append(
+                            f"{space_name}: رد غير صالح كـ JSON ({str(exc)[:120]})"
+                        )
+                        continue
+
+        return None, "فشلت كل خدمات Vision العامة: " + " | ".join(
+            e for e in errors if e
+        )
+
+    finally:
+        if image_path and os.path.exists(image_path):
+            try:
+                os.remove(image_path)
+            except OSError:
+                pass
 
 
 def analyze_chart_image(
     image_bytes,
-    api_key,
-    model_name=DEFAULT_VISION_MODEL,
+    model_name=None,
 ):
     """
-    يحلل صورة الشارت باستخدام OpenRouter Vision (نماذج مفتوحة الوزن
-    ومجانية). بدلاً من الفشل الصامت عند استخدام نموذج متوقف/محذوف،
-    تُجرَّب سلسلة نماذج بديلة مدعومة تلقائياً، وتُجمع رسائل الخطأ من
-    كل محاولة في حال فشل الجميع بدلاً من رسالة عامة غير مفيدة.
+    يحلل صورة الشارت مباشرة وبدون أي مفتاح API، عبر نماذج رؤية عامة
+    ومجانية مستضافة على Hugging Face Spaces (gradio_client).
+    معامل model_name مُبقى فقط لتوافق الاستدعاءات القديمة ولا يُستخدم.
     """
-    if not api_key:
-        APP_STATE_set(
-            "last_vision_error",
-            "لم يتم إدخال مفتاح OpenRouter API.",
-        )
-        return None
-
     base64_image = base64.b64encode(image_bytes).decode("utf-8")
 
-    # ترتيب النماذج المطلوب تجربتها: النموذج المختار من المستخدم أولاً،
-    # ثم أي نماذج احتياطية أخرى لم تتم تجربتها بعد.
-    models_to_try = []
-    if model_name:
-        models_to_try.append(model_name)
-    for fallback_model in VISION_MODEL_FALLBACKS:
-        if fallback_model not in models_to_try:
-            models_to_try.append(fallback_model)
+    result, error_msg = _call_vision_model_once(base64_image)
 
-    errors = []
-
-    for candidate_model in models_to_try:
-
-        result, error_msg = _call_vision_model_once(
-            base64_image,
-            api_key,
-            candidate_model,
-        )
-
-        if result is not None:
-
-            # إن نجح نموذج احتياطي غير الذي اختاره المستخدم، نحفظه
-            # كإعداد افتراضي جديد حتى لا نكرر الفشل في كل مرة.
-            if candidate_model != model_name:
-                save_setting("vision_model", candidate_model)
-
-            APP_STATE_set("last_vision_error", None)
-            return result
-
-        errors.append(error_msg)
-
-    combined_error = " | ".join(e for e in errors if e)
+    if result is not None:
+        APP_STATE_set("last_vision_error", None)
+        return result
 
     APP_STATE_set(
         "last_vision_error",
-        f"فشلت كل النماذج المتاحة لتحليل الصورة: {combined_error}",
+        error_msg or "تعذّر تحليل الصورة عبر خدمات Vision العامة.",
     )
 
     return None
@@ -5149,7 +5131,7 @@ with st.expander("🔧 حالة المحرك (تشخيص)"):
     d1.write("🔑 مفتاح Twelve Data (احتياطي): " + ("✅ موجود" if twelve_key else "➖ غير مُدخل (Yahoo يعمل بدونه)"))
     d1.write("🧠 حالة النموذج: " + ("✅ مُدرَّب وجاهز" if model_ready_now else "⏳ غير جاهز بعد"))
     d1.write("🔒 قفل تدريب نشط الآن: " + ("نعم" if os.path.exists(TRAINING_LOCK_FILE) else "لا"))
-    d1.write("🖼️ نموذج Vision الحالي (OpenRouter): " + (vision_model or "—"))
+    d1.write("🖼️ تحليل الصور: " + (vision_model or "Hugging Face Public — بدون مفتاح"))
     last_train_time = APP_STATE_get("last_train_time")
     d2.write(f"🕒 آخر تدريب ناجح: {last_train_time or 'لم يحدث بعد'}")
     d2.write(f"🔄 آخر دورة تحليل: {last_update or 'لم تبدأ بعد'}")
@@ -5278,12 +5260,6 @@ st.markdown("### 🖼️ تحليل صورة شارت")
 if not use_vision:
     st.info("تفعيل تحليل الصور من الشريط الجانبي لاستخدام هذه الميزة.")
 else:
-    if not groq_key:
-        st.warning(
-            "⚠️ لم يتم إدخال مفتاح OpenRouter في الشريط الجانبي بعد. "
-            "يمكنك رفع الصورة الآن، لكن زر التحليل لن يعمل حتى تُدخل المفتاح."
-        )
-
     uploaded_files = st.file_uploader(
         "ارفع صورة أو أكثر للشارت (PNG/JPG)",
         type=["png", "jpg", "jpeg"],
@@ -5305,17 +5281,12 @@ else:
                         "🔍 تحليل وفتح صفقة",
                         key=f"analyze_save_{uploaded_file.name}",
                         use_container_width=True,
-                        disabled=not bool(groq_key),
                     )
 
-                if do_analyze and not groq_key:
-                    st.error("يرجى إدخال مفتاح OpenRouter في الشريط الجانبي أولاً.")
-                elif do_analyze:
+                if do_analyze:
                     with st.spinner("🧠 جارٍ تحليل الشارت بذكاء اصطناعي..."):
                         image_bytes = uploaded_file.getvalue()
-                        analysis = analyze_chart_image(
-                            image_bytes, groq_key, vision_model
-                        )
+                        analysis = analyze_chart_image(image_bytes)
 
                     if analysis:
                         trade_info, conf_value = create_trade_from_vision(
@@ -5347,8 +5318,8 @@ else:
                             )
                     else:
                         st.error(
-                            "فشل تحليل الصورة عبر جميع النماذج المتاحة على "
-                            "OpenRouter. تحقق من صلاحية مفتاح OpenRouter API، "
+                            "فشل تحليل الصورة عبر خدمات Vision العامة المجانية "
+                            "(قد تكون مزدحمة مؤقتاً). حاول مرة أخرى بعد قليل، "
                             "أو راجع تفاصيل الخطأ أسفل الصفحة."
                         )
 
@@ -5412,7 +5383,7 @@ if twelve_error and twelve_key:
 
 vision_error = APP_STATE_get("last_vision_error")
 if vision_error and use_vision:
-    st.error(f"⚠️ Vision AI (OpenRouter): {vision_error}")
+    st.error(f"⚠️ Vision AI: {vision_error}")
 
 engine_error = APP_STATE_get("engine_error")
 if engine_error:
