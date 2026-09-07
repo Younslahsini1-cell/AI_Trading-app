@@ -122,6 +122,24 @@ def render_html(html_content):
 
 
 # ============================================================
+# Safe formatting helper (يمنع TypeError عند القيم None)
+# ============================================================
+
+def safe_fmt(value, fmt="{:.1f}", default="—"):
+    """
+    يُنسّق أي قيمة رقمية بأمان، ويعيد قيمة افتراضية
+    إذا كانت القيمة None أو غير قابلة للتحويل لرقم.
+    """
+    if value is None:
+        return default
+
+    try:
+        return fmt.format(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
+# ============================================================
 # CSS
 # ============================================================
 
@@ -230,6 +248,164 @@ render_html(
         font-weight: 900;
         margin-bottom: 8px;
     }
+
+    /* ============ Vision AI: تصميم أنيق ============ */
+
+    .vision-card {
+        background: linear-gradient(160deg, #0f172a 0%, #111827 60%, #0b1120 100%);
+        border: 1px solid #1e293b;
+        border-radius: 22px;
+        padding: 24px;
+        margin: 14px 0 22px 0;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+    }
+
+    .vision-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 18px;
+        flex-wrap: wrap;
+        gap: 10px;
+    }
+
+    .vision-trend-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 20px;
+        border-radius: 999px;
+        font-weight: 900;
+        font-size: 1.1rem;
+        letter-spacing: 0.5px;
+    }
+
+    .vision-trend-bullish {
+        background: rgba(34, 197, 94, 0.15);
+        border: 1px solid #22c55e;
+        color: #4ade80;
+    }
+
+    .vision-trend-bearish {
+        background: rgba(239, 68, 68, 0.15);
+        border: 1px solid #ef4444;
+        color: #f87171;
+    }
+
+    .vision-trend-neutral {
+        background: rgba(148, 163, 184, 0.15);
+        border: 1px solid #94a3b8;
+        color: #cbd5e1;
+    }
+
+    .vision-conf-pill {
+        background: #1e293b;
+        border-radius: 999px;
+        padding: 8px 18px;
+        font-weight: 800;
+        color: #fbbf24;
+        font-size: 1rem;
+        border: 1px solid #334155;
+    }
+
+    .vision-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 14px;
+        margin-top: 10px;
+    }
+
+    .vision-box {
+        background: #0b1120;
+        border: 1px solid #1e293b;
+        border-radius: 14px;
+        padding: 14px 16px;
+    }
+
+    .vision-box-label {
+        font-size: 0.8rem;
+        color: #64748b;
+        font-weight: 700;
+        margin-bottom: 6px;
+        letter-spacing: 0.3px;
+    }
+
+    .vision-box-value {
+        font-size: 1.15rem;
+        font-weight: 900;
+        color: #f3f4f6;
+    }
+
+    .vision-level-chip {
+        display: inline-block;
+        padding: 4px 10px;
+        margin: 3px 4px 0 0;
+        border-radius: 8px;
+        font-size: 0.85rem;
+        font-weight: 700;
+        background: #1e293b;
+        border: 1px solid #334155;
+    }
+
+    .vision-support {
+        color: #4ade80;
+        border-color: #14532d;
+    }
+
+    .vision-resistance {
+        color: #f87171;
+        border-color: #7f1d1d;
+    }
+
+    .vision-pattern-tag {
+        display: inline-block;
+        padding: 5px 12px;
+        margin: 3px 4px 0 0;
+        border-radius: 10px;
+        font-size: 0.85rem;
+        font-weight: 700;
+        background: rgba(59, 130, 246, 0.12);
+        border: 1px solid #3b82f6;
+        color: #93c5fd;
+    }
+
+    .vision-comment {
+        margin-top: 14px;
+        padding: 12px 16px;
+        background: #0b1120;
+        border-radius: 12px;
+        border-inline-start: 3px solid #3b82f6;
+        color: #cbd5e1;
+        font-size: 0.95rem;
+        line-height: 1.7;
+    }
+
+    .vision-trade-card {
+        margin-top: 18px;
+        padding: 18px;
+        border-radius: 16px;
+        text-align: center;
+        font-weight: 900;
+    }
+
+    .vision-trade-buy {
+        background: linear-gradient(135deg, rgba(34,197,94,0.18), rgba(15,23,42,0.4));
+        border: 1px solid #22c55e;
+        color: #4ade80;
+    }
+
+    .vision-trade-sell {
+        background: linear-gradient(135deg, rgba(239,68,68,0.18), rgba(15,23,42,0.4));
+        border: 1px solid #ef4444;
+        color: #f87171;
+    }
+
+    .vision-mini-note {
+        color: #64748b;
+        font-size: 0.8rem;
+        margin-top: 6px;
+        font-weight: 500;
+    }
 </style>
 """
 )
@@ -289,6 +465,10 @@ OF_VOLUME_SPIKE_MULT = 2.0
 OF_IMBALANCE_BODY_THRESHOLD = 60.0
 OF_ABSORPTION_WICK_RATIO = 0.4
 OF_DELTA_SMOOTH = 3
+
+# الحد الأدنى الافتراضي لثقة صفقات تحليل الصور (منخفض عمداً
+# للسماح بصفقات صغيرة كما طلب المستخدم)
+DEFAULT_MIN_VISION_CONF = 10
 
 
 # ============================================================
@@ -868,7 +1048,7 @@ save_setting(
 
 
 # ============================================================
-# إعدادات الرؤية الحاسوبية (Vision AI) - جديد
+# إعدادات الرؤية الحاسوبية (Vision AI)
 # ============================================================
 
 st.sidebar.markdown("---")
@@ -876,7 +1056,7 @@ st.sidebar.header("🖼️ تحليل صور الشارتات (Vision)")
 
 use_vision = st.sidebar.checkbox(
     "تفعيل تحليل الصور",
-    value=load_setting("use_vision", "0") == "1",
+    value=load_setting("use_vision", "1") == "1",
 )
 
 save_setting(
@@ -895,6 +1075,60 @@ vision_model = st.sidebar.text_input(
 save_setting(
     "vision_model",
     vision_model,
+)
+
+min_vision_conf = st.sidebar.slider(
+    "أدنى ثقة لإنشاء صفقة من تحليل الصورة (%)",
+    5,
+    90,
+    int(
+        float(
+            load_setting(
+                "min_vision_conf",
+                DEFAULT_MIN_VISION_CONF,
+            )
+        )
+    ),
+    5,
+    help=(
+        "قيمة منخفضة تسمح بفتح صفقات حتى لو كانت "
+        "إشارة الصورة صغيرة أو غير مؤكدة تماماً."
+    ),
+)
+
+save_setting(
+    "min_vision_conf",
+    min_vision_conf,
+)
+
+vision_risk_pct = st.sidebar.slider(
+    "نسبة المخاطرة الافتراضية لصفقات الصور (%)",
+    0.2,
+    3.0,
+    0.6,
+    0.1,
+    help=(
+        "تُستخدم لحساب SL/TP تقديرياً عندما لا تتوفر "
+        "مستويات دعم/مقاومة واضحة من الصورة."
+    ),
+)
+
+save_setting(
+    "vision_risk_pct",
+    vision_risk_pct,
+)
+
+vision_rr = st.sidebar.slider(
+    "نسبة العائد R:R لصفقات الصور",
+    1.0,
+    4.0,
+    1.8,
+    0.1,
+)
+
+save_setting(
+    "vision_rr",
+    vision_rr,
 )
 
 if use_vision:
@@ -3668,7 +3902,7 @@ def run_ict_engine(
 
 
 # ============================================================
-# Vision AI: تحليل صور الشارتات (جديد)
+# Vision AI: تحليل صور الشارتات
 # ============================================================
 
 def analyze_chart_image(image_bytes, api_key, model_name="llama-3.2-90b-vision-preview"):
@@ -3693,8 +3927,21 @@ def analyze_chart_image(image_bytes, api_key, model_name="llama-3.2-90b-vision-p
                     {
                         "type": "text",
                         "text": (
-                            "أنت محلل فني خبير. قم بتحليل صورة الشارت المعطاة واستخرج المعلومات التالية بصيغة JSON فقط:\n"
-                            '{"trend": "BULLISH/BEARISH/NEUTRAL", "confidence": 0-100, "support": [أرقام], "resistance": [أرقام], "patterns": ["وصف نمط1", "وصف نمط2"], "comment": "تعليق موجز"}'
+                            "أنت محلل فني خبير متخصص في قراءة شارتات "
+                            "التداول (ICT / Smart Money / Price Action). "
+                            "قم بتحليل صورة الشارت المعطاة بدقة، حتى لو "
+                            "كانت الإشارة ضعيفة أو صغيرة، واستخرج المعلومات "
+                            "التالية بصيغة JSON فقط بدون أي نص إضافي:\n"
+                            '{"trend": "BULLISH/BEARISH/NEUTRAL", '
+                            '"confidence": 0-100, '
+                            '"current_price": رقم أو null, '
+                            '"support": [أرقام], "resistance": [أرقام], '
+                            '"patterns": ["وصف نمط1", "وصف نمط2"], '
+                            '"entry_suggestion": رقم أو null, '
+                            '"comment": "تعليق موجز عن سبب القرار"}\n'
+                            "إذا لم تكن متأكداً تماماً، أعطِ أفضل تقدير "
+                            "ممكن مع درجة ثقة أقل بدلاً من ترك trend "
+                            "كـ NEUTRAL دائماً."
                         ),
                     },
                     {
@@ -3706,7 +3953,7 @@ def analyze_chart_image(image_bytes, api_key, model_name="llama-3.2-90b-vision-p
                 ],
             }
         ],
-        "max_tokens": 500,
+        "max_tokens": 700,
         "temperature": 0,
     }
 
@@ -3724,34 +3971,99 @@ def analyze_chart_image(image_bytes, api_key, model_name="llama-3.2-90b-vision-p
         return None
 
 
-def create_trade_from_vision(analysis, uploaded_file_name):
+def create_trade_from_vision(
+    analysis,
+    uploaded_file_name,
+    min_conf_threshold=DEFAULT_MIN_VISION_CONF,
+    risk_pct=0.6,
+    rr_ratio=1.8,
+):
     """
     إنشاء صفقة في جدول active_trade بناءً على تحليل الصورة.
+    يسمح بفتح صفقات حتى لو كانت الثقة منخفضة (صفقات صغيرة)،
+    ويحسب SL/TP تقديرياً في حال غياب مستويات دعم/مقاومة واضحة.
     """
     if not analysis:
-        return None
+        return None, None
 
-    trend = analysis.get("trend", "NEUTRAL").upper()
-    confidence = float(analysis.get("confidence", 0))
-    if trend not in ["BULLISH", "BEARISH"] or confidence < 30:  # عتبة منخفضة
-        return None
+    trend = str(analysis.get("trend", "NEUTRAL")).upper()
+
+    try:
+        confidence = float(analysis.get("confidence", 0) or 0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+
+    if trend not in ["BULLISH", "BEARISH"]:
+        return None, confidence
+
+    if confidence < min_conf_threshold:
+        return None, confidence
 
     direction = "BUY 🟢" if trend == "BULLISH" else "SELL 🔴"
-    support = analysis.get("support", [])
-    resistance = analysis.get("resistance", [])
-    if not support or not resistance:
-        # استخدام أرقام افتراضية
-        entry = 0.0
-        sl = 0.0
-        tp = 0.0
-    else:
+
+    support = [
+        float(v) for v in (analysis.get("support") or [])
+        if isinstance(v, (int, float))
+    ]
+    resistance = [
+        float(v) for v in (analysis.get("resistance") or [])
+        if isinstance(v, (int, float))
+    ]
+
+    entry_hint = analysis.get("entry_suggestion")
+    current_price_hint = analysis.get("current_price")
+
+    # تحديد سعر الدخول التقديري
+    if isinstance(entry_hint, (int, float)) and entry_hint > 0:
+        entry = float(entry_hint)
+    elif isinstance(current_price_hint, (int, float)) and current_price_hint > 0:
+        entry = float(current_price_hint)
+    elif support and resistance:
         entry = (max(support) + min(resistance)) / 2
-        if trend == "BULLISH":
-            sl = max(support) * 0.995
-            tp = min(resistance) * 1.02
+    elif support:
+        entry = max(support)
+    elif resistance:
+        entry = min(resistance)
+    else:
+        # لا توجد أي مستويات — لا يمكن بناء صفقة موثوقة
+        return None, confidence
+
+    if entry <= 0:
+        return None, confidence
+
+    # حساب SL/TP: أولوية لمستويات الدعم/المقاومة الفعلية،
+    # وإلا نعتمد على نسبة مخاطرة تقديرية صغيرة (صفقة صغيرة الحجم)
+    if trend == "BULLISH":
+        if support:
+            sl = min(s for s in support if s < entry) if any(s < entry for s in support) else entry * (1 - risk_pct / 100.0)
         else:
-            sl = min(resistance) * 1.005
-            tp = max(support) * 0.98
+            sl = entry * (1 - risk_pct / 100.0)
+
+        risk_distance = max(entry - sl, entry * (risk_pct / 100.0) * 0.5)
+        sl = entry - risk_distance
+
+        if resistance and any(r > entry for r in resistance):
+            tp = min(r for r in resistance if r > entry)
+        else:
+            tp = entry + risk_distance * rr_ratio
+
+    else:
+        if resistance:
+            sl = max(r for r in resistance if r > entry) if any(r > entry for r in resistance) else entry * (1 + risk_pct / 100.0)
+        else:
+            sl = entry * (1 + risk_pct / 100.0)
+
+        risk_distance = max(sl - entry, entry * (risk_pct / 100.0) * 0.5)
+        sl = entry + risk_distance
+
+        if support and any(s < entry for s in support):
+            tp = max(s for s in support if s < entry)
+        else:
+            tp = entry - risk_distance * rr_ratio
+
+    entry = round(entry, 2)
+    sl = round(sl, 2)
+    tp = round(tp, 2)
 
     # حفظ الصفقة
     with TRADE_DB_LOCK:
@@ -3772,16 +4084,109 @@ def create_trade_from_vision(analysis, uploaded_file_name):
                     json.dumps({}),  # لا ميزات رقمية
                     confidence,  # ai_conf = ثقة الرؤية
                     None,  # groq_conf
-                    "",    # groq_note
-                    "",    # signal_bar_time (غير متاح)
+                    str(analysis.get("comment", "") or ""),  # groq_note
+                    uploaded_file_name,  # signal_bar_time (اسم الصورة كمرجع)
                     confidence,  # final_confidence
                     "Vision Image Analysis",
                 ),
             )
             conn.commit()
-            return direction
+            return {
+                "direction": direction,
+                "entry": entry,
+                "sl": sl,
+                "tp": tp,
+                "confidence": confidence,
+            }, confidence
         finally:
             conn.close()
+
+
+def render_vision_analysis_card(analysis, trade_info=None):
+    """
+    يعرض نتيجة تحليل الصورة بتصميم أنيق باستخدام بطاقات ورقائق ملونة.
+    """
+    trend = str(analysis.get("trend", "NEUTRAL")).upper()
+    confidence = analysis.get("confidence", 0)
+
+    if trend == "BULLISH":
+        badge_class = "vision-trend-bullish"
+        badge_icon = "📈"
+        badge_text = "اتجاه صاعد (BULLISH)"
+    elif trend == "BEARISH":
+        badge_class = "vision-trend-bearish"
+        badge_icon = "📉"
+        badge_text = "اتجاه هابط (BEARISH)"
+    else:
+        badge_class = "vision-trend-neutral"
+        badge_icon = "➖"
+        badge_text = "محايد (NEUTRAL)"
+
+    support = analysis.get("support") or []
+    resistance = analysis.get("resistance") or []
+    patterns = analysis.get("patterns") or []
+    comment = str(analysis.get("comment", "") or "")
+
+    support_chips = "".join(
+        f'<span class="vision-level-chip vision-support">🟢 {s}</span>'
+        for s in support
+    ) or '<span class="vision-mini-note">لا توجد مستويات دعم واضحة</span>'
+
+    resistance_chips = "".join(
+        f'<span class="vision-level-chip vision-resistance">🔴 {r}</span>'
+        for r in resistance
+    ) or '<span class="vision-mini-note">لا توجد مستويات مقاومة واضحة</span>'
+
+    pattern_chips = "".join(
+        f'<span class="vision-pattern-tag">🔎 {p}</span>' for p in patterns
+    ) or '<span class="vision-mini-note">لم يتم رصد نمط محدد</span>'
+
+    html = f"""
+<div class="vision-card">
+    <div class="vision-header">
+        <div class="vision-trend-badge {badge_class}">{badge_icon} {badge_text}</div>
+        <div class="vision-conf-pill">🎯 الثقة: {safe_fmt(confidence, "{:.0f}")}%</div>
+    </div>
+    <div class="vision-grid">
+        <div class="vision-box">
+            <div class="vision-box-label">📊 مستويات الدعم</div>
+            <div class="vision-box-value">{support_chips}</div>
+        </div>
+        <div class="vision-box">
+            <div class="vision-box-label">🧱 مستويات المقاومة</div>
+            <div class="vision-box-value">{resistance_chips}</div>
+        </div>
+    </div>
+    <div class="vision-box" style="margin-top:14px;">
+        <div class="vision-box-label">🧩 الأنماط المكتشفة</div>
+        <div class="vision-box-value">{pattern_chips}</div>
+    </div>
+"""
+
+    if comment:
+        html += f'<div class="vision-comment">💬 {comment}</div>'
+
+    if trade_info:
+        trade_class = (
+            "vision-trade-buy"
+            if "BUY" in trade_info["direction"]
+            else "vision-trade-sell"
+        )
+        html += f"""
+    <div class="vision-trade-card {trade_class}">
+        ✅ تم فتح صفقة: {trade_info['direction']}
+        <div style="font-weight:700; font-size:0.95rem; margin-top:8px;">
+            الدخول: ${trade_info['entry']} &nbsp;|&nbsp;
+            SL: ${trade_info['sl']} &nbsp;|&nbsp;
+            TP: ${trade_info['tp']}
+        </div>
+        <div class="vision-mini-note">ثقة الإشارة: {safe_fmt(trade_info['confidence'], "{:.0f}")}% (صفقة قد تكون صغيرة الحجم بناءً على إعداداتك)</div>
+    </div>
+"""
+
+    html += "</div>"
+
+    render_html(html)
 
 
 # ============================================================
@@ -4200,7 +4605,7 @@ def _get_shared_engine_state():
             "engine_running": False,
             "engine_error": None,
             "last_data_source": None,
-            "last_vision_error": None,  # جديد
+            "last_vision_error": None,
         },
         "lock": threading.Lock(),
     }
@@ -4618,9 +5023,9 @@ if strategy_result:
     <div class="trade-status-value {status_class}">{status_text}</div>
     <div>الاتجاه: <b>{direction or "—"}</b></div>
     <div>Final Confidence: <b>{final_conf:.1f}%</b></div>
-    <div>نظام السوق (Regime): <b>{regime_txt}</b> | قوة الترند: <b>{trend_strength_txt if trend_strength_txt is not None else "—"}</b></div>
-    <div>OF Delta: {strategy_result.get('of_delta', 0):.2f} | Imbalance: {strategy_result.get('of_imbalance', 0):.1f}%</div>
-    <div>Absorption: {strategy_result.get('of_absorption', 0):.1f}% | Exhaustion: {strategy_result.get('of_exhaustion', 0):.1f}%</div>
+    <div>نظام السوق (Regime): <b>{regime_txt}</b> | قوة الترند: <b>{safe_fmt(trend_strength_txt, "{:.2f}")}</b></div>
+    <div>OF Delta: {safe_fmt(strategy_result.get('of_delta'), "{:.2f}")} | Imbalance: {safe_fmt(strategy_result.get('of_imbalance'), "{:.1f}")}%</div>
+    <div>Absorption: {safe_fmt(strategy_result.get('of_absorption'), "{:.1f}")}% | Exhaustion: {safe_fmt(strategy_result.get('of_exhaustion'), "{:.1f}")}%</div>
 </div>
 """)
 else:
@@ -4687,14 +5092,14 @@ if not df_active.empty:
 SL: ${active_trade['sl']}
 TP: ${active_trade['tp']}
 الثقة النهائية: {final_value:.1f}%
-شمعة الإشارة: {active_trade.get('signal_bar_time', '')}
+شمعة الإشارة / المرجع: {active_trade.get('signal_bar_time', '')}
 """)
 else:
     st.info("لا توجد صفقات نشطة حالياً.")
 
 
 # ============================================================
-# Vision AI: قسم رفع الصور وتحليلها (جديد)
+# Vision AI: قسم رفع الصور وتحليلها (تصميم أنيق)
 # ============================================================
 
 st.markdown("### 🖼️ تحليل صورة شارت")
@@ -4712,26 +5117,58 @@ else:
 
     if uploaded_files:
         for uploaded_file in uploaded_files:
-            with st.expander(f"📈 تحليل: {uploaded_file.name}"):
-                st.image(uploaded_file, caption=uploaded_file.name, use_container_width=True)
-                if st.button(f"تحليل وحفظ الصفقة", key=f"analyze_save_{uploaded_file.name}"):
-                    with st.spinner("جارٍ التحليل..."):
+            with st.expander(f"📈 تحليل: {uploaded_file.name}", expanded=True):
+                st.image(
+                    uploaded_file,
+                    caption=uploaded_file.name,
+                    use_container_width=True,
+                )
+
+                analyze_col, _ = st.columns([1, 3])
+                with analyze_col:
+                    do_analyze = st.button(
+                        "🔍 تحليل وفتح صفقة",
+                        key=f"analyze_save_{uploaded_file.name}",
+                        use_container_width=True,
+                    )
+
+                if do_analyze:
+                    with st.spinner("🧠 جارٍ تحليل الشارت بذكاء اصطناعي..."):
                         image_bytes = uploaded_file.getvalue()
-                        analysis = analyze_chart_image(image_bytes, groq_key, vision_model)
-                        if analysis:
-                            st.success("تم التحليل بنجاح")
-                            st.json(analysis)
-                            direction = create_trade_from_vision(analysis, uploaded_file.name)
-                            if direction:
-                                st.success(f"تم إنشاء صفقة: {direction}")
-                                send_alert(
-                                    f"صفقة من تحليل الصورة: {direction} بثقة {analysis['confidence']}%",
-                                    title="📈 Vision Trade"
-                                )
-                            else:
-                                st.warning("الثقة أقل من 30% أو الاتجاه غير واضح، لم يتم إنشاء صفقة.")
+                        analysis = analyze_chart_image(
+                            image_bytes, groq_key, vision_model
+                        )
+
+                    if analysis:
+                        trade_info, conf_value = create_trade_from_vision(
+                            analysis,
+                            uploaded_file.name,
+                            min_conf_threshold=float(min_vision_conf),
+                            risk_pct=float(vision_risk_pct),
+                            rr_ratio=float(vision_rr),
+                        )
+
+                        render_vision_analysis_card(analysis, trade_info)
+
+                        if trade_info:
+                            send_alert(
+                                (
+                                    f"صفقة من تحليل الصورة: {trade_info['direction']}\n"
+                                    f"الدخول: ${trade_info['entry']} | SL: ${trade_info['sl']} | TP: ${trade_info['tp']}\n"
+                                    f"الثقة: {conf_value:.1f}%"
+                                ),
+                                title="📈 Vision Trade",
+                            )
                         else:
-                            st.error("فشل تحليل الصورة. تحقق من المفتاح والنموذج.")
+                            st.warning(
+                                f"لم يتم فتح صفقة — إما أن الاتجاه غير واضح، أو "
+                                f"الثقة ({safe_fmt(conf_value, '{:.0f}')}%) أقل من الحد "
+                                f"الأدنى المحدد ({int(min_vision_conf)}%)، أو لا تتوفر "
+                                f"مستويات كافية لتحديد سعر دخول. يمكنك خفض الحد الأدنى "
+                                f"من الشريط الجانبي للسماح بصفقات أصغر."
+                            )
+                    else:
+                        st.error("فشل تحليل الصورة. تحقق من المفتاح والنموذج.")
 
 
 # ============================================================
@@ -4742,17 +5179,17 @@ if strategy_result:
     with st.expander("📊 تفاصيل ICT + Order Flow"):
         st.write("H1 Trend:", strategy_result.get("h1_trend", "—"))
         st.write("نظام السوق (Regime):", strategy_result.get("regime", "—"))
-        st.write("قوة الترند (EMA/ATR):", strategy_result.get("trend_strength", "—"))
+        st.write("قوة الترند (EMA/ATR):", safe_fmt(strategy_result.get("trend_strength"), "{:.2f}"))
         st.write("M15 Bias:", strategy_result.get("m15_bias", "—"))
         st.write("M5 Bias:", strategy_result.get("m5_bias", "—"))
-        st.write("ICT Confidence:", f"{strategy_result.get('ict_confidence', 0):.1f}%")
+        st.write("ICT Confidence:", f"{safe_fmt(strategy_result.get('ict_confidence'), '{:.1f}')}%")
         st.write("OF Delta:", strategy_result.get("of_delta", 0))
         st.write("OF CVD:", strategy_result.get("of_cvd", 0))
-        st.write("OF Imbalance:", f"{strategy_result.get('of_imbalance', 0):.1f}%")
-        st.write("OF Absorption:", f"{strategy_result.get('of_absorption', 0):.1f}%")
-        st.write("OF Exhaustion:", f"{strategy_result.get('of_exhaustion', 0):.1f}%")
+        st.write("OF Imbalance:", f"{safe_fmt(strategy_result.get('of_imbalance'), '{:.1f}')}%")
+        st.write("OF Absorption:", f"{safe_fmt(strategy_result.get('of_absorption'), '{:.1f}')}%")
+        st.write("OF Exhaustion:", f"{safe_fmt(strategy_result.get('of_exhaustion'), '{:.1f}')}%")
         st.write("OF Signal:", strategy_result.get("of_signal", "NEUTRAL"))
-        st.write("Confluence Score:", f"{strategy_result.get('confluence_score', 0):.1f}%")
+        st.write("Confluence Score:", f"{safe_fmt(strategy_result.get('confluence_score'), '{:.1f}')}%")
 
 
 # ============================================================
@@ -4763,7 +5200,7 @@ if strategy_result and strategy_result.get("groq_called"):
     with st.expander("🧠 رأي Groq"):
         if strategy_result.get("groq_available"):
             groq_conf_val = strategy_result.get("groq_conf")
-            groq_conf_txt = f"{groq_conf_val:.1f}%" if groq_conf_val is not None else "—"
+            groq_conf_txt = f"{safe_fmt(groq_conf_val, '{:.1f}')}%"
             if strategy_result.get("groq_agree"):
                 st.success(f"✅ Groq وافق على الإشارة — ثقة Groq: {groq_conf_txt}")
             else:
