@@ -4713,7 +4713,7 @@ else:
     if uploaded_files:
         for uploaded_file in uploaded_files:
             with st.expander(f"📈 تحليل: {uploaded_file.name}"):
-                st.image(uploaded_file, caption=uploaded_file.name, use_column_width=True)
+                st.image(uploaded_file, caption=uploaded_file.name, use_container_width=True)
                 if st.button(f"تحليل وحفظ الصفقة", key=f"analyze_save_{uploaded_file.name}"):
                     with st.spinner("جارٍ التحليل..."):
                         image_bytes = uploaded_file.getvalue()
