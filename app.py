@@ -25,6 +25,14 @@ ICT (Smart Money Concepts) + Order Flow Proxy (تقديري من OHLCV + Volume)
 
 [إضافة جديدة]:
 - Vision AI: تحليل صور الشارتات عبر Groq Vision، وإنشاء صفقات منفصلة.
+
+[إصلاح 2026-09-07]:
+- Groq أوقف نموذج llama-3.2-90b-vision-preview (decommissioned) وهذا كان
+  يسبب خطأ 400 Bad Request عند تحليل الصور. تم:
+  1) تغيير النموذج الافتراضي إلى meta-llama/llama-4-scout-17b-16e-instruct
+  2) ترحيل تلقائي لأي إعداد قديم محفوظ في قاعدة البيانات يشير لنموذج متوقف
+  3) سلسلة نماذج احتياطية (fallback chain) تُجرَّب تلقائياً عند فشل النموذج
+     الأساسي، مع رسالة خطأ واضحة تجمع كل المحاولات إن فشلت كلها.
 """
 
 
@@ -469,6 +477,30 @@ OF_DELTA_SMOOTH = 3
 # الحد الأدنى الافتراضي لثقة صفقات تحليل الصور (منخفض عمداً
 # للسماح بصفقات صغيرة كما طلب المستخدم)
 DEFAULT_MIN_VISION_CONF = 10
+
+# ------------------------------------------------------------
+# نماذج Groq Vision — الإصلاح الأساسي
+# ------------------------------------------------------------
+# Groq أوقف (decommissioned) نموذج llama-3.2-90b-vision-preview بتاريخ
+# 2025-04-14 وكذلك llama-3.2-11b-vision-preview و llava-v1.5-7b-4096-preview.
+# أي طلب يستخدم هذه الأسماء يرجع خطأ:
+#   400 Bad Request — model_decommissioned
+# البديل الرسمي الموصى به من Groq هو عائلة Llama 4 (Scout / Maverick).
+# نضع هنا سلسلة نماذج احتياطية: إذا فشل النموذج الأول (متوقف، أو غير
+# متاح مؤقتاً)، يُجرَّب التالي تلقائياً دون أي تدخل من المستخدم.
+
+VISION_MODEL_FALLBACKS = [
+    "meta-llama/llama-4-scout-17b-16e-instruct",
+    "meta-llama/llama-4-maverick-17b-128e-instruct",
+]
+
+DEFAULT_VISION_MODEL = VISION_MODEL_FALLBACKS[0]
+
+DEPRECATED_VISION_MODELS = {
+    "llama-3.2-90b-vision-preview",
+    "llama-3.2-11b-vision-preview",
+    "llava-v1.5-7b-4096-preview",
+}
 
 
 # ============================================================
@@ -1064,11 +1096,40 @@ save_setting(
     "1" if use_vision else "0",
 )
 
+# --- ترحيل تلقائي: إذا كان النموذج المحفوظ سابقاً متوقفاً (decommissioned)
+# من طرف Groq، يتم استبداله تلقائياً بالنموذج الافتراضي الجديد المدعوم،
+# بدل أن يستمر المستخدم برؤية خطأ 400 في كل مرة.
+_stored_vision_model = load_setting(
+    "vision_model",
+    DEFAULT_VISION_MODEL,
+)
+
+if (not _stored_vision_model) or (_stored_vision_model in DEPRECATED_VISION_MODELS):
+
+    _old_model_name = _stored_vision_model
+
+    _stored_vision_model = DEFAULT_VISION_MODEL
+
+    save_setting(
+        "vision_model",
+        _stored_vision_model,
+    )
+
+    st.sidebar.warning(
+        "⚠️ تم تحديث نموذج تحليل الصور تلقائياً إلى "
+        f"`{DEFAULT_VISION_MODEL}` لأن Groq أوقف دعم "
+        f"النموذج القديم `{_old_model_name or 'غير محدد'}`."
+    )
+
 vision_model = st.sidebar.text_input(
     "نموذج الرؤية (Groq Vision)",
-    value=load_setting(
-        "vision_model",
-        "llama-3.2-90b-vision-preview",
+    value=_stored_vision_model,
+    help=(
+        "ملاحظة: Groq أوقف نماذج llama-3.2-*-vision-preview. "
+        "استخدم أحد نماذج Llama 4 مثل "
+        "meta-llama/llama-4-scout-17b-16e-instruct. "
+        "حتى لو أدخلت نموذجاً متوقفاً بالخطأ، سيحاول النظام "
+        "تلقائياً استخدام النماذج الاحتياطية المدعومة."
     ),
 )
 
@@ -3905,14 +3966,29 @@ def run_ict_engine(
 # Vision AI: تحليل صور الشارتات
 # ============================================================
 
-def analyze_chart_image(image_bytes, api_key, model_name="llama-3.2-90b-vision-preview"):
+def _extract_groq_error_message(response):
     """
-    يحلل صورة الشارت باستخدام Groq Vision API.
+    يحاول استخراج رسالة خطأ واضحة من رد Groq (JSON قياسي أو نص خام).
     """
-    if not api_key:
-        return None
+    try:
+        err_json = response.json()
+        err_obj = err_json.get("error", {})
+        code = err_obj.get("code", "")
+        message = err_obj.get("message", "") or json.dumps(
+            err_json, ensure_ascii=False
+        )
+        if code:
+            return f"[{code}] {message}"
+        return message
+    except Exception:
+        return (response.text or "")[:400]
 
-    base64_image = base64.b64encode(image_bytes).decode("utf-8")
+
+def _call_groq_vision_once(image_b64, api_key, model_name):
+    """
+    ينفذ استدعاء واحد لـ Groq Vision بنموذج محدد.
+    يعيد (result_dict, error_message). عند النجاح تكون error_message = None.
+    """
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -3947,7 +4023,7 @@ def analyze_chart_image(image_bytes, api_key, model_name="llama-3.2-90b-vision-p
                     {
                         "type": "image_url",
                         "image_url": {
-                            "url": f"data:image/jpeg;base64,{base64_image}"
+                            "url": f"data:image/jpeg;base64,{image_b64}"
                         },
                     },
                 ],
@@ -3959,16 +4035,84 @@ def analyze_chart_image(image_bytes, api_key, model_name="llama-3.2-90b-vision-p
 
     try:
         response = HTTP_SESSION.post(url, headers=headers, json=payload, timeout=30)
-        response.raise_for_status()
-        data = response.json()
+    except Exception as exc:
+        return None, f"{model_name}: تعذّر الاتصال بـ Groq ({exc})"
 
+    if not response.ok:
+        err_msg = _extract_groq_error_message(response)
+        return None, f"{model_name}: HTTP {response.status_code} — {err_msg}"
+
+    try:
+        data = response.json()
         content = data["choices"][0]["message"]["content"]
         content = content.replace("```json", "").replace("```", "").strip()
         result = json.loads(content)
-        return result
-    except Exception as e:
-        APP_STATE_set("last_vision_error", f"تعذر تحليل الصورة: {e}")
+        return result, None
+    except Exception as exc:
+        return None, f"{model_name}: تعذّر تحليل رد Groq ({exc})"
+
+
+def analyze_chart_image(
+    image_bytes,
+    api_key,
+    model_name=DEFAULT_VISION_MODEL,
+):
+    """
+    يحلل صورة الشارت باستخدام Groq Vision API.
+
+    الإصلاح: بدلاً من الفشل الصامت عند استخدام نموذج متوقف (decommissioned)
+    مثل llama-3.2-90b-vision-preview القديم، تُجرَّب سلسلة نماذج بديلة
+    مدعومة تلقائياً (Llama 4 Scout ثم Maverick)، وتُجمع رسائل الخطأ من
+    كل محاولة في حال فشل الجميع بدلاً من رسالة عامة غير مفيدة.
+    """
+    if not api_key:
+        APP_STATE_set(
+            "last_vision_error",
+            "لم يتم إدخال مفتاح Groq API.",
+        )
         return None
+
+    base64_image = base64.b64encode(image_bytes).decode("utf-8")
+
+    # ترتيب النماذج المطلوب تجربتها: النموذج المختار من المستخدم أولاً،
+    # ثم أي نماذج احتياطية أخرى لم تتم تجربتها بعد.
+    models_to_try = []
+    if model_name:
+        models_to_try.append(model_name)
+    for fallback_model in VISION_MODEL_FALLBACKS:
+        if fallback_model not in models_to_try:
+            models_to_try.append(fallback_model)
+
+    errors = []
+
+    for candidate_model in models_to_try:
+
+        result, error_msg = _call_groq_vision_once(
+            base64_image,
+            api_key,
+            candidate_model,
+        )
+
+        if result is not None:
+
+            # إن نجح نموذج احتياطي غير الذي اختاره المستخدم، نحفظه
+            # كإعداد افتراضي جديد حتى لا نكرر الفشل في كل مرة.
+            if candidate_model != model_name:
+                save_setting("vision_model", candidate_model)
+
+            APP_STATE_set("last_vision_error", None)
+            return result
+
+        errors.append(error_msg)
+
+    combined_error = " | ".join(e for e in errors if e)
+
+    APP_STATE_set(
+        "last_vision_error",
+        f"فشلت كل النماذج المتاحة لتحليل الصورة: {combined_error}",
+    )
+
+    return None
 
 
 def create_trade_from_vision(
@@ -4979,6 +5123,7 @@ with st.expander("🔧 حالة المحرك (تشخيص)"):
     d1.write("🔑 مفتاح Twelve Data (احتياطي): " + ("✅ موجود" if twelve_key else "➖ غير مُدخل (Yahoo يعمل بدونه)"))
     d1.write("🧠 حالة النموذج: " + ("✅ مُدرَّب وجاهز" if model_ready_now else "⏳ غير جاهز بعد"))
     d1.write("🔒 قفل تدريب نشط الآن: " + ("نعم" if os.path.exists(TRAINING_LOCK_FILE) else "لا"))
+    d1.write("🖼️ نموذج Vision الحالي: " + (vision_model or "—"))
     last_train_time = APP_STATE_get("last_train_time")
     d2.write(f"🕒 آخر تدريب ناجح: {last_train_time or 'لم يحدث بعد'}")
     d2.write(f"🔄 آخر دورة تحليل: {last_update or 'لم تبدأ بعد'}")
@@ -5168,7 +5313,11 @@ else:
                                 f"من الشريط الجانبي للسماح بصفقات أصغر."
                             )
                     else:
-                        st.error("فشل تحليل الصورة. تحقق من المفتاح والنموذج.")
+                        st.error(
+                            "فشل تحليل الصورة عبر جميع النماذج المتاحة. "
+                            "تحقق من صلاحية مفتاح Groq API، أو راجع تفاصيل "
+                            "الخطأ أسفل الصفحة."
+                        )
 
 
 # ============================================================
