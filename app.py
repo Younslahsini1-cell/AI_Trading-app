@@ -53,6 +53,7 @@ import threading
 import time
 import traceback
 import base64
+import tempfile
 
 import joblib
 import numpy as np
