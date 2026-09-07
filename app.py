@@ -19,29 +19,29 @@ ICT (Smart Money Concepts) + Order Flow Proxy (تقديري من OHLCV + Volume)
 - Displacement
 - Order Flow Proxy (Estimated Delta, CVD, Volume Imbalance, Absorption, Exhaustion)
 - Neural Network (MLP)
-- Groq (رأي ثانٍ)
+- OpenRouter (رأي ثانٍ + تحليل صور) — نماذج مفتوحة الوزن ومجانية
 - Experience Layer
 - Risk Management (ATR-based SL/TP)
 
 [إضافة جديدة]:
-- Vision AI: تحليل صور الشارتات عبر Groq Vision، وإنشاء صفقات منفصلة.
+- Vision AI: تحليل صور الشارتات عبر OpenRouter Vision، وإنشاء صفقات منفصلة.
 
-[إصلاح 2026-09-07 — نسخة محدَّثة]:
-- المحاولة الأولى استبدلت llama-3.2-90b-vision-preview (متوقف/decommissioned
-  منذ 2025-04-14) بـ meta-llama/llama-4-scout-17b-16e-instruct، لكن تبيّن أن
-  Groq أزال هذا النموذج أيضاً لاحقاً (وكذلك llama-4-maverick)، فظهر خطأ جديد:
-  404 model_not_found.
-- التحديث الحالي:
-  1) النموذج الافتراضي أصبح qwen/qwen3.6-27b وهو نموذج الرؤية متعدد
-     الوسائط الحالي الموصى به رسمياً من Groq (تم التحقق من وثائق Groq
-     مباشرة بتاريخ هذا الإصلاح).
-  2) ترحيل تلقائي لأي إعداد قديم محفوظ في قاعدة البيانات يشير لأي نموذج
-     متوقف (llama-3.2 القديمة أو llama-4 scout/maverick).
-  3) سلسلة نماذج احتياطية (fallback chain) تُجرَّب تلقائياً عند فشل
-     النموذج الأساسي، مع رسالة خطأ واضحة تجمع كل المحاولات إن فشلت كلها.
-  ملاحظة: قائمة نماذج Groq تتغيّر بكثرة؛ إذا ظهر خطأ 404/400 مستقبلاً
-  رغم هذا الإصلاح، افتح الشريط الجانبي → حقل "نموذج الرؤية" وأدخل اسم
-  نموذج رؤية حالي من https://console.groq.com/docs/models يدوياً.
+[إصلاح 2026-09-07 — التحول من Groq إلى OpenRouter]:
+- المشكلة: Groq أوقف/أزال أكثر من نموذج رؤية على التوالي
+  (llama-3.2-90b-vision-preview ثم llama-4-scout/maverick)، فكل نموذج
+  نضبطه يدوياً يُصبح 404 model_not_found خلال أسابيع.
+- الحل: تم استبدال Groq بالكامل بـ OpenRouter (https://openrouter.ai)،
+  وهو Gateway واحد يمنح وصولاً مجانياً (بدون بطاقة ائتمان) لعشرات
+  النماذج مفتوحة الوزن (Qwen, Llama, Gemma, Nemotron...) عبر نفس
+  الواجهة المتوافقة مع OpenAI. مفتاح OpenRouter API واحد يكفي لكل من:
+    1) الرأي الثاني النصي (كان Groq groq/openai-gpt-oss سابقاً).
+    2) تحليل صور الشارتات (Vision).
+- بما أن قائمة "النماذج المجانية" في OpenRouter تتغيّر هي الأخرى بمرور
+  الوقت، تم استخدام سلسلة نماذج احتياطية (fallback chain) تُجرَّب
+  تلقائياً، ورسالة خطأ واضحة تجمع كل المحاولات إن فشلت جميعها. يمكن أيضاً
+  إدخال اسم نموذج مخصص من الشريط الجانبي إن رغب المستخدم.
+  ملاحظة: راجع https://openrouter.ai/models?max_price=0 للحصول على
+  أحدث قائمة نماذج مجانية إذا ظهر خطأ 404/400 مستقبلاً رغم هذا الإصلاح.
 """
 
 
@@ -488,44 +488,66 @@ OF_DELTA_SMOOTH = 3
 DEFAULT_MIN_VISION_CONF = 10
 
 # ------------------------------------------------------------
-# نماذج Groq Vision — الإصلاح الأساسي (محدَّث 2026-09-07)
+# OpenRouter — الاستبدال الكامل لـ Groq (محدَّث 2026-09-07)
 # ------------------------------------------------------------
-# التسلسل الزمني الكامل لدى Groq لنماذج الرؤية:
-#   1) llama-3.2-90b/11b-vision-preview و llava-v1.5-7b-4096-preview
-#      → أوقفت (decommissioned) بتاريخ 2025-04-14. الخطأ: 400 model_decommissioned
-#   2) البديل الذي أوصت به Groq وقتها: meta-llama/llama-4-scout-17b-16e-instruct
-#      و meta-llama/llama-4-maverick-17b-128e-instruct
-#      → هذان بدورهما أُزيلا لاحقاً من Groq (llama-4-maverick في 2025-10-15،
-#        و llama-4-scout في 2025-11-03). الخطأ الناتج: 404 model_not_found
-#        (وهو بالضبط ما ظهر في الصورة المرفقة).
-#   3) النموذج الحالي المُوصى به من Groq لتحليل الصور (متعدد الوسائط) هو:
-#      qwen/qwen3.6-27b (حالياً في مرحلة Preview لدى Groq، لكنه النموذج
-#      الوحيد متعدد الوسائط المتاح رسمياً وقت كتابة هذا الإصلاح).
-#      المصدر: صفحة Groq الرسمية لقائمة النماذج ووثائق الترحيل (تم التحقق
-#      منها مباشرة بتاريخ اليوم).
+# لماذا OpenRouter بدل Groq؟
+#   - Groq أوقف/أزال نماذج الرؤية المتاحة لديه عدة مرات خلال 2025-2026
+#     (llama-3.2-*-vision-preview ثم llama-4-scout/maverick)، وفي كل
+#     مرة يظهر خطأ 404 model_not_found بدون سابق إنذار.
+#   - OpenRouter (https://openrouter.ai) هو "Gateway" واحد يجمّع عشرات
+#     النماذج مفتوحة الوزن (Qwen, Meta Llama, Google Gemma, NVIDIA
+#     Nemotron...) من مزوّدين متعددين، ويوفّر نسخاً "مجانية" (لاحقة
+#     :free) بدون بطاقة ائتمان، عبر واجهة واحدة متوافقة مع OpenAI API.
+#   - بما أن قائمة النماذج المجانية تتغيّر أيضاً بمرور الوقت، تم اعتماد
+#     نفس فلسفة الإصلاح السابق: سلسلة نماذج احتياطية (fallback chain)
+#     تُجرَّب تلقائياً بالترتيب، مع تجميع كل رسائل الخطأ إن فشلت جميعها.
+#   - يمكن أيضاً كتابة اسم نموذج مخصص من الشريط الجانبي (سيُجرَّب أولاً
+#     قبل القائمة الاحتياطية).
 #
-# نظراً لأن Groq يغيّر قائمة نماذج الرؤية باستمرار، تم استخدام سلسلة
-# نماذج احتياطية (fallback chain): إذا فشل النموذج الأول (توقف، أو أُزيل،
-# أو غير متاح مؤقتاً)، يُجرَّب التالي تلقائياً دون أي تدخل من المستخدم،
-# وتُحفظ أول نموذج ناجح كإعداد افتراضي جديد.
+# للحصول على أحدث قائمة نماذج مجانية في أي وقت:
+#   https://openrouter.ai/models?max_price=0
+# ابحث عن أي نموذج يدعم "Image" في خانة Input modalities لتحليل الصور.
 
+OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+# نماذج رؤية (Vision) مجانية ومفتوحة الوزن على OpenRouter، مرتبة حسب
+# الأولوية. تُجرَّب بالترتيب حتى ينجح أحدها.
 VISION_MODEL_FALLBACKS = [
-    "qwen/qwen3.6-27b",
-    "qwen/qwen3.8-27b",
-    "meta-llama/llama-4-scout-17b-16e-instruct",
-    "meta-llama/llama-4-maverick-17b-128e-instruct",
+    "qwen/qwen2.5-vl-72b-instruct:free",
+    "google/gemma-4-31b-it:free",
+    "google/gemma-4-26b-a4b-it:free",
+    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
 ]
 
 DEFAULT_VISION_MODEL = VISION_MODEL_FALLBACKS[0]
 
-# أي نموذج قديم محفوظ في قاعدة البيانات من إصدار سابق للتطبيق يُعتبر
-# "متوقفاً" ويُستبدل تلقائياً بالنموذج الافتراضي الجديد أعلاه.
+# نماذج نصية مجانية على OpenRouter، تُستخدم في "الرأي الثاني"
+# (كانت تعتمد سابقاً على Groq / openai-gpt-oss-120b).
+TEXT_REVIEW_MODEL_FALLBACKS = [
+    "meta-llama/llama-3.3-70b-instruct:free",
+    "qwen/qwen2.5-vl-72b-instruct:free",
+    "google/gemma-4-31b-it:free",
+]
+
+DEFAULT_TEXT_REVIEW_MODEL = TEXT_REVIEW_MODEL_FALLBACKS[0]
+
+# أي نموذج قديم محفوظ في قاعدة البيانات من إصدار Groq السابق للتطبيق
+# يُعتبر "متوقفاً" (لا يعمل مطلقاً على OpenRouter) ويُستبدل تلقائياً
+# بالنموذج الافتراضي الجديد أعلاه.
 DEPRECATED_VISION_MODELS = {
     "llama-3.2-90b-vision-preview",
     "llama-3.2-11b-vision-preview",
     "llava-v1.5-7b-4096-preview",
     "meta-llama/llama-4-scout-17b-16e-instruct",
     "meta-llama/llama-4-maverick-17b-128e-instruct",
+    "qwen/qwen3.6-27b",
+    "qwen/qwen3.8-27b",
+}
+
+DEPRECATED_TEXT_MODELS = {
+    "openai/gpt-oss-120b",
+    "llama-3.3-70b-versatile",
+    "llama3-70b-8192",
 }
 
 
@@ -921,12 +943,12 @@ save_setting(
 
 st.sidebar.markdown("---")
 st.sidebar.header(
-    "🧠 الرأي الثاني (Groq)"
+    "🧠 الرأي الثاني (OpenRouter — نماذج مجانية)"
 )
 
 
 use_groq = st.sidebar.checkbox(
-    "تفعيل مراجعة Groq",
+    "تفعيل مراجعة OpenRouter",
     value=(
         load_setting(
             "use_groq",
@@ -943,6 +965,9 @@ save_setting(
 
 
 groq_secret = get_secret_value(
+    "OPENROUTER_API_KEY",
+    "",
+) or get_secret_value(
     "GROQ_API_KEY",
     "",
 )
@@ -952,7 +977,7 @@ if "groq_key" not in st.session_state:
     try:
         stored_groq_key = (
             localS.getItem(
-                "groq_key_ls"
+                "openrouter_key_ls"
             )
             or load_setting(
                 "groq_key",
@@ -975,9 +1000,14 @@ if "groq_key" not in st.session_state:
 
 
 groq_key = st.sidebar.text_input(
-    "مفتاح Groq API",
+    "مفتاح OpenRouter API",
     type="password",
     key="groq_key",
+    help=(
+        "احصل على مفتاح مجاني من https://openrouter.ai/keys "
+        "(بدون بطاقة ائتمان). هذا المفتاح يُستخدم لكل من الرأي "
+        "الثاني النصي وتحليل صور الشارتات."
+    ),
 )
 
 if groq_key:
@@ -989,18 +1019,28 @@ if groq_key:
 
     try:
         localS.setItem(
-            "groq_key_ls",
+            "openrouter_key_ls",
             groq_key,
         )
     except Exception:
         pass
 
 
+_stored_text_model = load_setting(
+    "groq_model",
+    DEFAULT_TEXT_REVIEW_MODEL,
+)
+
+if (not _stored_text_model) or (_stored_text_model in DEPRECATED_TEXT_MODELS):
+    _stored_text_model = DEFAULT_TEXT_REVIEW_MODEL
+
 groq_model = st.sidebar.text_input(
-    "اسم نموذج Groq",
-    value=load_setting(
-        "groq_model",
-        "openai/gpt-oss-120b",
+    "نموذج OpenRouter النصي (اختياري)",
+    value=_stored_text_model,
+    help=(
+        "يُجرَّب هذا النموذج أولاً، ثم قائمة احتياطية مجانية تلقائياً "
+        "إذا فشل أو أصبح غير متاح: "
+        + ", ".join(TEXT_REVIEW_MODEL_FALLBACKS)
     ),
 )
 
@@ -1011,7 +1051,7 @@ save_setting(
 
 
 min_groq_conf = st.sidebar.slider(
-    "أدنى ثقة مطلوبة من Groq",
+    "أدنى ثقة مطلوبة من المراجعة",
     30,
     95,
     50,
@@ -1110,7 +1150,7 @@ save_setting(
 # ============================================================
 
 st.sidebar.markdown("---")
-st.sidebar.header("🖼️ تحليل صور الشارتات (Vision)")
+st.sidebar.header("🖼️ تحليل صور الشارتات (Vision — OpenRouter)")
 
 use_vision = st.sidebar.checkbox(
     "تفعيل تحليل الصور",
@@ -1122,9 +1162,9 @@ save_setting(
     "1" if use_vision else "0",
 )
 
-# --- ترحيل تلقائي: إذا كان النموذج المحفوظ سابقاً متوقفاً (decommissioned)
-# من طرف Groq، يتم استبداله تلقائياً بالنموذج الافتراضي الجديد المدعوم،
-# بدل أن يستمر المستخدم برؤية خطأ 400 في كل مرة.
+# --- ترحيل تلقائي: إذا كان النموذج المحفوظ سابقاً متوقفاً (decommissioned
+# أو ينتمي لعصر Groq القديم)، يتم استبداله تلقائياً بالنموذج الافتراضي
+# الجديد على OpenRouter، بدل أن يستمر المستخدم برؤية خطأ 404 في كل مرة.
 _stored_vision_model = load_setting(
     "vision_model",
     DEFAULT_VISION_MODEL,
@@ -1143,19 +1183,21 @@ if (not _stored_vision_model) or (_stored_vision_model in DEPRECATED_VISION_MODE
 
     st.sidebar.warning(
         "⚠️ تم تحديث نموذج تحليل الصور تلقائياً إلى "
-        f"`{DEFAULT_VISION_MODEL}` لأن Groq أوقف دعم "
-        f"النموذج القديم `{_old_model_name or 'غير محدد'}`."
+        f"`{DEFAULT_VISION_MODEL}` (عبر OpenRouter) لأن النموذج القديم "
+        f"`{_old_model_name or 'غير محدد'}` (Groq) لم يعد متاحاً."
     )
 
 vision_model = st.sidebar.text_input(
-    "نموذج الرؤية (Groq Vision)",
+    "نموذج الرؤية (OpenRouter Vision)",
     value=_stored_vision_model,
     help=(
-        "ملاحظة: Groq يغيّر نماذج الرؤية بكثرة (llama-3.2-vision و "
-        "llama-4-scout/maverick كلها أُوقفت). النموذج الحالي الموصى به هو "
-        "qwen/qwen3.6-27b. حتى لو أدخلت نموذجاً متوقفاً بالخطأ، سيحاول "
-        "النظام تلقائياً استخدام النماذج الاحتياطية المدعومة، وإن فشلت "
-        "جميعها راجع https://console.groq.com/docs/models لأحدث اسم نموذج."
+        "ملاحظة: تم الانتقال بالكامل من Groq إلى OpenRouter لأن قوائم "
+        "نماذج الرؤية المجانية تتغيّر بكثرة لدى كل المزوّدين. حتى لو "
+        "أدخلت نموذجاً متوقفاً بالخطأ، سيحاول النظام تلقائياً استخدام "
+        "النماذج الاحتياطية المدعومة: "
+        + ", ".join(VISION_MODEL_FALLBACKS)
+        + ". وإن فشلت جميعها راجع https://openrouter.ai/models?max_price=0 "
+        "لأحدث اسم نموذج رؤية مجاني."
     ),
 )
 
@@ -1221,7 +1263,7 @@ save_setting(
 if use_vision:
     st.sidebar.info(
         "ارفع صورة الشارت في القسم الرئيسي، "
-        "وسيتم تحليلها باستخدام مفتاح Groq."
+        "وسيتم تحليلها باستخدام مفتاح OpenRouter."
     )
 
 
@@ -1307,7 +1349,7 @@ def send_trade_confirmation_alert(
     strategy="ICT + Order Flow",
 ):
     groq_line = (
-        f"\nGroq Confidence: "
+        f"\nReview Confidence: "
         f"{groq_conf:.1f}%"
         if groq_conf is not None
         else ""
@@ -2256,7 +2298,7 @@ clean_stale_training_lock()
 
 
 # ============================================================
-# Experience Layer & Groq
+# Experience Layer & OpenRouter (كان Groq)
 # ============================================================
 
 def get_experience_adjustment(
@@ -2393,6 +2435,81 @@ def _parse_groq_bool(value):
     return False
 
 
+def _extract_openrouter_error_message(response):
+    """
+    يحاول استخراج رسالة خطأ واضحة من رد OpenRouter (JSON قياسي أو نص خام).
+    """
+    try:
+        err_json = response.json()
+        err_obj = err_json.get("error", {})
+        code = err_obj.get("code", "")
+        message = err_obj.get("message", "") or json.dumps(
+            err_json, ensure_ascii=False
+        )
+        if code:
+            return f"[{code}] {message}"
+        return message
+    except Exception:
+        return (response.text or "")[:400]
+
+
+def _call_openrouter_chat(
+    messages,
+    api_key,
+    model_name,
+    response_json=True,
+    max_tokens=700,
+    timeout=25,
+):
+    """
+    استدعاء واحد لـ OpenRouter Chat Completions بنموذج محدد.
+    يعيد (result_text_or_dict, error_message).
+    """
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        # اختياريان لكن يحسّنان أولوية معالجة الطلبات المجانية لدى OpenRouter
+        "HTTP-Referer": "https://streamlit.io",
+        "X-Title": "XAU Deep AI Engine",
+    }
+
+    payload = {
+        "model": model_name,
+        "temperature": 0,
+        "max_tokens": max_tokens,
+        "messages": messages,
+    }
+
+    if response_json:
+        payload["response_format"] = {"type": "json_object"}
+
+    try:
+        response = HTTP_SESSION.post(
+            OPENROUTER_API_URL,
+            headers=headers,
+            json=payload,
+            timeout=timeout,
+        )
+    except Exception as exc:
+        return None, f"{model_name}: تعذّر الاتصال بـ OpenRouter ({exc})"
+
+    if not response.ok:
+        err_msg = _extract_openrouter_error_message(response)
+        return None, f"{model_name}: HTTP {response.status_code} — {err_msg}"
+
+    try:
+        data = response.json()
+        choices = data.get("choices", [])
+        if not choices:
+            return None, f"{model_name}: رد بلا choices"
+        content = choices[0].get("message", {}).get("content", "")
+        if not content:
+            return None, f"{model_name}: رد بلا محتوى نصي"
+        return content, None
+    except Exception as exc:
+        return None, f"{model_name}: تعذّر قراءة رد OpenRouter ({exc})"
+
+
 def get_groq_review(
     direction,
     last_row,
@@ -2401,198 +2518,113 @@ def get_groq_review(
     model_name,
     extra_context="",
 ):
+    """
+    "الرأي الثاني" — كان يعتمد على Groq، وأصبح الآن يعتمد على OpenRouter
+    (نماذج نصية مجانية مفتوحة الوزن)، مع سلسلة نماذج احتياطية تلقائية.
+    """
     if not api_key:
 
         APP_STATE_set(
             "last_groq_error",
-            "لم يتم إدخال مفتاح Groq API.",
+            "لم يتم إدخال مفتاح OpenRouter API.",
         )
 
         return None
 
-    try:
+    prompt = (
+        "أنت محلل فني مساعد "
+        "لصفقة محتملة على XAU/USD.\n"
+        f"الاتجاه المقترح: {direction}.\n"
+        f"ثقة نموذج AI الخام: "
+        f"{ai_conf:.1f}%.\n"
+        f"ATR={last_row['atr']:.2f}.\n"
+        f"EMA50={last_row['ema_50']:.2f}.\n"
+        f"EMA200={last_row['ema_200']:.2f}.\n"
+        f"RSI={last_row['rsi']:.1f}.\n"
+        f"السعر={last_row['close']:.2f}.\n"
+        f"{extra_context}\n"
+        "راجع الاتجاه بشكل مستقل بناءً "
+        "على البيانات المعطاة فقط. "
+        "لا تفترض أن نموذج AI صحيح، "
+        "لكن أيضًا لا تكن متشدداً "
+        "بلا داعٍ.\n"
+        'يجب أن يكون الرد JSON فقط بهذا الشكل: '
+        '{"agree": true, "confidence": 0, '
+        '"reason": "..."}'
+    )
 
-        prompt = (
-            "أنت محلل فني مساعد "
-            "لصفقة محتملة على XAU/USD.\n"
-            f"الاتجاه المقترح: {direction}.\n"
-            f"ثقة نموذج AI الخام: "
-            f"{ai_conf:.1f}%.\n"
-            f"ATR={last_row['atr']:.2f}.\n"
-            f"EMA50={last_row['ema_50']:.2f}.\n"
-            f"EMA200={last_row['ema_200']:.2f}.\n"
-            f"RSI={last_row['rsi']:.1f}.\n"
-            f"السعر={last_row['close']:.2f}.\n"
-            f"{extra_context}\n"
-            "راجع الاتجاه بشكل مستقل بناءً "
-            "على البيانات المعطاة فقط. "
-            "لا تفترض أن نموذج AI صحيح، "
-            "لكن أيضًا لا تكن متشدداً "
-            "بلا داعٍ.\n"
-            'يجب أن يكون الرد JSON فقط بهذا الشكل: '
-            '{"agree": true, "confidence": 0, '
-            '"reason": "..."}'
-        )
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "أنت محلل فني متوازن. "
+                "أعد JSON صالح فقط."
+            ),
+        },
+        {
+            "role": "user",
+            "content": prompt,
+        },
+    ]
 
-        response = HTTP_SESSION.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={
-                "Authorization": (
-                    f"Bearer {api_key}"
-                ),
-                "Content-Type": (
-                    "application/json"
-                ),
-            },
-            json={
-                "model": model_name,
-                "temperature": 0,
-                "max_completion_tokens": 2000,
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": (
-                            "أنت محلل فني متوازن. "
-                            "أعد JSON صالح فقط."
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": prompt,
-                    },
-                ],
-                "response_format": {
-                    "type": "json_object"
-                },
-            },
+    models_to_try = []
+    if model_name:
+        models_to_try.append(model_name)
+    for fallback_model in TEXT_REVIEW_MODEL_FALLBACKS:
+        if fallback_model not in models_to_try:
+            models_to_try.append(fallback_model)
+
+    errors = []
+
+    for candidate_model in models_to_try:
+
+        text, error_msg = _call_openrouter_chat(
+            messages,
+            api_key,
+            candidate_model,
+            response_json=True,
+            max_tokens=400,
             timeout=20,
         )
 
-        if not response.ok:
-
-            APP_STATE_set(
-                "last_groq_error",
-                (
-                    f"HTTP "
-                    f"{response.status_code} "
-                    f"من Groq: "
-                    f"{response.text[:400]}"
-                ),
-            )
-
-            return None
-
-        data = response.json()
-
-        choices = data.get(
-            "choices",
-            [],
-        )
-
-        if not choices:
-
-            APP_STATE_set(
-                "last_groq_error",
-                (
-                    "رد Groq بلا choices: "
-                    + json.dumps(
-                        data,
-                        ensure_ascii=False,
-                    )[:400]
-                ),
-            )
-
-            return None
-
-        message = choices[0].get(
-            "message",
-            {},
-        )
-
-        text = message.get(
-            "content",
-            "",
-        )
-
-        if not text:
-
-            APP_STATE_set(
-                "last_groq_error",
-                "رد Groq وصل لكن بلا محتوى نصي.",
-            )
-
-            return None
+        if text is None:
+            errors.append(error_msg)
+            continue
 
         cleaned = (
             str(text)
-            .replace(
-                "```json",
-                "",
-            )
-            .replace(
-                "```",
-                "",
-            )
+            .replace("```json", "")
+            .replace("```", "")
             .strip()
         )
 
         try:
-
-            parsed = json.loads(
-                cleaned
-            )
-
+            parsed = json.loads(cleaned)
         except Exception as parse_exc:
-
-            APP_STATE_set(
-                "last_groq_error",
-                (
-                    "تعذّر تحليل رد Groq "
-                    f"كـ JSON: {parse_exc}"
-                    f" — النص: {cleaned[:400]}"
-                ),
+            errors.append(
+                f"{candidate_model}: تعذّر تحليل الرد كـ JSON "
+                f"({parse_exc}) — {cleaned[:200]}"
             )
-
-            return None
+            continue
 
         agree = _parse_groq_bool(
-            parsed.get(
-                "agree",
-                False,
-            )
+            parsed.get("agree", False)
         )
 
         try:
-
             confidence = float(
-                parsed.get(
-                    "confidence",
-                    0,
-                )
+                parsed.get("confidence", 0)
             )
-
         except Exception:
             confidence = 0.0
 
-        confidence = max(
-            0,
-            min(
-                100,
-                confidence,
-            ),
-        )
+        confidence = max(0, min(100, confidence))
+        reason = str(parsed.get("reason", ""))
 
-        reason = str(
-            parsed.get(
-                "reason",
-                "",
-            )
-        )
+        if candidate_model != model_name:
+            save_setting("groq_model", candidate_model)
 
-        APP_STATE_set(
-            "last_groq_error",
-            None,
-        )
+        APP_STATE_set("last_groq_error", None)
 
         return {
             "agree": agree,
@@ -2600,17 +2632,14 @@ def get_groq_review(
             "reason": reason,
         }
 
-    except Exception as exc:
+    combined_error = " | ".join(e for e in errors if e)
 
-        APP_STATE_set(
-            "last_groq_error",
-            (
-                "استثناء أثناء الاتصال "
-                f"بـ Groq: {exc}"
-            ),
-        )
+    APP_STATE_set(
+        "last_groq_error",
+        f"فشلت كل نماذج المراجعة النصية: {combined_error}",
+    )
 
-        return None
+    return None
 
 
 # ============================================================
@@ -3989,93 +4018,66 @@ def run_ict_engine(
 
 
 # ============================================================
-# Vision AI: تحليل صور الشارتات
+# Vision AI: تحليل صور الشارتات (عبر OpenRouter)
 # ============================================================
 
-def _extract_groq_error_message(response):
+def _call_vision_model_once(image_b64, api_key, model_name):
     """
-    يحاول استخراج رسالة خطأ واضحة من رد Groq (JSON قياسي أو نص خام).
-    """
-    try:
-        err_json = response.json()
-        err_obj = err_json.get("error", {})
-        code = err_obj.get("code", "")
-        message = err_obj.get("message", "") or json.dumps(
-            err_json, ensure_ascii=False
-        )
-        if code:
-            return f"[{code}] {message}"
-        return message
-    except Exception:
-        return (response.text or "")[:400]
-
-
-def _call_groq_vision_once(image_b64, api_key, model_name):
-    """
-    ينفذ استدعاء واحد لـ Groq Vision بنموذج محدد.
+    ينفذ استدعاء واحد لنموذج رؤية على OpenRouter.
     يعيد (result_dict, error_message). عند النجاح تكون error_message = None.
     """
-    url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "model": model_name,
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": (
-                            "أنت محلل فني خبير متخصص في قراءة شارتات "
-                            "التداول (ICT / Smart Money / Price Action). "
-                            "قم بتحليل صورة الشارت المعطاة بدقة، حتى لو "
-                            "كانت الإشارة ضعيفة أو صغيرة، واستخرج المعلومات "
-                            "التالية بصيغة JSON فقط بدون أي نص إضافي:\n"
-                            '{"trend": "BULLISH/BEARISH/NEUTRAL", '
-                            '"confidence": 0-100, '
-                            '"current_price": رقم أو null, '
-                            '"support": [أرقام], "resistance": [أرقام], '
-                            '"patterns": ["وصف نمط1", "وصف نمط2"], '
-                            '"entry_suggestion": رقم أو null, '
-                            '"comment": "تعليق موجز عن سبب القرار"}\n'
-                            "إذا لم تكن متأكداً تماماً، أعطِ أفضل تقدير "
-                            "ممكن مع درجة ثقة أقل بدلاً من ترك trend "
-                            "كـ NEUTRAL دائماً."
-                        ),
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        "أنت محلل فني خبير متخصص في قراءة شارتات "
+                        "التداول (ICT / Smart Money / Price Action). "
+                        "قم بتحليل صورة الشارت المعطاة بدقة، حتى لو "
+                        "كانت الإشارة ضعيفة أو صغيرة، واستخرج المعلومات "
+                        "التالية بصيغة JSON فقط بدون أي نص إضافي:\n"
+                        '{"trend": "BULLISH/BEARISH/NEUTRAL", '
+                        '"confidence": 0-100, '
+                        '"current_price": رقم أو null, '
+                        '"support": [أرقام], "resistance": [أرقام], '
+                        '"patterns": ["وصف نمط1", "وصف نمط2"], '
+                        '"entry_suggestion": رقم أو null, '
+                        '"comment": "تعليق موجز عن سبب القرار"}\n'
+                        "إذا لم تكن متأكداً تماماً، أعطِ أفضل تقدير "
+                        "ممكن مع درجة ثقة أقل بدلاً من ترك trend "
+                        "كـ NEUTRAL دائماً."
+                    ),
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/jpeg;base64,{image_b64}"
                     },
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/jpeg;base64,{image_b64}"
-                        },
-                    },
-                ],
-            }
-        ],
-        "max_tokens": 700,
-        "temperature": 0,
-    }
+                },
+            ],
+        }
+    ]
+
+    text, error_msg = _call_openrouter_chat(
+        messages,
+        api_key,
+        model_name,
+        response_json=False,
+        max_tokens=700,
+        timeout=30,
+    )
+
+    if text is None:
+        return None, error_msg
 
     try:
-        response = HTTP_SESSION.post(url, headers=headers, json=payload, timeout=30)
-    except Exception as exc:
-        return None, f"{model_name}: تعذّر الاتصال بـ Groq ({exc})"
-
-    if not response.ok:
-        err_msg = _extract_groq_error_message(response)
-        return None, f"{model_name}: HTTP {response.status_code} — {err_msg}"
-
-    try:
-        data = response.json()
-        content = data["choices"][0]["message"]["content"]
-        content = content.replace("```json", "").replace("```", "").strip()
-        result = json.loads(content)
+        cleaned = text.replace("```json", "").replace("```", "").strip()
+        result = json.loads(cleaned)
         return result, None
     except Exception as exc:
-        return None, f"{model_name}: تعذّر تحليل رد Groq ({exc})"
+        return None, f"{model_name}: تعذّر تحليل رد النموذج ({exc})"
 
 
 def analyze_chart_image(
@@ -4084,17 +4086,15 @@ def analyze_chart_image(
     model_name=DEFAULT_VISION_MODEL,
 ):
     """
-    يحلل صورة الشارت باستخدام Groq Vision API.
-
-    الإصلاح: بدلاً من الفشل الصامت عند استخدام نموذج متوقف (decommissioned)
-    مثل llama-3.2-90b-vision-preview القديم، تُجرَّب سلسلة نماذج بديلة
-    مدعومة تلقائياً (Llama 4 Scout ثم Maverick)، وتُجمع رسائل الخطأ من
+    يحلل صورة الشارت باستخدام OpenRouter Vision (نماذج مفتوحة الوزن
+    ومجانية). بدلاً من الفشل الصامت عند استخدام نموذج متوقف/محذوف،
+    تُجرَّب سلسلة نماذج بديلة مدعومة تلقائياً، وتُجمع رسائل الخطأ من
     كل محاولة في حال فشل الجميع بدلاً من رسالة عامة غير مفيدة.
     """
     if not api_key:
         APP_STATE_set(
             "last_vision_error",
-            "لم يتم إدخال مفتاح Groq API.",
+            "لم يتم إدخال مفتاح OpenRouter API.",
         )
         return None
 
@@ -4113,7 +4113,7 @@ def analyze_chart_image(
 
     for candidate_model in models_to_try:
 
-        result, error_msg = _call_groq_vision_once(
+        result, error_msg = _call_vision_model_once(
             base64_image,
             api_key,
             candidate_model,
@@ -4614,7 +4614,7 @@ def strategy_scanner(
         return result["status"], result
 
     # ============================================================
-    # 13. Groq
+    # 13. OpenRouter (الرأي الثاني)
     # ============================================================
 
     groq_result = None
@@ -4724,7 +4724,7 @@ def strategy_scanner(
     # 17. تنبيهات
     # ============================================================
 
-    groq_line = f"\nGroq: {result['groq_conf']:.1f}%" if result["groq_available"] else ""
+    groq_line = f"\nReview: {result['groq_conf']:.1f}%" if result["groq_available"] else ""
     send_alert(
         (
             f"🧠 {strategy_name} Signal\n"
@@ -4807,7 +4807,7 @@ def _read_worker_config():
         "twelve_key": load_setting("twelve_key", ""),
         "use_groq": load_setting("use_groq", "1") == "1",
         "groq_key": load_setting("groq_key", ""),
-        "groq_model": load_setting("groq_model", "openai/gpt-oss-120b"),
+        "groq_model": load_setting("groq_model", DEFAULT_TEXT_REVIEW_MODEL),
         "min_groq_conf": safe_float("min_groq_conf", 50),
         "min_conf": safe_float("min_conf", 65),
         "atr_mult": safe_float("atr_mult", 1.5),
@@ -5149,7 +5149,7 @@ with st.expander("🔧 حالة المحرك (تشخيص)"):
     d1.write("🔑 مفتاح Twelve Data (احتياطي): " + ("✅ موجود" if twelve_key else "➖ غير مُدخل (Yahoo يعمل بدونه)"))
     d1.write("🧠 حالة النموذج: " + ("✅ مُدرَّب وجاهز" if model_ready_now else "⏳ غير جاهز بعد"))
     d1.write("🔒 قفل تدريب نشط الآن: " + ("نعم" if os.path.exists(TRAINING_LOCK_FILE) else "لا"))
-    d1.write("🖼️ نموذج Vision الحالي: " + (vision_model or "—"))
+    d1.write("🖼️ نموذج Vision الحالي (OpenRouter): " + (vision_model or "—"))
     last_train_time = APP_STATE_get("last_train_time")
     d2.write(f"🕒 آخر تدريب ناجح: {last_train_time or 'لم يحدث بعد'}")
     d2.write(f"🔄 آخر دورة تحليل: {last_update or 'لم تبدأ بعد'}")
@@ -5278,7 +5278,7 @@ st.markdown("### 🖼️ تحليل صورة شارت")
 if not use_vision:
     st.info("تفعيل تحليل الصور من الشريط الجانبي لاستخدام هذه الميزة.")
 elif not groq_key:
-    st.warning("يرجى إدخال مفتاح Groq في الشريط الجانبي لتحليل الصور.")
+    st.warning("يرجى إدخال مفتاح OpenRouter في الشريط الجانبي لتحليل الصور.")
 else:
     uploaded_files = st.file_uploader(
         "ارفع صورة أو أكثر للشارت (PNG/JPG)",
@@ -5340,9 +5340,9 @@ else:
                             )
                     else:
                         st.error(
-                            "فشل تحليل الصورة عبر جميع النماذج المتاحة. "
-                            "تحقق من صلاحية مفتاح Groq API، أو راجع تفاصيل "
-                            "الخطأ أسفل الصفحة."
+                            "فشل تحليل الصورة عبر جميع النماذج المتاحة على "
+                            "OpenRouter. تحقق من صلاحية مفتاح OpenRouter API، "
+                            "أو راجع تفاصيل الخطأ أسفل الصفحة."
                         )
 
 
@@ -5368,22 +5368,22 @@ if strategy_result:
 
 
 # ============================================================
-# Groq UI
+# OpenRouter UI (الرأي الثاني)
 # ============================================================
 
 if strategy_result and strategy_result.get("groq_called"):
-    with st.expander("🧠 رأي Groq"):
+    with st.expander("🧠 الرأي الثاني (OpenRouter)"):
         if strategy_result.get("groq_available"):
             groq_conf_val = strategy_result.get("groq_conf")
             groq_conf_txt = f"{safe_fmt(groq_conf_val, '{:.1f}')}%"
             if strategy_result.get("groq_agree"):
-                st.success(f"✅ Groq وافق على الإشارة — ثقة Groq: {groq_conf_txt}")
+                st.success(f"✅ وافقت المراجعة على الإشارة — الثقة: {groq_conf_txt}")
             else:
-                st.warning(f"❌ Groq لم يوافق على الإشارة — ثقة Groq: {groq_conf_txt}")
+                st.warning(f"❌ لم توافق المراجعة على الإشارة — الثقة: {groq_conf_txt}")
             if strategy_result.get("groq_reason"):
-                st.caption(f"🧠 رأي Groq: {strategy_result['groq_reason']}")
+                st.caption(f"🧠 السبب: {strategy_result['groq_reason']}")
         else:
-            st.warning("🟠 تم استدعاء Groq لكن لم تصل استجابة صالحة منه هذه الدورة.")
+            st.warning("🟠 تم استدعاء OpenRouter لكن لم تصل استجابة صالحة منه هذه الدورة.")
 
 
 # ============================================================
@@ -5405,7 +5405,7 @@ if twelve_error and twelve_key:
 
 vision_error = APP_STATE_get("last_vision_error")
 if vision_error and use_vision:
-    st.error(f"⚠️ Vision AI: {vision_error}")
+    st.error(f"⚠️ Vision AI (OpenRouter): {vision_error}")
 
 engine_error = APP_STATE_get("engine_error")
 if engine_error:
